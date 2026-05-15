@@ -20,7 +20,7 @@ export async function replaySession(
       eq(agentSessions.sessionId, sessionId),
       eq(agentSessions.subpath, ''),
     ))
-    .orderBy(asc(agentSessions.insertSeq));
+    .orderBy(asc(agentSessions.insertSeq), asc(agentSessions.mtime));
 
   return rows.flatMap((r) => {
     const entries = r.entries as SessionEntry[] | null;

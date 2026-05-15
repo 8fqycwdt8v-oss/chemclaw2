@@ -1,5 +1,6 @@
 -- wiki_chunks: remove duplicate (page_id, chunk_idx) rows before adding UNIQUE
--- constraint. Keep the row with the smallest id (oldest) when duplicates exist.
+-- constraint. Keep the row with the smallest UUID value when duplicates exist.
+-- Note: UUIDs are random — smallest UUID is not necessarily the oldest row.
 DELETE FROM wiki_chunks a
   USING wiki_chunks b
   WHERE a.page_id = b.page_id
@@ -13,6 +14,9 @@ ALTER TABLE wiki_chunks
 -- agent_sessions: add insert_seq bigserial for deterministic replay ordering.
 -- mtime (Date.now()) can tie across concurrent appends in the same millisecond;
 -- bigserial is strictly monotone per-insert, giving correct session replay order.
+-- Pre-existing rows receive insert_seq values assigned by bigserial backfill order
+-- (not guaranteed to match original insertion order); replay of historical sessions
+-- should use ORDER BY insert_seq ASC, mtime ASC as a tiebreaker.
 ALTER TABLE agent_sessions
   ADD COLUMN insert_seq BIGSERIAL;
 
