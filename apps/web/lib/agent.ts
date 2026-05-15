@@ -13,6 +13,17 @@ export function buildQueryOptions(sessionId: string, userId: string): Options {
     systemPrompt: SYSTEM_PROMPT,
     sessionStore: scopedSessionStore(`chemclaw2:${userId}`),
     resume: sessionId,
-    mcpServers: {},
+    mcpServers: {
+      'mcp-molfp': {
+        type: 'stdio',
+        command: 'python',
+        args: ['-m', 'mcp_molfp.server'],
+      },
+      'mcp-rxnfp': {
+        type: 'stdio',
+        command: 'python',
+        args: ['-m', 'mcp_rxnfp.server'],
+      },
+    },
   };
 }
