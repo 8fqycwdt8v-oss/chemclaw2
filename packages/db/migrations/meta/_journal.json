@@ -8,6 +8,13 @@
       "when": 1747320000000,
       "tag": "0001_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1747406400000,
+      "tag": "0002_chem",
+      "breakpoints": true
     }
   ]
 }
