@@ -2,7 +2,7 @@ import { db } from '@chemclaw2/db';
 import { compounds } from '@chemclaw2/db';
 import { inArray } from 'drizzle-orm';
 
-const CAS_RE = /\b\d{2,7}-\d{2}-\d\b/g;
+const CAS_RE = /\b\d{2,10}-\d{2}-\d\b/g;
 
 export async function checkToolOutput(
   _toolName: string,

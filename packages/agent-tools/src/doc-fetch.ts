@@ -1,6 +1,6 @@
 import { safeFetch } from './safe-fetch';
 
-const ALLOWED_DOMAINS = [
+export const ALLOWED_DOMAINS = [
   'pubchem.ncbi.nlm.nih.gov',
   'pubmed.ncbi.nlm.nih.gov',
   'doi.org',
