@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, jsonb, timestamp, integer } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, jsonb, timestamp, integer, unique } from 'drizzle-orm/pg-core';
 import { customType } from 'drizzle-orm/pg-core';
 
 // vector(1536) custom type for pgvector
@@ -32,7 +32,7 @@ export const wikiChunks = pgTable('wiki_chunks', {
   chunkIdx: integer('chunk_idx').notNull(),
   text: text('text').notNull(),
   embedding: vector1536('embedding'),
-});
+}, (t) => [unique('wiki_chunks_page_chunk_unique').on(t.pageId, t.chunkIdx)]);
 
 export const wikiCitations = pgTable('wiki_citations', {
   id: uuid('id').primaryKey().defaultRandom(),

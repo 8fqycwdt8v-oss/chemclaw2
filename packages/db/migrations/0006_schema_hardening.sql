@@ -1,5 +1,12 @@
--- wiki_chunks: enforce uniqueness per (page_id, chunk_idx) so upsert logic
--- can rely on the pair as a natural deduplication key
+-- wiki_chunks: remove duplicate (page_id, chunk_idx) rows before adding UNIQUE
+-- constraint. Keep the row with the smallest id (oldest) when duplicates exist.
+DELETE FROM wiki_chunks a
+  USING wiki_chunks b
+  WHERE a.page_id = b.page_id
+    AND a.chunk_idx = b.chunk_idx
+    AND a.id > b.id;
+
+-- Now safe to add the uniqueness constraint
 ALTER TABLE wiki_chunks
   ADD CONSTRAINT wiki_chunks_page_chunk_unique UNIQUE (page_id, chunk_idx);
 
