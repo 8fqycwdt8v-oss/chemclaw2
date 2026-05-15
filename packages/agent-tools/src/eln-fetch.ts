@@ -21,7 +21,9 @@ export const elnFetchTool = {
       return { error: 'Invalid ELN_API_BASE_URL' };
     }
 
-    const targetUrl = new URL(`/experiments/${encodeURIComponent(input.experiment_id)}`, baseUrl);
+    // Trailing slash on base ensures new URL() appends rather than replaces the path prefix
+    const base = ELN_BASE.endsWith('/') ? ELN_BASE : ELN_BASE + '/';
+    const targetUrl = new URL(`experiments/${encodeURIComponent(input.experiment_id)}`, base);
     // Enforce same-origin to prevent SSRF via path traversal in experiment_id
     if (targetUrl.hostname !== baseUrl.hostname) {
       return { error: 'Constructed URL hostname does not match ELN_API_BASE_URL' };

@@ -18,6 +18,7 @@ export async function replaySession(
     .where(and(
       eq(agentSessions.projectKey, projectKey),
       eq(agentSessions.sessionId, sessionId),
+      eq(agentSessions.subpath, ''),
     ))
     .orderBy(agentSessions.mtime);
 
