@@ -4,3 +4,4 @@ export * from './schema/index';
 export * from './queries/compounds';
 export * from './queries/reactions';
 export * from './queries/wiki';
+export * from './queries/campaigns';
