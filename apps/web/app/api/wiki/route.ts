@@ -26,8 +26,19 @@ export async function GET(req: Request) {
     const results = await searchWikiByFTS(q);
     return NextResponse.json(results);
   }
-  const pages = await listWikiPages();
-  return NextResponse.json(pages);
+
+  // Cursor-based pagination: ?cursor=<ISO-8601 updatedAt of last item>
+  // Returns pages updated before cursor, ordered by updatedAt DESC.
+  // Clients advance by passing the updatedAt of the last page in the response.
+  const cursorParam = url.searchParams.get('cursor');
+  let cursor: Date | undefined;
+  if (cursorParam) {
+    const ts = Date.parse(cursorParam);
+    if (isNaN(ts)) return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
+    cursor = new Date(ts);
+  }
+  const pages = await listWikiPages(50, cursor);
+  return NextResponse.json({ pages, nextCursor: pages.length === 50 ? pages[pages.length - 1]?.updatedAt : null });
 }
 
 export async function POST(req: Request) {

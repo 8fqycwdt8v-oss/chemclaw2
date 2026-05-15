@@ -1,4 +1,5 @@
 'use client';
+import { useCallback, useEffect, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -11,6 +12,9 @@ interface WikiEditorProps {
 }
 
 export function WikiEditor({ initialContent, onSave, readOnly = false }: WikiEditorProps) {
+  // Track whether the editor has unsaved changes
+  const isDirtyRef = useRef(false);
+
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -19,7 +23,27 @@ export function WikiEditor({ initialContent, onSave, readOnly = false }: WikiEdi
     content: initialContent,
     editable: !readOnly,
     immediatelyRender: false,
+    onUpdate: () => {
+      isDirtyRef.current = true;
+    },
   });
+
+  // Warn on browser close/tab switch when there are unsaved changes
+  useEffect(() => {
+    if (readOnly) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      if (!isDirtyRef.current) return;
+      e.preventDefault();
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [readOnly]);
+
+  const handleSave = useCallback(() => {
+    if (!editor) return;
+    onSave(editor.getJSON(), editor.getText());
+    isDirtyRef.current = false;
+  }, [editor, onSave]);
 
   if (!editor) return null;
 
@@ -44,7 +68,7 @@ export function WikiEditor({ initialContent, onSave, readOnly = false }: WikiEdi
           </button>
           <button
             className="ml-auto bg-blue-600 text-white px-3 py-1 rounded text-sm"
-            onClick={() => onSave(editor.getJSON(), editor.getText())}
+            onClick={handleSave}
           >
             Save
           </button>
