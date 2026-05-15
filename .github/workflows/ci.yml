@@ -48,7 +48,7 @@ jobs:
         run: pnpm build
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/chemclaw2_test
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_placeholder
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsubG9jYWxob3N0JA==
           CLERK_SECRET_KEY: sk_test_placeholder
           ANTHROPIC_API_KEY: sk-ant-placeholder
           LANGFUSE_PUBLIC_KEY: pk-lf-placeholder
