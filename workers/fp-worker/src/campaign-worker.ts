@@ -1,5 +1,5 @@
 import PgBoss from 'pg-boss';
-import { ne, eq, and } from 'drizzle-orm';
+import { ne, eq, and, inArray } from 'drizzle-orm';
 import { db } from '@chemclaw2/db';
 import { campaignSteps, synthesisCampaigns } from '@chemclaw2/db';
 import {
@@ -26,11 +26,12 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
     for (const job of jobs) {
       const { stepId } = job.data;
 
-      // Atomic CAS: only proceed if step is currently 'pending'; skip if running/complete/failed
+      // Atomic CAS: claim if 'pending' (initial run) or 'failed' (retry eligible).
+      // Skips steps that are already 'running' (concurrent worker) or 'complete'.
       const [claimed] = await db
         .update(campaignSteps)
         .set({ status: 'running' })
-        .where(and(eq(campaignSteps.id, stepId), eq(campaignSteps.status, 'pending')))
+        .where(and(eq(campaignSteps.id, stepId), inArray(campaignSteps.status, ['pending', 'failed'])))
         .returning({ id: campaignSteps.id, campaignId: campaignSteps.campaignId, retryCount: campaignSteps.retryCount });
       if (!claimed) continue;
 

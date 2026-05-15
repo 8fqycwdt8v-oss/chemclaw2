@@ -25,6 +25,20 @@ export async function updateCampaignStatus(
     .where(eq(synthesisCampaigns.id, id));
 }
 
+export async function updateCampaignStatusForUser(
+  id: string,
+  userId: string,
+  status: string,
+  plan?: Record<string, unknown>,
+): Promise<{ found: boolean }> {
+  const rows = await db
+    .update(synthesisCampaigns)
+    .set({ status, ...(plan ? { plan } : {}) })
+    .where(and(eq(synthesisCampaigns.id, id), eq(synthesisCampaigns.createdBy, userId)))
+    .returning({ id: synthesisCampaigns.id });
+  return { found: rows.length > 0 };
+}
+
 export async function getCampaignBySession(sessionId: string) {
   const [row] = await db
     .select()

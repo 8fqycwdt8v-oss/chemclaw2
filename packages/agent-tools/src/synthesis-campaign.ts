@@ -1,28 +1,8 @@
-import { createCampaign, updateCampaignStatus, getCampaignBySession } from '@chemclaw2/db';
-
-const confirmSynthesisPlanTool = {
-  name: 'confirm_synthesis_plan',
-  description: 'Save the confirmed synthesis plan for a campaign and set status to awaiting_input.',
-  inputSchema: {
-    type: 'object' as const,
-    properties: {
-      campaign_id: { type: 'string', description: 'Campaign ID from start_synthesis_campaign' },
-      plan: {
-        type: 'object',
-        description: 'Synthesis plan with steps, conditions, and references',
-      },
-    },
-    required: ['campaign_id', 'plan'],
-  },
-  async execute(input: { campaign_id: string; plan: Record<string, unknown> }) {
-    await updateCampaignStatus(input.campaign_id, 'awaiting_input', input.plan);
-    return { status: 'awaiting_input', message: 'Plan saved. Waiting for user confirmation.' };
-  },
-};
+import { createCampaign, updateCampaignStatusForUser, getCampaignBySession } from '@chemclaw2/db';
 
 /**
  * Factory: captures userId from the authenticated request so the LLM cannot
- * supply an arbitrary created_by value (IDOR prevention).
+ * supply an arbitrary created_by or campaign_id belonging to another user (IDOR prevention).
  */
 export function createSynthesisCampaignTools(userId: string) {
   const synthesisCampaignTool = {
@@ -46,6 +26,32 @@ export function createSynthesisCampaignTools(userId: string) {
 
       const id = await createCampaign(input.session_id, userId, input.target_smiles);
       return { campaign_id: id, status: 'planning' };
+    },
+  };
+
+  const confirmSynthesisPlanTool = {
+    name: 'confirm_synthesis_plan',
+    description: 'Save the confirmed synthesis plan for a campaign and set status to awaiting_input.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        campaign_id: { type: 'string', description: 'Campaign ID from start_synthesis_campaign' },
+        plan: {
+          type: 'object',
+          description: 'Synthesis plan with steps, conditions, and references',
+        },
+      },
+      required: ['campaign_id', 'plan'],
+    },
+    async execute(input: { campaign_id: string; plan: Record<string, unknown> }) {
+      const { found } = await updateCampaignStatusForUser(
+        input.campaign_id,
+        userId,
+        'awaiting_input',
+        input.plan,
+      );
+      if (!found) return { error: 'Campaign not found or access denied' };
+      return { status: 'awaiting_input', message: 'Plan saved. Waiting for user confirmation.' };
     },
   };
 
