@@ -26,16 +26,14 @@ export const postgresSessionStore = {
   async append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void> {
     const subpath = key.subpath ?? '';
     const now = Date.now();
-    // Wrap in a transaction with SELECT FOR UPDATE to serialize concurrent appends.
-    // Without the lock, two concurrent appends with the same base `entries` state
-    // both compute `old || new` and the last writer overwrites the other's data.
+    // Serialize concurrent appends with a transaction-scoped advisory lock.
+    // SELECT FOR UPDATE only locks existing rows — it acquires nothing on first insert.
+    // pg_advisory_xact_lock() always acquires unconditionally, covering the creation race.
     await db.transaction(async (tx) => {
       await tx.execute(sql`
-        SELECT 1 FROM agent_sessions
-        WHERE project_key = ${key.projectKey}
-          AND session_id = ${key.sessionId}
-          AND subpath = ${subpath}
-        FOR UPDATE
+        SELECT pg_advisory_xact_lock(
+          hashtext(${key.projectKey} || '::' || ${key.sessionId} || '::' || ${subpath})
+        )
       `);
       await tx
         .insert(agentSessions)
