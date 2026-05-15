@@ -1,3 +1,8 @@
 export { compoundSimilaritySearchTool } from './compound-search';
 export { reactionSimilaritySearchTool } from './reaction-search';
 export { wikiFetchTool } from './wiki-fetch';
+export { webSearchTool } from './web-search';
+export { docFetchTool } from './doc-fetch';
+export { scheduledSubstanceGate } from './hooks/scheduled-substance-gate';
+export { checkToolInput } from './hooks/redaction';
+export { checkToolOutput } from './hooks/fact-id-check';

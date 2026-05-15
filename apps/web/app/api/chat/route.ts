@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { buildQueryOptions } from '@/lib/agent';
 import { agentToStream } from '@/lib/streaming';
+import { scheduledSubstanceGate } from '@chemclaw2/agent-tools';
 import { randomUUID } from 'crypto';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -26,6 +27,12 @@ export async function POST(req: NextRequest) {
   }
   if (Buffer.byteLength(prompt, 'utf8') > MAX_PROMPT_BYTES) {
     return NextResponse.json({ error: 'prompt too large' }, { status: 413 });
+  }
+
+  // Safety: block prompts containing scheduled substance synthesis terms
+  const gate = scheduledSubstanceGate(prompt);
+  if (gate.blocked) {
+    return NextResponse.json({ error: gate.reason }, { status: 403 });
   }
 
   // Validate client-supplied sessionId to prevent header injection; fall back to fresh UUID

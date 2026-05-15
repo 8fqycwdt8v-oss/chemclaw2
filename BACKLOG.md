@@ -8,6 +8,9 @@
 - [fp-worker] callMcpTool() has no guard against code=0 exit before tool response — promise never settles; add `resolved` flag and reject on premature clean exit
 - [mcp_rxnfp] Remove spurious `rdkit>=2024.3` dep from pyproject.toml — server.py never imports RDKit; adds ~500 MB to the DRFP environment unnecessarily
 - [agent-tools] Phase 2: compound_similarity_search, find_similar_reactions, wiki_lookup tools
-- [agent-tools] Phase 4: redaction, fact-id-check, scheduled-substance-gate hooks
+- [agent-tools] Phase 4: redaction, fact-id-check, scheduled-substance-gate hooks — implemented; checkToolInput/checkToolOutput not wired as SDK hooks (claude-agent-sdk 0.3.x Options type has no hooks field); wire when SDK exposes pre/post-tool-use hook API
+- [agent-tools/web-search] site_filter is unconstrained — consider restricting to same ALLOWED_DOMAINS list for consistency with doc-fetch domain allowlist
+- [agent/tools] webSearchTool and docFetchTool are defined but not registered in buildQueryOptions — wire via createSdkMcpServer (SDK type='sdk') using Zod input schemas; current JSON Schema format incompatible with SdkMcpToolDefinition
+- [agent-tools/redaction] checkToolInput currently blocks URL-type fields containing substance names (e.g. fentanyl toxicology references on PubChem) — consider excluding URL-typed values from substance-name check
 - [fly.toml] Verify `auto_stop_machines = "stop"` vs `min_machines_running = 1` interaction under SSE load; consider `"suspend"` for long-lived connections
 - [db] Add integration tests for session-store: append accumulation, load, cascade delete, listSubkeys

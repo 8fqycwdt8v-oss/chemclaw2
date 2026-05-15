@@ -13,7 +13,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@chemclaw2/db": "workspace:*"
+    "@chemclaw2/db": "workspace:*",
+    "drizzle-orm": "^0.38.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
