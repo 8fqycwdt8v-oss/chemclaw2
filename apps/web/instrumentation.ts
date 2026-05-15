@@ -1,5 +1,12 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    const publicKey = process.env.LANGFUSE_PUBLIC_KEY;
+    const secretKey = process.env.LANGFUSE_SECRET_KEY;
+    if (!publicKey || !secretKey) {
+      console.warn('Langfuse keys missing — OTel tracing disabled');
+      return;
+    }
+
     const { NodeSDK } = await import('@opentelemetry/sdk-node');
     const { getNodeAutoInstrumentations } = await import(
       '@opentelemetry/auto-instrumentations-node'
@@ -9,8 +16,8 @@ export async function register() {
     const sdk = new NodeSDK({
       spanProcessors: [
         new LangfuseSpanProcessor({
-          publicKey: process.env.LANGFUSE_PUBLIC_KEY!,
-          secretKey: process.env.LANGFUSE_SECRET_KEY!,
+          publicKey,
+          secretKey,
           baseUrl: process.env.LANGFUSE_BASEURL ?? 'https://cloud.langfuse.com',
         }),
       ],

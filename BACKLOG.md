@@ -1,0 +1,6 @@
+- [db/session-store] Replace `as unknown as SessionStore` cast with explicit SDK type import once SDK exports `SessionStore` as a stable named export (currently requires `peerDependency` import path)
+- [db/migrate] Replace `ts-node/esm` loader (deprecated in Node.js 20+) with `tsx` for the migrate script
+- [agent-tools] Phase 2: compound_similarity_search, find_similar_reactions, wiki_lookup tools
+- [agent-tools] Phase 4: redaction, fact-id-check, scheduled-substance-gate hooks
+- [fly.toml] Verify `auto_stop_machines = "stop"` vs `min_machines_running = 1` interaction under SSE load; consider `"suspend"` for long-lived connections
+- [db] Add integration tests for session-store: append accumulation, load, cascade delete, listSubkeys

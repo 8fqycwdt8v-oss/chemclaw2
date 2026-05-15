@@ -11,6 +11,25 @@ type SessionKey = {
   subpath?: string;
 };
 
+/**
+ * Returns a session store that forces every key to use the supplied projectKey,
+ * preventing one user's sessions from being accessible via another user's context.
+ * The SDK derives projectKey from cwd by default; this wrapper overrides that for
+ * multi-user server deployments where cwd is shared across all requests.
+ */
+export function scopedSessionStore(projectKey: string) {
+  const scoped = (key: SessionKey): SessionKey => ({ ...key, projectKey });
+  return {
+    append: (key: SessionKey, entries: SessionStoreEntry[]) =>
+      postgresSessionStore.append(scoped(key), entries),
+    load: (key: SessionKey) => postgresSessionStore.load(scoped(key)),
+    listSessions: () => postgresSessionStore.listSessions(projectKey),
+    delete: (key: SessionKey) => postgresSessionStore.delete(scoped(key)),
+    listSubkeys: (key: { projectKey: string; sessionId: string }) =>
+      postgresSessionStore.listSubkeys({ ...key, projectKey }),
+  };
+}
+
 export const postgresSessionStore = {
   async append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void> {
     const subpath = key.subpath ?? '';
