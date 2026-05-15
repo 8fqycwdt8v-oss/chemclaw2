@@ -14,6 +14,11 @@ export async function GET(req: Request) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+  const { limited } = rateLimit(`wiki-read:${userId}`, 60, 60_000);
+  if (limited) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
+  }
+
   const url = new URL(req.url);
   const q = url.searchParams.get('q');
   if (q) {
@@ -67,7 +72,8 @@ export async function POST(req: Request) {
       if (
         typeof c.citationId !== 'string' || c.citationId.length > MAX_CITATION_FIELD_LEN ||
         typeof c.sourceType !== 'string' || c.sourceType.length > MAX_CITATION_FIELD_LEN ||
-        typeof c.label !== 'string' || c.label.length > MAX_CITATION_FIELD_LEN
+        typeof c.label !== 'string' || c.label.length > MAX_CITATION_FIELD_LEN ||
+        (c.sourceId !== undefined && (typeof c.sourceId !== 'string' || c.sourceId.length > MAX_CITATION_FIELD_LEN))
       ) {
         return NextResponse.json({ error: 'invalid citation fields' }, { status: 400 });
       }

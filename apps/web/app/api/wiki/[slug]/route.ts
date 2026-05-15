@@ -1,6 +1,6 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { getWikiPage, upsertWikiPage } from '@chemclaw2/db';
+import { getWikiPage, getWikiPageCitations, upsertWikiPage } from '@chemclaw2/db';
 import { embedTexts } from '../../../../lib/embeddings';
 import { rateLimit } from '@/lib/rate-limit';
 
@@ -45,7 +45,7 @@ export async function PUT(
   let body: {
     title?: string;
     content?: Record<string, unknown>;
-    contentText: string;
+    contentText?: string;
     citations?: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>;
   };
   try {
@@ -71,12 +71,17 @@ export async function PUT(
       if (
         typeof c.citationId !== 'string' || c.citationId.length > MAX_CITATION_FIELD_LEN ||
         typeof c.sourceType !== 'string' || c.sourceType.length > MAX_CITATION_FIELD_LEN ||
-        typeof c.label !== 'string' || c.label.length > MAX_CITATION_FIELD_LEN
+        typeof c.label !== 'string' || c.label.length > MAX_CITATION_FIELD_LEN ||
+        (c.sourceId !== undefined && (typeof c.sourceId !== 'string' || c.sourceId.length > MAX_CITATION_FIELD_LEN))
       ) {
         return NextResponse.json({ error: 'invalid citation fields' }, { status: 400 });
       }
     }
   }
+
+  const existingCitations = body.citations === undefined
+    ? (await getWikiPageCitations(existing.id)).map((c) => ({ ...c, sourceId: c.sourceId ?? undefined }))
+    : undefined;
 
   const id = await upsertWikiPage(
     slug,
@@ -84,7 +89,7 @@ export async function PUT(
     body.content ?? existing.content as Record<string, unknown>,
     body.contentText ?? existing.contentText ?? '',
     userId,
-    body.citations ?? [],
+    body.citations ?? existingCitations ?? [],
     embedTexts,
   );
 
