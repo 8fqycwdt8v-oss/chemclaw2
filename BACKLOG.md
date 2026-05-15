@@ -1,8 +1,6 @@
-- [wiki] upsertWikiPage calls embedFn inside db.transaction() — holds connection lock during OpenAI round-trip; refactor to embed outside transaction if write contention becomes measurable
-- [wiki] WikiEditor: add `beforeunload`/router unsaved-changes guard to prevent accidental data loss
-- [wiki] Replace character-level chunk splitter with sentence-/paragraph-aware splitting for better chemistry text embedding quality
 - [agent-tools] Phase 4: redaction, fact-id-check, scheduled-substance-gate hooks — implemented; checkToolInput/checkToolOutput not wired as SDK hooks (claude-agent-sdk 0.3.x Options type has no hooks field); wire when SDK exposes pre/post-tool-use hook API
 - [fly.toml] Verify `auto_stop_machines = "stop"` vs `min_machines_running = 1` interaction under SSE load; consider `"suspend"` for long-lived connections
 - [api/rate-limit] In-process sliding-window rate limiter resets on restart and is not shared across instances; migrate to Postgres or Redis advisory locks before multi-instance (multi-machine Fly.io) deploy
-- [api/wiki] GET /api/wiki list path (no ?q=) has no pagination token; a single user can scrape 3,000 rows/min at 60 req/min × 50 row limit; add cursor-based pagination before exposing to untrusted users
 - [safety/gate] Multi-turn bypass: gate fires on each turn independently but an attacker can front-load controlled substance context then issue synthesis instruction in a later turn without triggering the gate; mitigation requires session-level context scanning (deferred — architectural change)
+- [api/wiki] cursor pagination uses single-column updatedAt cursor — items with duplicate updatedAt may be skipped; use (updatedAt, id) composite cursor if needed
+- [wiki/editor] WikiEditor beforeunload guard covers hard browser navigation only; Next.js App Router client-side navigation (Link, router.push) does not fire beforeunload — guard SPA navigation via navigation.addEventListener('navigate', ...) when App Router exposes a stable hook API
