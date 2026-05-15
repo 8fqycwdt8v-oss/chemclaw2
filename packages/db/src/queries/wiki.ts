@@ -27,11 +27,14 @@ function chunkText(text: string, maxSize = 400, overlap = 80): string[] {
       } else {
         if (current.length > 10) result.push(current.trim());
         const overlapText = current.length > overlap ? current.slice(-overlap) : current;
+        // The reassigned current may itself exceed maxSize when sentence is very long.
+        // The word-boundary fallback below handles this via flushed.length > maxSize.
         current = overlapText + ' ' + sentence;
       }
     }
     // Word-boundary fallback: if a single sentence exceeds maxSize (e.g. run-on
     // chemistry text with no sentence-ending punctuation), split on words.
+    // A single token longer than maxSize is emitted as-is — not possible in natural text.
     const flushed = current.trim();
     if (flushed.length > maxSize) {
       const words = flushed.split(/\s+/);
@@ -115,12 +118,11 @@ export async function getWikiPageCitations(pageId: string) {
 }
 
 export async function listWikiPages(limit = 50, cursor?: Date) {
-  const q = db
+  const base = db
     .select({ id: wikiPages.id, slug: wikiPages.slug, title: wikiPages.title, updatedAt: wikiPages.updatedAt })
     .from(wikiPages)
-    .orderBy(desc(wikiPages.updatedAt))
-    .limit(limit);
-  return cursor ? q.where(lt(wikiPages.updatedAt, cursor)) : q;
+    .orderBy(desc(wikiPages.updatedAt));
+  return (cursor ? base.where(lt(wikiPages.updatedAt, cursor)) : base).limit(limit);
 }
 
 export async function searchWikiByFTS(query: string, limit = 20) {
