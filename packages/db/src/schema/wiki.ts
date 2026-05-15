@@ -8,7 +8,7 @@ const vector1536 = customType<{ data: number[] }>({
     if (typeof v === 'string') {
       return v.slice(1, -1).split(',').map(Number);
     }
-    return v as number[];
+    throw new Error(`Unexpected vector driver value type: ${typeof v}`);
   },
   toDriver: (v: number[]) => `[${v.join(',')}]`,
 });

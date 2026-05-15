@@ -1,4 +1,9 @@
 - [db/migrate] Replace `ts-node/esm` loader (deprecated in Node.js 20+) with `tsx` for the migrate script
+- [wiki] Add `UNIQUE (page_id, chunk_idx)` constraint to `wiki_chunks` table
+- [wiki] Add `CREATE EXTENSION IF NOT EXISTS vector` guard to migration (currently relies on pgvector being pre-installed)
+- [wiki] WikiEditor: add `beforeunload`/router unsaved-changes guard to prevent accidental data loss
+- [wiki] `wiki_lookup` agent tool: expose `semanticSearchWiki` as a third lookup mode (currently only FTS + direct slug)
+- [wiki] Replace character-level chunk splitter with sentence-/paragraph-aware splitting for better chemistry text embedding quality
 - [fp-worker] callMcpTool() has no guard against code=0 exit before tool response — promise never settles; add `resolved` flag and reject on premature clean exit
 - [mcp_rxnfp] Remove spurious `rdkit>=2024.3` dep from pyproject.toml — server.py never imports RDKit; adds ~500 MB to the DRFP environment unnecessarily
 - [agent-tools] Phase 2: compound_similarity_search, find_similar_reactions, wiki_lookup tools

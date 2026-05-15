@@ -1,7 +1,7 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { upsertWikiPage, listWikiPages, searchWikiByFTS } from '@chemclaw2/db';
-import { embedText } from '../../../lib/embeddings';
+import { embedTexts } from '../../../lib/embeddings';
 
 export async function GET(req: Request) {
   const { userId } = await auth();
@@ -40,7 +40,7 @@ export async function POST(req: Request) {
     body.contentText ?? '',
     userId,
     body.citations ?? [],
-    embedText,
+    embedTexts,
   );
 
   return NextResponse.json({ id });
