@@ -2,5 +2,5 @@
 - [fly.toml] auto_stop_machines="stop" with min_machines_running=1 is safe for SSE: the always-on machine handles all long-lived connections; "suspend" would only matter for scaled-out machines beyond the minimum
 - [safety/gate] Multi-turn bypass: gate fires on each turn independently but an attacker can front-load controlled substance context then issue synthesis instruction in a later turn without triggering the gate; mitigation requires session-level context scanning (deferred — architectural change)
 - [rate-limits] Old window rows are never swept; add a pg_cron job or periodic DELETE WHERE window_start < (now_epoch_ms - 7200000) before table size becomes measurable
-- [api/wiki] cursor pagination uses single-column updatedAt cursor — items with duplicate updatedAt may be skipped; use (updatedAt, id) composite cursor if needed
+- [api/wiki] wiki_pages has no composite index on (updated_at DESC, id DESC); add before list endpoint becomes high-traffic to avoid sequential scans on keyset pagination
 - [wiki/editor] WikiEditor beforeunload guard covers hard browser navigation only; Next.js App Router client-side navigation (Link, router.push) does not fire beforeunload — guard SPA navigation via navigation.addEventListener('navigate', ...) when App Router exposes a stable hook API

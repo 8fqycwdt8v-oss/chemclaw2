@@ -1,4 +1,4 @@
-import { sql, eq, lt, desc } from 'drizzle-orm';
+import { sql, eq, lt, desc, or, and } from 'drizzle-orm';
 import { db } from '../client';
 import { wikiPages, wikiChunks, wikiCitations } from '../schema/wiki';
 
@@ -117,12 +117,24 @@ export async function getWikiPageCitations(pageId: string) {
     .where(eq(wikiCitations.pageId, pageId));
 }
 
-export async function listWikiPages(limit = 50, cursor?: Date) {
+// Cursor shape for listWikiPages pagination: encodes (updatedAt, id) so pages
+// with identical timestamps are never skipped.
+export type WikiPageCursor = { updatedAt: Date; id: string };
+
+export async function listWikiPages(limit = 50, cursor?: WikiPageCursor) {
   const base = db
     .select({ id: wikiPages.id, slug: wikiPages.slug, title: wikiPages.title, updatedAt: wikiPages.updatedAt })
     .from(wikiPages)
-    .orderBy(desc(wikiPages.updatedAt));
-  return (cursor ? base.where(lt(wikiPages.updatedAt, cursor)) : base).limit(limit);
+    .orderBy(desc(wikiPages.updatedAt), desc(wikiPages.id));
+  const q = cursor
+    ? base.where(
+        or(
+          lt(wikiPages.updatedAt, cursor.updatedAt),
+          and(eq(wikiPages.updatedAt, cursor.updatedAt), lt(wikiPages.id, cursor.id)),
+        ),
+      )
+    : base;
+  return q.limit(limit);
 }
 
 export async function searchWikiByFTS(query: string, limit = 20) {

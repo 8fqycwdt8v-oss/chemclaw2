@@ -1,6 +1,7 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { upsertWikiPage, listWikiPages, searchWikiByFTS } from '@chemclaw2/db';
+import type { WikiPageCursor } from '@chemclaw2/db';
 import { embedTexts } from '../../../lib/embeddings';
 import { rateLimit } from '@/lib/rate-limit';
 
@@ -27,18 +28,26 @@ export async function GET(req: Request) {
     return NextResponse.json(results);
   }
 
-  // Cursor-based pagination: ?cursor=<ISO-8601 updatedAt of last item>
-  // Returns pages updated before cursor, ordered by updatedAt DESC.
-  // Clients advance by passing the updatedAt of the last page in the response.
+  // Cursor-based pagination: ?cursor=<ISO-8601 updatedAt>_<page-uuid>
+  // Composite (updatedAt, id) cursor prevents skipping pages with identical timestamps.
+  // nextCursor is null when fewer than 50 pages are returned (end of results).
   const cursorParam = url.searchParams.get('cursor');
-  let cursor: Date | undefined;
+  let cursor: WikiPageCursor | undefined;
   if (cursorParam) {
-    const ts = Date.parse(cursorParam);
+    const sep = cursorParam.lastIndexOf('_');
+    if (sep === -1) return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
+    const ts = Date.parse(cursorParam.slice(0, sep));
     if (isNaN(ts)) return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
-    cursor = new Date(ts);
+    const idPart = cursorParam.slice(sep + 1);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idPart)) {
+      return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
+    }
+    cursor = { updatedAt: new Date(ts), id: idPart };
   }
   const pages = await listWikiPages(50, cursor);
-  return NextResponse.json({ pages, nextCursor: pages.length === 50 ? pages[pages.length - 1]?.updatedAt : null });
+  const last = pages.length === 50 ? pages[pages.length - 1] : null;
+  const nextCursor = last ? `${last.updatedAt.toISOString()}_${last.id}` : null;
+  return NextResponse.json({ pages, nextCursor });
 }
 
 export async function POST(req: Request) {
