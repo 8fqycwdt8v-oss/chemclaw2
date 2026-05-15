@@ -4,6 +4,8 @@ dist/
 .turbo/
 *.local
 .env
-.env.*
 .env.local
-.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.staging.local
