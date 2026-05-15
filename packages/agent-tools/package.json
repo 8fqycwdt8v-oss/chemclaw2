@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@chemclaw2/db": "workspace:*",
-    "drizzle-orm": "^0.38.0"
+    "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
