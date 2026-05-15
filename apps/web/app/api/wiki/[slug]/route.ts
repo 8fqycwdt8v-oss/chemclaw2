@@ -4,6 +4,10 @@ import { getWikiPage, upsertWikiPage } from '@chemclaw2/db';
 import { embedTexts } from '../../../../lib/embeddings';
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MAX_TITLE_LEN = 500;
+const MAX_CONTENT_TEXT_LEN = 500_000;
+const MAX_CITATIONS = 200;
+const MAX_CITATION_FIELD_LEN = 1_000;
 
 export async function GET(
   _req: Request,
@@ -40,6 +44,27 @@ export async function PUT(
 
   const existing = await getWikiPage(slug);
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+  if (body.title && body.title.length > MAX_TITLE_LEN) {
+    return NextResponse.json({ error: 'title too long' }, { status: 400 });
+  }
+  if (typeof body.contentText === 'string' && body.contentText.length > MAX_CONTENT_TEXT_LEN) {
+    return NextResponse.json({ error: 'contentText too large' }, { status: 413 });
+  }
+  if (Array.isArray(body.citations)) {
+    if (body.citations.length > MAX_CITATIONS) {
+      return NextResponse.json({ error: 'too many citations' }, { status: 400 });
+    }
+    for (const c of body.citations) {
+      if (
+        typeof c.citationId !== 'string' || c.citationId.length > MAX_CITATION_FIELD_LEN ||
+        typeof c.sourceType !== 'string' || c.sourceType.length > MAX_CITATION_FIELD_LEN ||
+        typeof c.label !== 'string' || c.label.length > MAX_CITATION_FIELD_LEN
+      ) {
+        return NextResponse.json({ error: 'invalid citation fields' }, { status: 400 });
+      }
+    }
+  }
 
   const id = await upsertWikiPage(
     slug,

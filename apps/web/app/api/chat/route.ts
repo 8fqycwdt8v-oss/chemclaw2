@@ -4,14 +4,25 @@ import { buildQueryOptions } from '@/lib/agent';
 import { agentToStream } from '@/lib/streaming';
 import { scheduledSubstanceGate } from '@chemclaw2/agent-tools';
 import { randomUUID } from 'crypto';
+import { rateLimit } from '@/lib/rate-limit';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PROMPT_BYTES = 32_768;
+const RATE_LIMIT_REQUESTS = 20;
+const RATE_LIMIT_WINDOW_MS = 60_000;
 
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const { limited } = rateLimit(`chat:${userId}`, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS);
+  if (limited) {
+    return NextResponse.json(
+      { error: 'Too many requests — please wait before sending another message' },
+      { status: 429, headers: { 'Retry-After': '60' } },
+    );
   }
 
   let body: { prompt?: unknown; sessionId?: unknown };
