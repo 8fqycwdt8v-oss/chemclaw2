@@ -22,7 +22,8 @@ CREATE TABLE campaign_steps (
   next_retry_at TIMESTAMPTZ
 );
 
-CREATE INDEX campaign_steps_retry_idx ON campaign_steps (next_retry_at)
+CREATE INDEX IF NOT EXISTS campaign_steps_campaign_id_idx ON campaign_steps (campaign_id);
+CREATE INDEX IF NOT EXISTS campaign_steps_retry_idx ON campaign_steps (next_retry_at)
   WHERE status = 'failed' AND retry_count < 3;
 
 CREATE FUNCTION update_campaign_updated_at() RETURNS TRIGGER AS $$

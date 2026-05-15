@@ -12,6 +12,8 @@ def compute_morgan_fp(smiles: str, radius: int = 2, n_bits: int = 2048) -> dict:
     Returns fingerprint_bits (binary string of '0'/'1', length = n_bits) and n_bits.
     Compatible with Postgres BIT(n_bits) via $1::bit(n_bits) parameter cast.
     """
+    if not (64 <= n_bits <= 4096):
+        raise ValueError(f"n_bits must be between 64 and 4096, got {n_bits}")
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError(f"Invalid SMILES: {smiles}")

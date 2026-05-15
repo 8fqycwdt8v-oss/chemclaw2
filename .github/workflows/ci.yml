@@ -63,11 +63,16 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Test
+        run: pnpm test
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chemclaw2_test
+
       - name: Build
         run: pnpm build
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/chemclaw2_test
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsubG9jYWxob3N0JA==
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_placeholder
           CLERK_SECRET_KEY: sk_test_placeholder
           ANTHROPIC_API_KEY: sk-ant-placeholder
           LANGFUSE_PUBLIC_KEY: pk-lf-placeholder

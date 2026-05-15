@@ -70,7 +70,8 @@ export async function markStepFailed(id: string, retryCount: number): Promise<vo
     .set({
       status: 'failed',
       retryCount: retryCount + 1,
-      nextRetryAt: sql`NOW() + INTERVAL '${sql.raw(String(backoffMinutes))} minutes'`,
+      // Parameterized interval — avoids sql.raw() with NaN/Infinity risk
+      nextRetryAt: sql`NOW() + (${backoffMinutes} * INTERVAL '1 minute')`,
     })
     .where(eq(campaignSteps.id, id));
 }

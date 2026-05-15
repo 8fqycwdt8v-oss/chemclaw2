@@ -1,10 +1,12 @@
 import PgBoss from 'pg-boss';
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import { db } from '@chemclaw2/db';
 import { compounds } from '@chemclaw2/db';
 import { reactions } from '@chemclaw2/db';
 import { eq, sql } from 'drizzle-orm';
 import { startCampaignWorker } from './campaign-worker';
+
+const activeProcs = new Set<ChildProcess>();
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
@@ -31,14 +33,24 @@ async function callMcpTool(
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const proc = spawn('python', ['-m', module], { stdio: ['pipe', 'pipe', 'inherit'] });
+    activeProcs.add(proc);
 
     let buffer = '';
     let initDone = false;
+    let settled = false;
     const TOOL_CALL_ID = 2;
+
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      activeProcs.delete(proc);
+      clearTimeout(timer);
+      fn();
+    };
 
     const timer = setTimeout(() => {
       proc.kill();
-      reject(new Error(`MCP tool call timed out after ${MCP_TIMEOUT_MS}ms: ${toolName}`));
+      settle(() => reject(new Error(`MCP tool call timed out after ${MCP_TIMEOUT_MS}ms: ${toolName}`)));
     }, MCP_TIMEOUT_MS);
 
     const send = (msg: object) => {
@@ -77,27 +89,26 @@ async function callMcpTool(
           send({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }); // Step 3
           send({ jsonrpc: '2.0', id: TOOL_CALL_ID, method: 'tools/call', params: { name: toolName, arguments: args } });
         } else if ((msg as { id?: number }).id === TOOL_CALL_ID) {
-          clearTimeout(timer);
           proc.stdin.end();
           try {
             const result = msg as { result?: { content?: Array<{ text?: string }> } };
             const text = result.result?.content?.[0]?.text;
-            resolve(text ? (JSON.parse(text) as Record<string, unknown>) : (msg.result as Record<string, unknown>));
+            const parsed = text ? (JSON.parse(text) as Record<string, unknown>) : (msg.result as Record<string, unknown>);
+            settle(() => resolve(parsed));
           } catch {
-            reject(new Error(`Failed to parse MCP response: ${line}`));
+            settle(() => reject(new Error(`Failed to parse MCP response: ${line}`)));
           }
         }
       }
     });
 
     proc.on('close', (code) => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`MCP process exited with code ${code}`));
+      if (code !== 0) settle(() => reject(new Error(`MCP process exited with code ${code}`)));
+      else settle(() => reject(new Error('MCP process closed before tool response')));
     });
 
     proc.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
+      settle(() => reject(err));
     });
   });
 }
@@ -125,10 +136,15 @@ async function start() {
             smiles: compound.smiles,
           });
 
+          const bits = result.fingerprint_bits;
+          if (typeof bits !== 'string' || !/^[01]{2048}$/.test(bits)) {
+            throw new Error(`Invalid fingerprint_bits from MCP: expected 2048-char bit string, got ${typeof bits === 'string' ? `length ${bits.length}` : typeof bits}`);
+          }
+
           await db
             .update(compounds)
             .set({
-              morganFp: result.fingerprint_bits as string,
+              morganFp: bits,
               fpComputedAt: new Date(),
             })
             .where(eq(compounds.id, id));
@@ -155,10 +171,15 @@ async function start() {
             reaction_smiles: reaction.rxnSmiles,
           });
 
+          const bits = result.fingerprint_bits;
+          if (typeof bits !== 'string' || !/^[01]{2048}$/.test(bits)) {
+            throw new Error(`Invalid fingerprint_bits from MCP: expected 2048-char bit string, got ${typeof bits === 'string' ? `length ${bits.length}` : typeof bits}`);
+          }
+
           await db
             .update(reactions)
             .set({
-              drfp: result.fingerprint_bits as string,
+              drfp: bits,
               fpComputedAt: new Date(),
             })
             .where(eq(reactions.id, id));
@@ -203,6 +224,7 @@ async function start() {
 
   process.on('SIGTERM', async () => {
     clearInterval(pollInterval);
+    for (const proc of activeProcs) proc.kill();
     await boss.stop();
     process.exit(0);
   });

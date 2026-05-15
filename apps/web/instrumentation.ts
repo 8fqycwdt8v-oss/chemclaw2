@@ -25,5 +25,10 @@ export async function register() {
     });
 
     sdk.start();
+
+    // Flush spans before the process exits (Fly SIGTERM before container kill)
+    const shutdown = () => sdk.shutdown().finally(() => process.exit(0));
+    process.once('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
   }
 }

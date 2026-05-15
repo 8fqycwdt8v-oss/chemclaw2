@@ -22,7 +22,12 @@ export async function embedText(text: string): Promise<number[]> {
 
 /** Batch embed multiple texts in a single API call. */
 export async function embedTexts(texts: string[]): Promise<number[][]> {
-  const truncated = texts.map((t) => {
+  const nonEmpty = texts.filter((t) => t.trim().length > 0);
+  if (nonEmpty.length === 0) return [];
+  if (nonEmpty.length !== texts.length) {
+    console.warn(`[embeddings] ${texts.length - nonEmpty.length} empty/whitespace texts filtered before embedding`);
+  }
+  const truncated = nonEmpty.map((t) => {
     if (t.length > EMBED_CHAR_LIMIT) {
       console.warn(`[embeddings] text truncated from ${t.length} to ${EMBED_CHAR_LIMIT} chars for embedding`);
       return t.slice(0, EMBED_CHAR_LIMIT);
@@ -33,6 +38,5 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
     model: 'text-embedding-3-small',
     input: truncated,
   });
-  // OpenAI returns embeddings in the same order as the input
   return res.data.map((d) => d.embedding);
 }

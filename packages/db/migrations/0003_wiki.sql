@@ -19,8 +19,10 @@ CREATE TABLE wiki_chunks (
   embedding vector(1536)
 );
 
-CREATE INDEX wiki_chunks_embedding_hnsw ON wiki_chunks
+CREATE INDEX IF NOT EXISTS wiki_chunks_embedding_hnsw ON wiki_chunks
   USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+
+CREATE INDEX IF NOT EXISTS wiki_chunks_page_id_idx ON wiki_chunks (page_id);
 
 CREATE TABLE wiki_citations (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -31,7 +33,7 @@ CREATE TABLE wiki_citations (
   label       TEXT NOT NULL
 );
 
-CREATE INDEX wiki_pages_fts ON wiki_pages
+CREATE INDEX IF NOT EXISTS wiki_pages_fts ON wiki_pages
   USING gin (to_tsvector('english', coalesce(content_text, '')));
 
 CREATE FUNCTION update_wiki_updated_at() RETURNS TRIGGER AS $$

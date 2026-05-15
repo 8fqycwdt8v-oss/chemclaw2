@@ -25,6 +25,9 @@ export async function findSimilarCompounds(
   limit = 20,
   minTanimoto = 0.4,
 ): Promise<SimilarCompound[]> {
+  if (!/^[01]{2048}$/.test(queryFpBits)) {
+    throw new Error('queryFpBits must be exactly 2048 binary characters (0/1)');
+  }
   const rows = await db
     .select({
       id: compounds.id,
