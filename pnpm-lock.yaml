@@ -140,9 +140,6 @@ importers:
       drizzle-kit:
         specifier: ^0.30.0
         version: 0.30.6
-      ts-node:
-        specifier: ^10.9.2
-        version: 10.9.2(@types/node@22.19.19)(typescript@5.9.3)
       tsx:
         specifier: ^4.22.0
         version: 4.22.0

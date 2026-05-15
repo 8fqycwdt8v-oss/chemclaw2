@@ -67,11 +67,9 @@ describe('checkToolInput (redaction)', () => {
   });
 
   it('does not block URL field containing substance name (legitimate toxicology reference)', () => {
-    // URL path is not a string value — this tests the value-only matching
+    // extractStringValues skips https:// strings, so URLs never trigger substance checks
     const result = checkToolInput('fetch_document', { url: 'https://pubchem.ncbi.nlm.nih.gov/compound/fentanyl' });
-    // URL is a string value, so it will match — this documents the current behavior
-    // The tool itself enforces domain allowlist, providing the primary guard
-    expect(['allow', 'block']).toContain(result.action);
+    expect(result.action).toBe('allow');
   });
 
   it('redacts SSN pattern and allows', () => {
