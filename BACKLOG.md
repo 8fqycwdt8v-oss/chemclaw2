@@ -14,3 +14,6 @@
 - [agent-tools/redaction] checkToolInput currently blocks URL-type fields containing substance names (e.g. fentanyl toxicology references on PubChem) — consider excluding URL-typed values from substance-name check
 - [fly.toml] Verify `auto_stop_machines = "stop"` vs `min_machines_running = 1` interaction under SSE load; consider `"suspend"` for long-lived connections
 - [db] Add integration tests for session-store: append accumulation, load, cascade delete, listSubkeys
+- [campaigns] Wiki page auto-creation on campaign completion deferred: campaign-worker sets status='complete' but does not create a wiki page or set wiki_page_id; needs a separate pg-boss job that carries an Anthropic client reference to call upsertWikiPage with embedTexts
+- [campaigns] campaign_steps 'running' status not guarded in completion check — a job crash leaving status='running' prevents campaign from reaching 'complete'; add dead-letter sweep or timeout-based reset
+- [campaigns] addCampaignStep exported but not yet called from synthesis-campaign.ts — plan steps from confirm_synthesis_plan are stored only in the JSONB blob; wire addCampaignStep to create individual step rows when confirming plan

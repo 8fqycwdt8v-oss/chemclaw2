@@ -1,4 +1,4 @@
-import { eq, sql, and, lt } from 'drizzle-orm';
+import { eq, sql, and, lt, notInArray, desc } from 'drizzle-orm';
 import { db } from '../client';
 import { synthesisCampaigns, campaignSteps } from '../schema/campaigns';
 
@@ -29,7 +29,12 @@ export async function getCampaignBySession(sessionId: string) {
   const [row] = await db
     .select()
     .from(synthesisCampaigns)
-    .where(eq(synthesisCampaigns.sessionId, sessionId));
+    .where(and(
+      eq(synthesisCampaigns.sessionId, sessionId),
+      notInArray(synthesisCampaigns.status, ['complete', 'failed']),
+    ))
+    .orderBy(desc(synthesisCampaigns.createdAt))
+    .limit(1);
   return row ?? null;
 }
 

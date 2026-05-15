@@ -1,24 +1,21 @@
 import PgBoss from 'pg-boss';
+import { ne, eq, and } from 'drizzle-orm';
 import { db } from '@chemclaw2/db';
 import { campaignSteps, synthesisCampaigns } from '@chemclaw2/db';
-import { eq, and, lt, sql } from 'drizzle-orm';
+import {
+  getStepsForRetry,
+  markStepFailed,
+  markStepComplete,
+} from '@chemclaw2/db';
 
 export async function startCampaignWorker(boss: PgBoss): Promise<void> {
+  await boss.createQueue('retry-campaign-steps', { policy: PgBoss.policies.standard } as PgBoss.Queue);
   await boss.createQueue('run-campaign-step', { policy: PgBoss.policies.standard } as PgBoss.Queue);
 
   // Cron: every 5 minutes, find failed steps eligible for retry and re-enqueue them
   await boss.schedule('retry-campaign-steps', '*/5 * * * *');
   await boss.work('retry-campaign-steps', async () => {
-    const stepsToRetry = await db
-      .select({ id: campaignSteps.id })
-      .from(campaignSteps)
-      .where(
-        and(
-          eq(campaignSteps.status, 'failed'),
-          lt(campaignSteps.retryCount, 3),
-          sql`next_retry_at <= NOW()`,
-        ),
-      );
+    const stepsToRetry = await getStepsForRetry();
     for (const { id } of stepsToRetry) {
       await boss.send('run-campaign-step', { stepId: id }).catch(() => {});
     }
@@ -36,32 +33,21 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
 
         // Placeholder: actual step execution would call chemistry tools here
         // For now, mark complete with a stub result
-        await db
-          .update(campaignSteps)
-          .set({ status: 'complete', result: { note: 'step executed' } })
-          .where(eq(campaignSteps.id, stepId));
+        await markStepComplete(stepId, { note: 'step executed' });
 
         // Check if all steps for the campaign are complete
-        const campaign = (await db.select().from(synthesisCampaigns).where(eq(synthesisCampaigns.id, step.campaignId)))[0];
+        const [campaign] = await db.select().from(synthesisCampaigns).where(eq(synthesisCampaigns.id, step.campaignId));
         if (campaign) {
           const remaining = await db
             .select({ id: campaignSteps.id })
             .from(campaignSteps)
-            .where(and(eq(campaignSteps.campaignId, step.campaignId), sql`status != 'complete'`));
+            .where(and(eq(campaignSteps.campaignId, step.campaignId), ne(campaignSteps.status, 'complete')));
           if (remaining.length === 0) {
             await db.update(synthesisCampaigns).set({ status: 'complete' }).where(eq(synthesisCampaigns.id, campaign.id));
           }
         }
       } catch (err) {
-        const backoffMinutes = Math.pow(2, step.retryCount);
-        await db
-          .update(campaignSteps)
-          .set({
-            status: 'failed',
-            retryCount: step.retryCount + 1,
-            nextRetryAt: sql`NOW() + INTERVAL '${sql.raw(String(backoffMinutes))} minutes'`,
-          })
-          .where(eq(campaignSteps.id, stepId));
+        await markStepFailed(stepId, step.retryCount);
         console.error(`[campaign-worker] step ${stepId} failed:`, err);
       }
     }
