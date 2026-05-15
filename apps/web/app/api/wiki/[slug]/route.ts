@@ -2,6 +2,7 @@ import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { getWikiPage, upsertWikiPage } from '@chemclaw2/db';
 import { embedTexts } from '../../../../lib/embeddings';
+import { rateLimit } from '@/lib/rate-limit';
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_TITLE_LEN = 500;
@@ -30,17 +31,28 @@ export async function PUT(
 ) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const { limited } = rateLimit(`wiki:${userId}`, 20, 60_000);
+  if (limited) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
+  }
+
   const { slug } = await params;
   if (!SLUG_RE.test(slug) || slug.length > 200) {
     return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
   }
 
-  const body = await req.json() as {
+  let body: {
     title?: string;
-    content: Record<string, unknown>;
+    content?: Record<string, unknown>;
     contentText: string;
     citations?: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>;
   };
+  try {
+    body = await req.json() as typeof body;
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
 
   const existing = await getWikiPage(slug);
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -69,7 +81,7 @@ export async function PUT(
   const id = await upsertWikiPage(
     slug,
     body.title ?? existing.title,
-    body.content,
+    body.content ?? existing.content as Record<string, unknown>,
     body.contentText,
     userId,
     body.citations ?? [],

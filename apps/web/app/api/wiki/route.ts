@@ -2,10 +2,11 @@ import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { upsertWikiPage, listWikiPages, searchWikiByFTS } from '@chemclaw2/db';
 import { embedTexts } from '../../../lib/embeddings';
+import { rateLimit } from '@/lib/rate-limit';
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_TITLE_LEN = 500;
-const MAX_CONTENT_TEXT_LEN = 500_000; // ~500KB plain text
+const MAX_CONTENT_TEXT_LEN = 500_000;
 const MAX_CITATIONS = 200;
 const MAX_CITATION_FIELD_LEN = 1_000;
 
@@ -28,13 +29,23 @@ export async function POST(req: Request) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const body = await req.json() as {
+  const { limited } = rateLimit(`wiki:${userId}`, 20, 60_000);
+  if (limited) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
+  }
+
+  let body: {
     slug: string;
     title: string;
     content: Record<string, unknown>;
     contentText: string;
     citations?: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>;
   };
+  try {
+    body = await req.json() as typeof body;
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
 
   if (!body.slug || !body.title) {
     return NextResponse.json({ error: 'slug and title are required' }, { status: 400 });

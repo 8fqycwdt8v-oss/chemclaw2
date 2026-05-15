@@ -16,7 +16,11 @@ export function rateLimit(
   const cutoff = now - windowMs;
   const timestamps = (windows.get(key) ?? []).filter((t) => t > cutoff);
   if (timestamps.length >= maxRequests) {
-    windows.set(key, timestamps);
+    if (timestamps.length === 0) {
+      windows.delete(key);
+    } else {
+      windows.set(key, timestamps);
+    }
     return { limited: true };
   }
   timestamps.push(now);

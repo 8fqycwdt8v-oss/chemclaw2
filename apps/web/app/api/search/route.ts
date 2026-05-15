@@ -5,6 +5,11 @@ import { rateLimit } from '@/lib/rate-limit';
 
 const MAX_QUERY_LEN = 500;
 
+function parseLimit(raw: string | null, fallback = 20, max = 50): number {
+  const n = Number(raw ?? fallback);
+  return Math.min(isNaN(n) ? fallback : n, max);
+}
+
 /**
  * GET /api/search?q=<text>&limit=<n>
  *   Full-text search across wiki pages. Returns combined results.
@@ -19,12 +24,17 @@ export async function GET(req: Request) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+  const { limited } = rateLimit(`search:${userId}`, 60, 60_000);
+  if (limited) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
+  }
+
   const url = new URL(req.url);
   const q = url.searchParams.get('q') ?? '';
   if (!q.trim()) return NextResponse.json({ error: 'q is required' }, { status: 400 });
   if (q.length > MAX_QUERY_LEN) return NextResponse.json({ error: 'query too long' }, { status: 400 });
 
-  const limit = Math.min(Number(url.searchParams.get('limit') ?? '20'), 50);
+  const limit = parseLimit(url.searchParams.get('limit'));
 
   const wikiResults = await searchWikiByFTS(q, limit);
   return NextResponse.json({
@@ -53,7 +63,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const limit = Math.min(Number(body.limit ?? 20), 50);
+  const limit = parseLimit(String(body.limit ?? '20'));
 
   if (typeof body.fingerprint_bits === 'string') {
     if (!/^[01]{2048}$/.test(body.fingerprint_bits)) {
