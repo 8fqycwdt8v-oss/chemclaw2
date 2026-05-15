@@ -5,9 +5,13 @@ import ipaddr from 'ipaddr.js';
  * Resolve hostname via DNS and reject if any resolved address is non-unicast
  * (loopback, private, link-local, multicast, etc.).
  *
- * This is a best-effort DNS rebinding guard for native fetch(). There is an
- * inherent TOCTOU race between this check and the actual TCP connection —
- * definitive protection requires infrastructure-level egress filtering.
+ * This is a best-effort DNS rebinding guard for native fetch(). Two known gaps:
+ * - TOCTOU: the resolved IP can change between this check and TCP connection.
+ * - Intermediate redirect hops are not individually DNS-validated; only the
+ *   initial URL and the final res.url are checked against both the allowlist and DNS.
+ *   Multi-hop redirect chains through a compromised allowed domain remain a
+ *   theoretical gap. Definitive protection requires infrastructure-level egress
+ *   filtering or per-hop redirect interception.
  */
 async function assertNotPrivateHost(hostname: string): Promise<void> {
   let addresses: Array<{ address: string; family: number }>;

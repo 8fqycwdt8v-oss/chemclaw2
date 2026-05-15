@@ -10,6 +10,7 @@ const ALLOWED_DOMAINS = [
   'acs.org',
   'nature.com',
   'sciencedirect.com',
+  'elsevier.com',      // linkinghub.elsevier.com is a common doi.org redirect target
 ];
 
 export const docFetchTool = {
