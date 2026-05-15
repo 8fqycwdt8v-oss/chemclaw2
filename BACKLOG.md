@@ -22,3 +22,5 @@
 - [safety/gate] Multi-turn bypass: gate fires on each turn independently but an attacker can front-load controlled substance context then issue synthesis instruction in a later turn without triggering the gate; mitigation requires session-level context scanning (deferred — architectural change)
 - [db/fact-id-check] CAS regex (\d{2,7}-\d{2}-\d) has 7-digit upper bound; longest known CAS number is 10 digits; extend to \d{2,10} to avoid false negatives on newer registrations
 - [db/fact-id-check] factIdCheckHook appends warning as console.warn; wire to OTel span attributes via @opentelemetry/api getCurrentSpan() for trace-visible compliance flagging
+- [db/session-store] append() uses ON CONFLICT DO UPDATE with JSONB || concat; two concurrent appends on the same session key with identical base state cause last-writer-wins data loss; serialize via FOR UPDATE row lock in a transaction before multi-user load increases
+- [db/sessions] replaySession orders by mtime (Date.now() in TypeScript); sub-millisecond concurrent appends produce non-deterministic ordering; add insertSeq bigserial column and ORDER BY insertSeq for correct replay under load
