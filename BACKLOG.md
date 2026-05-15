@@ -1,4 +1,3 @@
-- [db/session-store] Replace `as unknown as SessionStore` cast with explicit SDK type import once SDK exports `SessionStore` as a stable named export (currently requires `peerDependency` import path)
 - [db/migrate] Replace `ts-node/esm` loader (deprecated in Node.js 20+) with `tsx` for the migrate script
 - [agent-tools] Phase 2: compound_similarity_search, find_similar_reactions, wiki_lookup tools
 - [agent-tools] Phase 4: redaction, fact-id-check, scheduled-substance-gate hooks

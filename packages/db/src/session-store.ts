@@ -1,15 +1,7 @@
+import type { SessionKey, SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk';
 import { db } from './client.js';
 import { agentSessions } from './schema/sessions.js';
 import { eq, and, sql, max } from 'drizzle-orm';
-
-// We import the type only — the SDK is a peer dep
-type SessionStoreEntry = Record<string, unknown>;
-
-type SessionKey = {
-  projectKey: string;
-  sessionId: string;
-  subpath?: string;
-};
 
 /**
  * Returns a session store that forces every key to use the supplied projectKey,
@@ -116,9 +108,9 @@ export const postgresSessionStore = {
     return rows.map((r) => r.subpath).filter((s) => s !== '');
   },
 } satisfies {
-  append: (key: SessionKey, entries: SessionStoreEntry[]) => Promise<void>;
-  load: (key: SessionKey) => Promise<SessionStoreEntry[] | null>;
-  listSessions: (projectKey: string) => Promise<Array<{ sessionId: string; mtime: number }>>;
-  delete: (key: SessionKey) => Promise<void>;
-  listSubkeys: (key: { projectKey: string; sessionId: string }) => Promise<string[]>;
+  append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void>;
+  load(key: SessionKey): Promise<SessionStoreEntry[] | null>;
+  listSessions(projectKey: string): Promise<Array<{ sessionId: string; mtime: number }>>;
+  delete(key: SessionKey): Promise<void>;
+  listSubkeys(key: { projectKey: string; sessionId: string }): Promise<string[]>;
 };
