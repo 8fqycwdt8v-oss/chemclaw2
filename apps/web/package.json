@@ -10,20 +10,22 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "next": "^15.3.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.142",
+    "@chemclaw2/db": "workspace:*",
     "@clerk/nextjs": "^6.0.0",
     "@langfuse/otel": "^5.3.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.76.0",
     "@opentelemetry/sdk-node": "^0.218.0",
-    "@opentelemetry/auto-instrumentations-node": "^0.76.0"
+    "next": "^15.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "typescript": "^5.7.2",
     "tailwindcss": "^4.0.0",
-    "@tailwindcss/postcss": "^4.0.0"
+    "typescript": "^5.7.2"
   }
 }
