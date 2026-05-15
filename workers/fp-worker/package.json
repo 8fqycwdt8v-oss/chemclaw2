@@ -4,13 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node --loader ts-node/esm src/index.ts",
+    "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@chemclaw2/db": "workspace:*",
     "drizzle-orm": "^0.38.0",
-    "pg-boss": "^10.0.0"
+    "openai": "^6.37.0",
+    "pg-boss": "^10.0.0",
+    "tsx": "^4.22.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -4,9 +4,6 @@
 - [agent-tools] Phase 4: redaction, fact-id-check, scheduled-substance-gate hooks — implemented; checkToolInput/checkToolOutput not wired as SDK hooks (claude-agent-sdk 0.3.x Options type has no hooks field); wire when SDK exposes pre/post-tool-use hook API
 - [fly.toml] Verify `auto_stop_machines = "stop"` vs `min_machines_running = 1` interaction under SSE load; consider `"suspend"` for long-lived connections
 - [db] Add integration tests for session-store: append accumulation, load, cascade delete, listSubkeys
-- [campaigns] Wiki page auto-creation on campaign completion deferred: campaign-worker sets status='complete' but does not create a wiki page or set wiki_page_id; needs a separate pg-boss job that carries an Anthropic client reference to call upsertWikiPage with embedTexts
-- [campaigns] campaign_steps 'running' status not guarded in completion check — a job crash leaving status='running' prevents campaign from reaching 'complete'; add dead-letter sweep or timeout-based reset
-- [campaigns] addCampaignStep exported but not yet called from synthesis-campaign.ts — plan steps from confirm_synthesis_plan are stored only in the JSONB blob; wire addCampaignStep to create individual step rows when confirming plan
 - [db] withUserContext: SET LOCAL in a nested savepoint survives savepoint rollback — guard against nested withUserContext calls before multi-tenant flag lands
 - [db/fact-id-check] factIdCheckHook appends warning as console.warn; wire to OTel span attributes via @opentelemetry/api getCurrentSpan() for trace-visible compliance flagging
 - [db/session-store] append() uses ON CONFLICT DO UPDATE with JSONB || concat; two concurrent appends on the same session key with identical base state cause last-writer-wins data loss; serialize via FOR UPDATE row lock in a transaction before multi-user load increases
