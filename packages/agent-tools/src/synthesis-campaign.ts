@@ -1,4 +1,4 @@
-import { createCampaign, updateCampaignStatusForUser, getCampaignBySession } from '@chemclaw2/db';
+import { createCampaign, updateCampaignStatusForUser, getCampaignBySession, addCampaignStep } from '@chemclaw2/db';
 
 /**
  * Factory: captures userId from the authenticated request so the LLM cannot
@@ -51,7 +51,19 @@ export function createSynthesisCampaignTools(userId: string) {
         input.plan,
       );
       if (!found) return { error: 'Campaign not found or access denied' };
-      return { status: 'awaiting_input', message: 'Plan saved. Waiting for user confirmation.' };
+
+      // Create individual step rows from the plan's steps array so the worker
+      // can track and retry each step independently.
+      const steps = Array.isArray(input.plan.steps) ? input.plan.steps as Array<Record<string, unknown>> : [];
+      for (let i = 0; i < steps.length; i++) {
+        const s = steps[i];
+        await addCampaignStep(input.campaign_id, i, {
+          reactionSmiles: typeof s.reaction_smiles === 'string' ? s.reaction_smiles : undefined,
+          conditions: typeof s.conditions === 'string' ? s.conditions : undefined,
+        });
+      }
+
+      return { status: 'awaiting_input', message: 'Plan saved. Waiting for user confirmation.', steps_created: steps.length };
     },
   };
 

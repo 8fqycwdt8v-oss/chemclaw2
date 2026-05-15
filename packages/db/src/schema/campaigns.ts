@@ -23,4 +23,5 @@ export const campaignSteps = pgTable('campaign_steps', {
   result: jsonb('result'),
   retryCount: integer('retry_count').notNull().default(0),
   nextRetryAt: timestamp('next_retry_at', { withTimezone: true }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
