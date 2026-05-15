@@ -1,6 +1,6 @@
 import type { SessionKey, SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk';
-import { db } from './client.js';
-import { agentSessions } from './schema/sessions.js';
+import { db } from './client';
+import { agentSessions } from './schema/sessions';
 import { eq, and, sql, max } from 'drizzle-orm';
 
 /**
