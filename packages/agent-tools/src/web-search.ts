@@ -10,7 +10,9 @@ export const webSearchTool = {
   name: 'web_search',
   description:
     'Search the web for scientific literature, patents, or supplier information. ' +
-    'site_filter must be one of the approved science domains (pubchem, pubmed, doi.org, crossref, rsc.org, acs.org, nature.com, sciencedirect.com, chemrxiv.org).',
+    'site_filter, if provided, must be a hostname from the approved science domain list ' +
+    '(pubchem.ncbi.nlm.nih.gov, pubmed.ncbi.nlm.nih.gov, doi.org, crossref.org, ' +
+    'chemrxiv.org, rsc.org, acs.org, nature.com, sciencedirect.com, elsevier.com).',
   inputSchema: {
     type: 'object' as const,
     properties: {
