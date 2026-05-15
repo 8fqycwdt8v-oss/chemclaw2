@@ -70,6 +70,13 @@ export async function getWikiPage(slug: string) {
   return page ?? null;
 }
 
+export async function getWikiPageCitations(pageId: string) {
+  return db
+    .select({ citationId: wikiCitations.citationId, sourceType: wikiCitations.sourceType, sourceId: wikiCitations.sourceId, label: wikiCitations.label })
+    .from(wikiCitations)
+    .where(eq(wikiCitations.pageId, pageId));
+}
+
 export async function listWikiPages(limit = 50) {
   return db
     .select({ id: wikiPages.id, slug: wikiPages.slug, title: wikiPages.title, updatedAt: wikiPages.updatedAt })
