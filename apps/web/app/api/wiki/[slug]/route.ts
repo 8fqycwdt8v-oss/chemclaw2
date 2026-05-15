@@ -79,9 +79,9 @@ export async function PUT(
     }
   }
 
-  const existingCitations = body.citations === undefined
-    ? (await getWikiPageCitations(existing.id)).map((c) => ({ ...c, sourceId: c.sourceId ?? undefined }))
-    : undefined;
+  const citations = body.citations !== undefined
+    ? body.citations
+    : (await getWikiPageCitations(existing.id)).map((c) => ({ ...c, sourceId: c.sourceId ?? undefined }));
 
   const id = await upsertWikiPage(
     slug,
@@ -89,7 +89,7 @@ export async function PUT(
     body.content ?? existing.content as Record<string, unknown>,
     body.contentText ?? existing.contentText ?? '',
     userId,
-    body.citations ?? existingCitations ?? [],
+    citations,
     embedTexts,
   );
 

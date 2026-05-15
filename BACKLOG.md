@@ -24,3 +24,5 @@
 - [db/fact-id-check] factIdCheckHook appends warning as console.warn; wire to OTel span attributes via @opentelemetry/api getCurrentSpan() for trace-visible compliance flagging
 - [db/session-store] append() uses ON CONFLICT DO UPDATE with JSONB || concat; two concurrent appends on the same session key with identical base state cause last-writer-wins data loss; serialize via FOR UPDATE row lock in a transaction before multi-user load increases
 - [db/sessions] replaySession orders by mtime (Date.now() in TypeScript); sub-millisecond concurrent appends produce non-deterministic ordering; add insertSeq bigserial column and ORDER BY insertSeq for correct replay under load
+- [api/rate-limit] In-process sliding-window rate limiter resets on restart and is not shared across instances; migrate to Postgres or Redis advisory locks before multi-instance (multi-machine Fly.io) deploy
+- [api/wiki] GET /api/wiki list path (no ?q=) has no pagination token; a single user can scrape 3,000 rows/min at 60 req/min × 50 row limit; add cursor-based pagination before exposing to untrusted users
