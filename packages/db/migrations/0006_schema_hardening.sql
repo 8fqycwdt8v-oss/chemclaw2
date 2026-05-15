@@ -1,0 +1,20 @@
+-- wiki_chunks: enforce uniqueness per (page_id, chunk_idx) so upsert logic
+-- can rely on the pair as a natural deduplication key
+ALTER TABLE wiki_chunks
+  ADD CONSTRAINT wiki_chunks_page_chunk_unique UNIQUE (page_id, chunk_idx);
+
+-- agent_sessions: add insert_seq bigserial for deterministic replay ordering.
+-- mtime (Date.now()) can tie across concurrent appends in the same millisecond;
+-- bigserial is strictly monotone per-insert, giving correct session replay order.
+ALTER TABLE agent_sessions
+  ADD COLUMN insert_seq BIGSERIAL;
+
+CREATE INDEX IF NOT EXISTS agent_sessions_insert_seq_idx
+  ON agent_sessions (project_key, session_id, insert_seq);
+
+-- audit_log RLS: replace permissive FOR ALL policy with per-operation policies
+-- that allow SELECT and INSERT but block UPDATE and DELETE.
+-- This enforces append-only semantics; no policy for an operation = deny under RLS.
+DROP POLICY IF EXISTS audit_log_allow ON audit_log;
+CREATE POLICY audit_log_select ON audit_log FOR SELECT USING (true);
+CREATE POLICY audit_log_insert ON audit_log FOR INSERT WITH CHECK (true);

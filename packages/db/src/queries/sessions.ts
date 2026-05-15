@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { db } from '../client';
 import { agentSessions } from '../schema/sessions';
 
@@ -20,7 +20,7 @@ export async function replaySession(
       eq(agentSessions.sessionId, sessionId),
       eq(agentSessions.subpath, ''),
     ))
-    .orderBy(agentSessions.mtime);
+    .orderBy(asc(agentSessions.insertSeq));
 
   return rows.flatMap((r) => {
     const entries = r.entries as SessionEntry[] | null;
