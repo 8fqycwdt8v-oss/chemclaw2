@@ -1,21 +1,24 @@
-const BLOCKED_TERMS = [
-  'synthesize fentanyl', 'fentanyl synthesis', 'make fentanyl',
-  'synthesize carfentanil', 'carfentanil synthesis',
-  'synthesize methamphetamine', 'meth synthesis', 'cook meth',
-  'synthesize heroin', 'heroin synthesis',
-  'synthesize mdma', 'mdma synthesis',
-  'schedule i synthesis', 'schedule ii synthesis',
-];
+// Shared list of controlled/scheduled substance names — kept in sync with redaction.ts
+export const CONTROLLED_SUBSTANCE_NAMES =
+  /\b(fentanyl|carfentanil|methamphetamine|meth|heroin|mdma|nitazene|acetylfentanyl|furanylfentanyl)\b/i;
 
+const SYNTHESIS_VERBS =
+  /\b(synthesize|synthesis|manufacture|produce|make|cook|prepare|recipe|route)\b/i;
+
+/**
+ * Returns blocked=true when the prompt contains both a controlled substance
+ * name AND a synthesis-intent verb. Using two independent regexes prevents
+ * trivial bypass via whitespace or separators between terms.
+ *
+ * The block reason shown to the client is intentionally generic — the matched
+ * term is NOT echoed to avoid telling the requester what to rephrase.
+ */
 export function scheduledSubstanceGate(prompt: string): { blocked: boolean; reason?: string } {
-  const lower = prompt.toLowerCase();
-  for (const term of BLOCKED_TERMS) {
-    if (lower.includes(term.toLowerCase())) {
-      return {
-        blocked: true,
-        reason: `Request blocked: synthesis instructions for scheduled/controlled substances are not permitted. Term matched: "${term}"`,
-      };
-    }
+  if (CONTROLLED_SUBSTANCE_NAMES.test(prompt) && SYNTHESIS_VERBS.test(prompt)) {
+    return {
+      blocked: true,
+      reason: 'Request blocked: synthesis instructions for scheduled/controlled substances are not permitted.',
+    };
   }
   return { blocked: false };
 }

@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
   // Safety: block prompts containing scheduled substance synthesis terms
   const gate = scheduledSubstanceGate(prompt);
   if (gate.blocked) {
-    return NextResponse.json({ error: gate.reason }, { status: 400 });
+    return NextResponse.json({ error: gate.reason }, { status: 403 });
   }
 
   // Validate client-supplied sessionId to prevent header injection; fall back to fresh UUID

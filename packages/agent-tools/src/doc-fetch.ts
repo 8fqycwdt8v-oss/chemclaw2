@@ -33,8 +33,22 @@ export const docFetchTool = {
     }
     const res = await fetch(input.url, { headers: { 'User-Agent': 'chemclaw2/1.0 (research assistant)' } });
     if (!res.ok) return { error: `HTTP ${res.status}` };
-    const html = await res.text();
-    // Strip HTML tags — simple regex
+    // Stream body with a byte limit to avoid loading large HTML docs into memory
+    const MAX_BYTES = 500_000;
+    const reader = res.body?.getReader();
+    if (!reader) return { error: 'No response body' };
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(value);
+      totalBytes += value.byteLength;
+      if (totalBytes >= MAX_BYTES) { reader.cancel().catch(() => {}); break; }
+    }
+    const html = new TextDecoder().decode(
+      chunks.reduce((acc, c) => { const m = new Uint8Array(acc.length + c.length); m.set(acc); m.set(c, acc.length); return m; }, new Uint8Array()),
+    );
     const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 10_000);
     return { url: input.url, text };
   },
