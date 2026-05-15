@@ -21,14 +21,14 @@ export const postgresSessionStore = {
         projectKey: key.projectKey,
         sessionId: key.sessionId,
         subpath,
-        entries: entries as any,
+        entries: entries,
         mtime: now,
       })
       .onConflictDoUpdate({
         target: [agentSessions.projectKey, agentSessions.sessionId, agentSessions.subpath],
         set: {
-          entries: sql`agent_sessions.entries || ${JSON.stringify(entries)}::jsonb`,
-          mtime: now,
+          entries: sql`${agentSessions.entries} || excluded.entries`,
+          mtime: sql`GREATEST(${agentSessions.mtime}, excluded.mtime)`,
         },
       });
   },
@@ -54,7 +54,9 @@ export const postgresSessionStore = {
       .from(agentSessions)
       .where(eq(agentSessions.projectKey, projectKey))
       .groupBy(agentSessions.sessionId);
-    return rows.map((r) => ({ sessionId: r.sessionId, mtime: r.mtime! }));
+    return rows
+      .filter((r) => r.mtime !== null)
+      .map((r) => ({ sessionId: r.sessionId, mtime: r.mtime as number }));
   },
 
   async delete(key: SessionKey): Promise<void> {

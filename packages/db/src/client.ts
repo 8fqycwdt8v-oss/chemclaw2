@@ -5,6 +5,7 @@ import * as schema from './schema/index.js';
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error('DATABASE_URL is required');
 
-const sql = postgres(connectionString, { max: 10 });
+// max:2 per worker instance — use a connection pooler (PgBouncer/Supavisor) in front of Postgres for higher throughput
+const sql = postgres(connectionString, { max: 2 });
 export const db = drizzle(sql, { schema });
 export { sql as pgClient };
