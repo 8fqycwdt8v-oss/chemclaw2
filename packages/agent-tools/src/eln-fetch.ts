@@ -1,5 +1,23 @@
+import dns from 'dns';
+import ipaddr from 'ipaddr.js';
+
 const ELN_BASE = process.env.ELN_API_BASE_URL ?? '';
 const ELN_KEY = process.env.ELN_API_KEY ?? '';
+
+async function assertElnHostNotPrivate(hostname: string): Promise<string | null> {
+  try {
+    const addresses = await dns.promises.lookup(hostname, { all: true });
+    for (const { address } of addresses) {
+      if (!ipaddr.isValid(address)) continue;
+      if (ipaddr.parse(address).range() !== 'unicast') {
+        return `SSRF blocked: ELN host ${hostname} resolves to a non-public address`;
+      }
+    }
+    return null;
+  } catch {
+    return `DNS resolution failed for ELN host: ${hostname}`;
+  }
+}
 
 export const elnFetchTool = {
   name: 'eln_fetch_experiment',
@@ -22,6 +40,9 @@ export const elnFetchTool = {
     }
 
     if (!ELN_KEY) return { error: 'ELN integration not configured (ELN_API_KEY not set)' };
+
+    const dnsError = await assertElnHostNotPrivate(baseUrl.hostname);
+    if (dnsError) return { error: dnsError };
 
     // Trailing slash on base ensures new URL() appends rather than replaces the path prefix
     const base = ELN_BASE.endsWith('/') ? ELN_BASE : ELN_BASE + '/';

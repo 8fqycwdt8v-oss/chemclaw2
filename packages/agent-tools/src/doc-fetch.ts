@@ -1,3 +1,5 @@
+import { safeFetch } from './safe-fetch';
+
 const ALLOWED_DOMAINS = [
   'pubchem.ncbi.nlm.nih.gov',
   'pubmed.ncbi.nlm.nih.gov',
@@ -21,25 +23,13 @@ export const docFetchTool = {
     required: ['url'],
   },
   async execute(input: { url: string }) {
-    let parsed: URL;
+    let res: Response;
     try {
-      parsed = new URL(input.url);
-    } catch {
-      return { error: 'Invalid URL' };
-    }
-    const hostname = parsed.hostname.replace(/^www\./, '');
-    if (!ALLOWED_DOMAINS.some((d) => hostname === d || hostname.endsWith('.' + d))) {
-      return { error: `Domain not allowed: ${hostname}` };
-    }
-    const res = await fetch(input.url, {
-      redirect: 'follow',
-      headers: { 'User-Agent': 'chemclaw2/1.0 (research assistant)' },
-    });
-    // Post-redirect hostname revalidation: prevents redirect-based SSRF to internal addresses
-    // while allowing doi.org (which always redirects to publisher sites in the allowlist).
-    const finalHostname = new URL(res.url).hostname.replace(/^www\./, '');
-    if (!ALLOWED_DOMAINS.some((d) => finalHostname === d || finalHostname.endsWith('.' + d))) {
-      return { error: 'Redirect target domain not allowed' };
+      res = await safeFetch(input.url, ALLOWED_DOMAINS, {
+        headers: { 'User-Agent': 'chemclaw2/1.0 (research assistant)' },
+      });
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : 'Fetch failed' };
     }
     if (!res.ok) return { error: `HTTP ${res.status}` };
     // Stream body with a byte limit to avoid loading large HTML docs into memory
@@ -59,6 +49,6 @@ export const docFetchTool = {
       chunks.reduce((acc, c) => { const m = new Uint8Array(acc.length + c.length); m.set(acc); m.set(c, acc.length); return m; }, new Uint8Array()),
     );
     const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 10_000);
-    return { url: input.url, text };
+    return { url: res.url, text };
   },
 };
