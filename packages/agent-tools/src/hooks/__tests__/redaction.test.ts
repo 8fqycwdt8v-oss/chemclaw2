@@ -66,10 +66,17 @@ describe('checkToolInput (redaction)', () => {
     expect(result.action).toBe('block');
   });
 
-  it('does not block URL field containing substance name (legitimate toxicology reference)', () => {
-    // extractStringValues skips https:// strings, so URLs never trigger substance checks
+  it('does not block well-formed https:// value containing substance name', () => {
+    // Whitespace-free https:// strings are treated as URLs and skipped
     const result = checkToolInput('fetch_document', { url: 'https://pubchem.ncbi.nlm.nih.gov/compound/fentanyl' });
     expect(result.action).toBe('allow');
+  });
+
+  it('blocks https:// prefixed value with whitespace containing substance name', () => {
+    // A string with "https://" prefix but internal spaces is not a valid URL —
+    // URL skip does not apply, so substance check fires
+    const result = checkToolInput('web_search', { query: 'https://fake.com/fentanyl synthesis' });
+    expect(result.action).toBe('block');
   });
 
   it('redacts SSN pattern and allows', () => {

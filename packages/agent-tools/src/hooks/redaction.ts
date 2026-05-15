@@ -48,11 +48,15 @@ export function checkToolInput(
   return { action: 'allow' };
 }
 
-/** Recursively extract string leaf values, skipping URL-like strings to avoid
- *  false-positives on legitimate scientific references (e.g. PubChem URLs). */
+/** Recursively extract string leaf values, skipping well-formed URL strings to
+ *  avoid false-positives on legitimate scientific references (e.g. PubChem URLs).
+ *  Strings starting with http/https but containing whitespace are NOT skipped —
+ *  they are not valid URLs and could be injection attempts like
+ *  "https://fake.com/fentanyl synthesis". */
 function extractStringValues(obj: unknown): string[] {
   if (typeof obj === 'string') {
-    return obj.startsWith('http://') || obj.startsWith('https://') ? [] : [obj];
+    const isUrl = (obj.startsWith('http://') || obj.startsWith('https://')) && !/\s/.test(obj);
+    return isUrl ? [] : [obj];
   }
   if (Array.isArray(obj)) return obj.flatMap(extractStringValues);
   if (obj !== null && typeof obj === 'object') {
