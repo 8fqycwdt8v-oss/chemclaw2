@@ -48,9 +48,12 @@ export function checkToolInput(
   return { action: 'allow' };
 }
 
-/** Recursively extract all string leaf values from a nested object. */
+/** Recursively extract string leaf values, skipping URL-like strings to avoid
+ *  false-positives on legitimate scientific references (e.g. PubChem URLs). */
 function extractStringValues(obj: unknown): string[] {
-  if (typeof obj === 'string') return [obj];
+  if (typeof obj === 'string') {
+    return obj.startsWith('http://') || obj.startsWith('https://') ? [] : [obj];
+  }
   if (Array.isArray(obj)) return obj.flatMap(extractStringValues);
   if (obj !== null && typeof obj === 'object') {
     return Object.values(obj as Record<string, unknown>).flatMap(extractStringValues);

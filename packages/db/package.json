@@ -12,17 +12,18 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "migrate": "node --loader ts-node/esm src/migrate.ts"
+    "migrate": "tsx src/migrate.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.38.0",
     "postgres": "^3.4.5"
   },
   "devDependencies": {
-    "drizzle-kit": "^0.30.0",
-    "typescript": "^5.7.2",
     "@types/node": "^22.10.0",
-    "ts-node": "^10.9.2"
+    "drizzle-kit": "^0.30.0",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.22.0",
+    "typescript": "^5.7.2"
   },
   "peerDependencies": {
     "@anthropic-ai/claude-agent-sdk": ">=0.3.0"
