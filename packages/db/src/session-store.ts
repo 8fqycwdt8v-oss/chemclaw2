@@ -26,22 +26,32 @@ export const postgresSessionStore = {
   async append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void> {
     const subpath = key.subpath ?? '';
     const now = Date.now();
-    await db
-      .insert(agentSessions)
-      .values({
-        projectKey: key.projectKey,
-        sessionId: key.sessionId,
-        subpath,
-        entries: entries,
-        mtime: now,
-      })
-      .onConflictDoUpdate({
-        target: [agentSessions.projectKey, agentSessions.sessionId, agentSessions.subpath],
-        set: {
-          entries: sql`${agentSessions.entries} || excluded.entries`,
-          mtime: sql`GREATEST(${agentSessions.mtime}, excluded.mtime)`,
-        },
-      });
+    // Serialize concurrent appends with a transaction-scoped advisory lock.
+    // SELECT FOR UPDATE only locks existing rows — it acquires nothing on first insert.
+    // pg_advisory_xact_lock() always acquires unconditionally, covering the creation race.
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`
+        SELECT pg_advisory_xact_lock(
+          hashtext(${key.projectKey} || '::' || ${key.sessionId} || '::' || ${subpath})
+        )
+      `);
+      await tx
+        .insert(agentSessions)
+        .values({
+          projectKey: key.projectKey,
+          sessionId: key.sessionId,
+          subpath,
+          entries,
+          mtime: now,
+        })
+        .onConflictDoUpdate({
+          target: [agentSessions.projectKey, agentSessions.sessionId, agentSessions.subpath],
+          set: {
+            entries: sql`${agentSessions.entries} || excluded.entries`,
+            mtime: sql`GREATEST(${agentSessions.mtime}, excluded.mtime)`,
+          },
+        });
+    });
   },
 
   async load(key: SessionKey): Promise<SessionStoreEntry[] | null> {
