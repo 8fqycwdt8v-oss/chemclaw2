@@ -82,7 +82,7 @@ export async function PUT(
     slug,
     body.title ?? existing.title,
     body.content ?? existing.content as Record<string, unknown>,
-    body.contentText,
+    body.contentText ?? existing.contentText ?? '',
     userId,
     body.citations ?? [],
     embedTexts,

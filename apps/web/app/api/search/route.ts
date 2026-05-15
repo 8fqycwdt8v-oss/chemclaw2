@@ -7,7 +7,7 @@ const MAX_QUERY_LEN = 500;
 
 function parseLimit(raw: string | null, fallback = 20, max = 50): number {
   const n = Number(raw ?? fallback);
-  return Math.min(isNaN(n) ? fallback : n, max);
+  return Math.min(isNaN(n) || n < 1 ? fallback : n, max);
 }
 
 /**

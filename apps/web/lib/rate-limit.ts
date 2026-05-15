@@ -6,6 +6,7 @@ const windows = new Map<string, number[]>();
  * State resets on restart — acceptable for a pilot-scale system.
  *
  * Returns { limited: true } when the caller exceeds maxRequests within windowMs.
+ * Note: stale map entries (idle keys) are not eagerly pruned; acceptable at pilot scale.
  */
 export function rateLimit(
   key: string,
@@ -16,11 +17,7 @@ export function rateLimit(
   const cutoff = now - windowMs;
   const timestamps = (windows.get(key) ?? []).filter((t) => t > cutoff);
   if (timestamps.length >= maxRequests) {
-    if (timestamps.length === 0) {
-      windows.delete(key);
-    } else {
-      windows.set(key, timestamps);
-    }
+    windows.set(key, timestamps);
     return { limited: true };
   }
   timestamps.push(now);
