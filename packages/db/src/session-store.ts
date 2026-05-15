@@ -1,6 +1,6 @@
 import { db } from './client.js';
 import { agentSessions } from './schema/sessions.js';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, max } from 'drizzle-orm';
 
 // We import the type only — the SDK is a peer dep
 type SessionStoreEntry = Record<string, unknown>;
@@ -47,10 +47,14 @@ export const postgresSessionStore = {
 
   async listSessions(projectKey: string): Promise<Array<{ sessionId: string; mtime: number }>> {
     const rows = await db
-      .selectDistinct({ sessionId: agentSessions.sessionId, mtime: agentSessions.mtime })
+      .select({
+        sessionId: agentSessions.sessionId,
+        mtime: max(agentSessions.mtime).as('mtime'),
+      })
       .from(agentSessions)
-      .where(eq(agentSessions.projectKey, projectKey));
-    return rows;
+      .where(eq(agentSessions.projectKey, projectKey))
+      .groupBy(agentSessions.sessionId);
+    return rows.map((r) => ({ sessionId: r.sessionId, mtime: r.mtime! }));
   },
 
   async delete(key: SessionKey): Promise<void> {
