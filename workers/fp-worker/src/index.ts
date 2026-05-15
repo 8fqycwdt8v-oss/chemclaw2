@@ -12,16 +12,16 @@ const boss = new PgBoss(DATABASE_URL);
 
 boss.on('error', (err) => console.error('[pg-boss]', err));
 
+const MCP_TIMEOUT_MS = 30_000;
+
 /**
- * Call an MCP tool via stdio.
- *
- * MCP stdio requires a 3-step handshake before tool calls:
+ * Call an MCP tool via stdio with the required 3-step handshake:
  *   1. Client sends `initialize`
  *   2. Server responds to `initialize`
  *   3. Client sends `notifications/initialized`
  *   4. Client sends `tools/call`
  *
- * Messages are newline-delimited JSON-RPC 2.0.
+ * Messages are newline-delimited JSON-RPC 2.0. Times out after 30 seconds.
  */
 async function callMcpTool(
   module: string,
@@ -34,6 +34,11 @@ async function callMcpTool(
     let buffer = '';
     let initDone = false;
     const TOOL_CALL_ID = 2;
+
+    const timer = setTimeout(() => {
+      proc.kill();
+      reject(new Error(`MCP tool call timed out after ${MCP_TIMEOUT_MS}ms: ${toolName}`));
+    }, MCP_TIMEOUT_MS);
 
     const send = (msg: object) => {
       proc.stdin.write(JSON.stringify(msg) + '\n');
@@ -66,11 +71,12 @@ async function callMcpTool(
         }
 
         if (!initDone && (msg as { id?: number }).id === 1) {
-          // Step 2: initialize response received — complete handshake and send tool call
+          // Step 2: initialize response received — complete handshake then send tool call
           initDone = true;
           send({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }); // Step 3
           send({ jsonrpc: '2.0', id: TOOL_CALL_ID, method: 'tools/call', params: { name: toolName, arguments: args } });
         } else if ((msg as { id?: number }).id === TOOL_CALL_ID) {
+          clearTimeout(timer);
           proc.stdin.end();
           try {
             const result = msg as { result?: { content?: Array<{ text?: string }> } };
@@ -84,15 +90,24 @@ async function callMcpTool(
     });
 
     proc.on('close', (code) => {
+      clearTimeout(timer);
       if (code !== 0) reject(new Error(`MCP process exited with code ${code}`));
     });
 
-    proc.on('error', reject);
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
   });
 }
 
 async function start() {
   await boss.start();
+
+  // Create queues with 'stately' policy so singletonKey actually prevents
+  // duplicate pending/active jobs. createQueue is idempotent (ON CONFLICT DO NOTHING).
+  await boss.createQueue('compute-morgan-fp', { policy: PgBoss.policies.stately } as PgBoss.Queue);
+  await boss.createQueue('compute-drfp', { policy: PgBoss.policies.stately } as PgBoss.Queue);
 
   // Process Morgan fingerprint jobs
   await boss.work<{ id: string }>(
@@ -113,7 +128,6 @@ async function start() {
             .update(compounds)
             .set({
               morganFp: result.fingerprint_bits as string,
-              canonSmiles: (result.canonical_smiles as string | undefined) ?? compound.canonSmiles,
               fpComputedAt: new Date(),
             })
             .where(eq(compounds.id, id));
@@ -155,8 +169,8 @@ async function start() {
     },
   );
 
-  // Poll every 30s for rows inserted before the worker started or missed by transient errors.
-  // singletonKey prevents duplicate jobs for the same row.
+  // Poll every 30s for rows without fingerprints (catches inserts that happened
+  // before this worker started). singletonKey + stately policy prevents duplicates.
   async function pollMissingFingerprints() {
     const pendingCompounds = await db
       .select({ id: compounds.id })
@@ -179,7 +193,6 @@ async function start() {
     }
   }
 
-  // Initial sweep on startup, then every 30 seconds
   await pollMissingFingerprints();
   const pollInterval = setInterval(pollMissingFingerprints, 30_000);
 

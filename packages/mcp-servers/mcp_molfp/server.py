@@ -9,7 +9,8 @@ mcp = FastMCP("mcp-molfp")
 def compute_morgan_fp(smiles: str, radius: int = 2, n_bits: int = 2048) -> dict:
     """Compute Morgan/ECFP fingerprint for a SMILES string.
 
-    Returns fingerprint_hex (hex-encoded bit vector) and n_bits.
+    Returns fingerprint_bits (binary string of '0'/'1', length = n_bits) and n_bits.
+    Compatible with Postgres BIT(n_bits) via $1::bit(n_bits) parameter cast.
     """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:

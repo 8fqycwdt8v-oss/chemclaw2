@@ -12,7 +12,8 @@ def compute_drfp(reaction_smiles: str, n_bits: int = _NBITS) -> dict:
     """Compute DRFP fingerprint for a reaction SMILES string.
 
     reaction_smiles format: reactants>>products (e.g. 'CC>>CCC')
-    Returns fingerprint_hex (hex-encoded bit vector) and n_bits.
+    Returns fingerprint_bits (binary string of '0'/'1', length = n_bits) and n_bits.
+    Compatible with Postgres BIT(n_bits) via $1::bit(n_bits) parameter cast.
     n_bits MUST be 2048 to match the database column — do not change.
     """
     fps = DrfpEncoder.encode([reaction_smiles], n_folded_length=n_bits)
