@@ -38,7 +38,11 @@ export async function GET(req: Request) {
     if (sep === -1) return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
     const ts = Date.parse(cursorParam.slice(0, sep));
     if (isNaN(ts)) return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
-    cursor = { updatedAt: new Date(ts), id: cursorParam.slice(sep + 1) };
+    const idPart = cursorParam.slice(sep + 1);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idPart)) {
+      return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
+    }
+    cursor = { updatedAt: new Date(ts), id: idPart };
   }
   const pages = await listWikiPages(50, cursor);
   const last = pages.length === 50 ? pages[pages.length - 1] : null;
