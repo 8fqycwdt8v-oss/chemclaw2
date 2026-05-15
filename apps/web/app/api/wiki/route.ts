@@ -15,7 +15,7 @@ export async function GET(req: Request) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const { limited } = rateLimit(`wiki-read:${userId}`, 60, 60_000);
+  const { limited } = await rateLimit(`wiki-read:${userId}`, 60, 60_000);
   if (limited) {
     return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
   }
@@ -54,7 +54,7 @@ export async function POST(req: Request) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const { limited } = rateLimit(`wiki:${userId}`, 20, 60_000);
+  const { limited } = await rateLimit(`wiki:${userId}`, 20, 60_000);
   if (limited) {
     return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
   }

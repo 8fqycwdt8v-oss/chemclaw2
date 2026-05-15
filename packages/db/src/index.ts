@@ -6,3 +6,4 @@ export * from './queries/reactions';
 export * from './queries/wiki';
 export * from './queries/campaigns';
 export * from './queries/sessions';
+export * from './queries/rate-limit';
