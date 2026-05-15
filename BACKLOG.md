@@ -1,6 +1,4 @@
 - [wiki] upsertWikiPage calls embedFn inside db.transaction() — holds connection lock during OpenAI round-trip; refactor to embed outside transaction if write contention becomes measurable
-- [wiki] Add `UNIQUE (page_id, chunk_idx)` constraint to `wiki_chunks` table
-- [wiki] Add `CREATE EXTENSION IF NOT EXISTS vector` guard to migration (currently relies on pgvector being pre-installed)
 - [wiki] WikiEditor: add `beforeunload`/router unsaved-changes guard to prevent accidental data loss
 - [wiki] `wiki_lookup` agent tool: expose `semanticSearchWiki` as a third lookup mode (currently only FTS + direct slug)
 - [wiki] Replace character-level chunk splitter with sentence-/paragraph-aware splitting for better chemistry text embedding quality
@@ -14,10 +12,8 @@
 - [campaigns] campaign_steps 'running' status not guarded in completion check — a job crash leaving status='running' prevents campaign from reaching 'complete'; add dead-letter sweep or timeout-based reset
 - [campaigns] addCampaignStep exported but not yet called from synthesis-campaign.ts — plan steps from confirm_synthesis_plan are stored only in the JSONB blob; wire addCampaignStep to create individual step rows when confirming plan
 - [db] withUserContext: SET LOCAL in a nested savepoint survives savepoint rollback — guard against nested withUserContext calls before multi-tenant flag lands
-- [db] audit_log RLS: current USING(true) allows DELETE; add INSERT-only policy before multi-tenant flip to enforce append-only semantics
 - [db/fact-id-check] factIdCheckHook appends warning as console.warn; wire to OTel span attributes via @opentelemetry/api getCurrentSpan() for trace-visible compliance flagging
 - [db/session-store] append() uses ON CONFLICT DO UPDATE with JSONB || concat; two concurrent appends on the same session key with identical base state cause last-writer-wins data loss; serialize via FOR UPDATE row lock in a transaction before multi-user load increases
-- [db/sessions] replaySession orders by mtime (Date.now() in TypeScript); sub-millisecond concurrent appends produce non-deterministic ordering; add insertSeq bigserial column and ORDER BY insertSeq for correct replay under load
 - [api/rate-limit] In-process sliding-window rate limiter resets on restart and is not shared across instances; migrate to Postgres or Redis advisory locks before multi-instance (multi-machine Fly.io) deploy
 - [api/wiki] GET /api/wiki list path (no ?q=) has no pagination token; a single user can scrape 3,000 rows/min at 60 req/min × 50 row limit; add cursor-based pagination before exposing to untrusted users
 - [safety/gate] Multi-turn bypass: gate fires on each turn independently but an attacker can front-load controlled substance context then issue synthesis instruction in a later turn without triggering the gate; mitigation requires session-level context scanning (deferred — architectural change)
