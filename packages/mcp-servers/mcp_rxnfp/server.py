@@ -16,6 +16,8 @@ def compute_drfp(reaction_smiles: str, n_bits: int = _NBITS) -> dict:
     Compatible with Postgres BIT(n_bits) via $1::bit(n_bits) parameter cast.
     n_bits MUST be 2048 to match the database column — do not change.
     """
+    if not (64 <= n_bits <= 4096):
+        raise ValueError(f"n_bits must be between 64 and 4096, got {n_bits}")
     fps = DrfpEncoder.encode([reaction_smiles], n_folded_length=n_bits)
     bit_arr = fps[0]
     # DrfpEncoder returns a numpy array of 0/1 ints

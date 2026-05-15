@@ -20,6 +20,9 @@ export async function findSimilarReactions(
   limit = 20,
   minSimilarity = 0.4,
 ): Promise<SimilarReaction[]> {
+  if (!/^[01]{2048}$/.test(queryFpBits)) {
+    throw new Error('queryFpBits must be exactly 2048 binary characters (0/1)');
+  }
   const rows = await db
     .select({
       id: reactions.id,

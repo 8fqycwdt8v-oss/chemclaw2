@@ -21,15 +21,18 @@ export const elnFetchTool = {
       return { error: 'Invalid ELN_API_BASE_URL' };
     }
 
+    if (!ELN_KEY) return { error: 'ELN integration not configured (ELN_API_KEY not set)' };
+
     // Trailing slash on base ensures new URL() appends rather than replaces the path prefix
     const base = ELN_BASE.endsWith('/') ? ELN_BASE : ELN_BASE + '/';
     const targetUrl = new URL(`experiments/${encodeURIComponent(input.experiment_id)}`, base);
-    // Enforce same-origin to prevent SSRF via path traversal in experiment_id
-    if (targetUrl.hostname !== baseUrl.hostname) {
-      return { error: 'Constructed URL hostname does not match ELN_API_BASE_URL' };
+    // Compare full origin (scheme + host + port) to prevent scheme-downgrade and port-swap SSRF
+    if (targetUrl.origin !== baseUrl.origin) {
+      return { error: 'Constructed URL does not match ELN_API_BASE_URL origin' };
     }
 
     const res = await fetch(targetUrl.toString(), {
+      redirect: 'error',
       headers: {
         Authorization: `Bearer ${ELN_KEY}`,
         Accept: 'application/json',

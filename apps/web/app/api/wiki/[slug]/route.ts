@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 import { getWikiPage, upsertWikiPage } from '@chemclaw2/db';
 import { embedTexts } from '../../../../lib/embeddings';
 
+const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ slug: string }> },
@@ -10,6 +12,9 @@ export async function GET(
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { slug } = await params;
+  if (!SLUG_RE.test(slug) || slug.length > 200) {
+    return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
+  }
   const page = await getWikiPage(slug);
   if (!page) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   return NextResponse.json(page);
@@ -22,6 +27,9 @@ export async function PUT(
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { slug } = await params;
+  if (!SLUG_RE.test(slug) || slug.length > 200) {
+    return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
+  }
 
   const body = await req.json() as {
     title?: string;

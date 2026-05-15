@@ -25,6 +25,20 @@ export async function updateCampaignStatus(
     .where(eq(synthesisCampaigns.id, id));
 }
 
+export async function updateCampaignStatusForUser(
+  id: string,
+  userId: string,
+  status: string,
+  plan?: Record<string, unknown>,
+): Promise<{ found: boolean }> {
+  const rows = await db
+    .update(synthesisCampaigns)
+    .set({ status, ...(plan ? { plan } : {}) })
+    .where(and(eq(synthesisCampaigns.id, id), eq(synthesisCampaigns.createdBy, userId)))
+    .returning({ id: synthesisCampaigns.id });
+  return { found: rows.length > 0 };
+}
+
 export async function getCampaignBySession(sessionId: string) {
   const [row] = await db
     .select()
@@ -70,7 +84,8 @@ export async function markStepFailed(id: string, retryCount: number): Promise<vo
     .set({
       status: 'failed',
       retryCount: retryCount + 1,
-      nextRetryAt: sql`NOW() + INTERVAL '${sql.raw(String(backoffMinutes))} minutes'`,
+      // Parameterized interval — avoids sql.raw() with NaN/Infinity risk
+      nextRetryAt: sql`NOW() + (${backoffMinutes} * INTERVAL '1 minute')`,
     })
     .where(eq(campaignSteps.id, id));
 }

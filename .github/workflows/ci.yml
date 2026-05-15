@@ -63,6 +63,11 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Test
+        run: pnpm test
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chemclaw2_test
+
       - name: Build
         run: pnpm build
         env:

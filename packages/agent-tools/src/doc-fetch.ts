@@ -29,9 +29,18 @@ export const docFetchTool = {
     }
     const hostname = parsed.hostname.replace(/^www\./, '');
     if (!ALLOWED_DOMAINS.some((d) => hostname === d || hostname.endsWith('.' + d))) {
-      return { error: `Domain not allowed: ${hostname}. Allowed: ${ALLOWED_DOMAINS.join(', ')}` };
+      return { error: `Domain not allowed: ${hostname}` };
     }
-    const res = await fetch(input.url, { headers: { 'User-Agent': 'chemclaw2/1.0 (research assistant)' } });
+    const res = await fetch(input.url, {
+      redirect: 'follow',
+      headers: { 'User-Agent': 'chemclaw2/1.0 (research assistant)' },
+    });
+    // Post-redirect hostname revalidation: prevents redirect-based SSRF to internal addresses
+    // while allowing doi.org (which always redirects to publisher sites in the allowlist).
+    const finalHostname = new URL(res.url).hostname.replace(/^www\./, '');
+    if (!ALLOWED_DOMAINS.some((d) => finalHostname === d || finalHostname.endsWith('.' + d))) {
+      return { error: 'Redirect target domain not allowed' };
+    }
     if (!res.ok) return { error: `HTTP ${res.status}` };
     // Stream body with a byte limit to avoid loading large HTML docs into memory
     const MAX_BYTES = 500_000;

@@ -16,6 +16,9 @@ export const webSearchTool = {
     if (!apiKey) {
       return { results: [], error: 'BRAVE_SEARCH_API_KEY not configured' };
     }
+    if (input.site_filter && !/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(input.site_filter)) {
+      return { results: [], error: 'Invalid site_filter: must be a bare hostname (e.g. pubmed.ncbi.nlm.nih.gov)' };
+    }
     const q = input.site_filter ? `site:${input.site_filter} ${input.query}` : input.query;
     const url = `${BRAVE_API}?q=${encodeURIComponent(q)}&count=5`;
     const res = await fetch(url, { headers: { 'X-Subscription-Token': apiKey, Accept: 'application/json' } });

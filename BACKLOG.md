@@ -5,7 +5,6 @@
 - [wiki] WikiEditor: add `beforeunload`/router unsaved-changes guard to prevent accidental data loss
 - [wiki] `wiki_lookup` agent tool: expose `semanticSearchWiki` as a third lookup mode (currently only FTS + direct slug)
 - [wiki] Replace character-level chunk splitter with sentence-/paragraph-aware splitting for better chemistry text embedding quality
-- [fp-worker] callMcpTool() has no guard against code=0 exit before tool response — promise never settles; add `resolved` flag and reject on premature clean exit
 - [mcp_rxnfp] Remove spurious `rdkit>=2024.3` dep from pyproject.toml — server.py never imports RDKit; adds ~500 MB to the DRFP environment unnecessarily
 - [agent-tools] Phase 2: compound_similarity_search, find_similar_reactions, wiki_lookup tools
 - [agent-tools] Phase 4: redaction, fact-id-check, scheduled-substance-gate hooks — implemented; checkToolInput/checkToolOutput not wired as SDK hooks (claude-agent-sdk 0.3.x Options type has no hooks field); wire when SDK exposes pre/post-tool-use hook API
@@ -20,3 +19,8 @@
 - [db] withUserContext: SET LOCAL in a nested savepoint survives savepoint rollback — guard against nested withUserContext calls before multi-tenant flag lands
 - [db] audit_log RLS: current USING(true) allows DELETE; add INSERT-only policy before multi-tenant flip to enforce append-only semantics
 - [agent-tools] eln-fetch: return explicit error when ELN_API_KEY is unset rather than firing unauthenticated request
+- [safety/gate] Multi-turn bypass: gate fires on each turn independently but an attacker can front-load controlled substance context then issue synthesis instruction in a later turn without triggering the gate; mitigation requires session-level context scanning (deferred — architectural change)
+- [db/fact-id-check] CAS regex (\d{2,7}-\d{2}-\d) has 7-digit upper bound; longest known CAS number is 10 digits; extend to \d{2,10} to avoid false negatives on newer registrations
+- [db/fact-id-check] factIdCheckHook appends warning as console.warn; wire to OTel span attributes via @opentelemetry/api getCurrentSpan() for trace-visible compliance flagging
+- [db/session-store] append() uses ON CONFLICT DO UPDATE with JSONB || concat; two concurrent appends on the same session key with identical base state cause last-writer-wins data loss; serialize via FOR UPDATE row lock in a transaction before multi-user load increases
+- [db/sessions] replaySession orders by mtime (Date.now() in TypeScript); sub-millisecond concurrent appends produce non-deterministic ordering; add insertSeq bigserial column and ORDER BY insertSeq for correct replay under load

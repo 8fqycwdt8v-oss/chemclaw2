@@ -1,5 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
+import { randomUUID } from 'crypto';
 
 const encoder = new TextEncoder();
 
@@ -26,7 +27,11 @@ export function agentToStream(prompt: string, options: Options): ReadableStream<
         // [DONE] only on success — clients stop reading at this sentinel
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));
       } catch (err) {
-        controller.enqueue(sseEvent({ type: 'error', message: String(err) }));
+        // Log full error server-side; send only a correlation ID to the client
+        // to avoid leaking internal state (DB details, stack traces, API responses).
+        const errorId = randomUUID();
+        console.error({ errorId, err });
+        controller.enqueue(sseEvent({ type: 'error', message: 'Request failed', errorId }));
       } finally {
         controller.close();
       }
