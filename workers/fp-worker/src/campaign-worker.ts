@@ -1,6 +1,6 @@
 import PgBoss from 'pg-boss';
 import OpenAI from 'openai';
-import { ne, eq, and, inArray, sql } from 'drizzle-orm';
+import { ne, eq, and, lt, inArray, sql } from 'drizzle-orm';
 import { db } from '@chemclaw2/db';
 import { campaignSteps, synthesisCampaigns } from '@chemclaw2/db';
 import { upsertWikiPage } from '@chemclaw2/db';
@@ -35,17 +35,20 @@ const DEAD_LETTER_TIMEOUT_MINUTES = 30;
 export async function startCampaignWorker(boss: PgBoss): Promise<void> {
   await boss.createQueue('retry-campaign-steps', { policy: PgBoss.policies.standard } as PgBoss.Queue);
   await boss.createQueue('run-campaign-step', { policy: PgBoss.policies.standard } as PgBoss.Queue);
-  await boss.createQueue('create-campaign-wiki', { policy: PgBoss.policies.standard } as PgBoss.Queue);
+  await boss.createQueue('create-campaign-wiki', { policy: PgBoss.policies.stately } as PgBoss.Queue);
 
   // Cron every 5 minutes: retry failed steps + sweep dead 'running' steps
   await boss.schedule('retry-campaign-steps', '*/5 * * * *');
   await boss.work('retry-campaign-steps', async () => {
-    // Dead-letter sweep: reset steps stuck in 'running' for > DEAD_LETTER_TIMEOUT_MINUTES
+    // Dead-letter sweep: reset steps stuck in 'running' for > DEAD_LETTER_TIMEOUT_MINUTES.
+    // Sets next_retry_at = NOW() so getStepsForRetry() picks them up immediately.
+    // Guards retry_count < 3 to avoid pushing exhausted steps past the retry cap.
     await db
       .update(campaignSteps)
-      .set({ status: 'failed', retryCount: sql`retry_count + 1` })
+      .set({ status: 'failed', retryCount: sql`retry_count + 1`, nextRetryAt: sql`NOW()` })
       .where(and(
         eq(campaignSteps.status, 'running'),
+        lt(campaignSteps.retryCount, 3),
         sql`updated_at < NOW() - (${DEAD_LETTER_TIMEOUT_MINUTES} * INTERVAL '1 minute')`,
       ));
 
