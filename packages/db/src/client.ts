@@ -1,4 +1,5 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
+import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import * as schema from './schema/index';
 
@@ -32,3 +33,10 @@ export function getPgClient() {
 
 // Named export alias for legacy callers that import pgClient directly.
 export { getPgClient as pgClient };
+
+export async function withUserContext<T>(userId: string, fn: (tx: typeof db) => Promise<T>): Promise<T> {
+  return getDb().transaction(async (tx) => {
+    await tx.execute(sql`SET LOCAL app.current_user_id = ${userId}`);
+    return fn(tx as unknown as typeof db);
+  });
+}

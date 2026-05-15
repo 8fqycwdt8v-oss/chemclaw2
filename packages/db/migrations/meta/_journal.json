@@ -17,6 +17,7 @@
       "breakpoints": true
     },
     { "idx": 2, "version": "7", "when": 1747492800000, "tag": "0003_wiki", "breakpoints": true },
-    { "idx": 3, "version": "7", "when": 1747579200000, "tag": "0004_campaigns", "breakpoints": true }
+    { "idx": 3, "version": "7", "when": 1747579200000, "tag": "0004_campaigns", "breakpoints": true },
+    { "idx": 4, "version": "7", "when": 1747665600000, "tag": "0005_audit", "breakpoints": true }
   ]
 }
