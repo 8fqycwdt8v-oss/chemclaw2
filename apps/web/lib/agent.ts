@@ -1,5 +1,6 @@
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import { scopedSessionStore } from '@chemclaw2/db/session-store';
+import { inProcessMcpServer } from './sdk-tools';
 
 const SYSTEM_PROMPT = `You are ChemClaw, a pharma R&D knowledge-intelligence assistant.
 You have access to an organization knowledge base, compound registry, and reaction database.
@@ -14,6 +15,7 @@ export function buildQueryOptions(sessionId: string, userId: string): Options {
     sessionStore: scopedSessionStore(`chemclaw2:${userId}`),
     resume: sessionId,
     mcpServers: {
+      'chemclaw2-tools': inProcessMcpServer,
       'mcp-molfp': {
         type: 'stdio',
         command: 'python',

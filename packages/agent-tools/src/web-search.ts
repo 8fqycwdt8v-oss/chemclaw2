@@ -1,13 +1,21 @@
+import { ALLOWED_DOMAINS } from './doc-fetch';
+
 const BRAVE_API = 'https://api.search.brave.com/res/v1/web/search';
+
+function isAllowedSiteFilter(hostname: string): boolean {
+  return ALLOWED_DOMAINS.some((d) => hostname === d || hostname.endsWith('.' + d));
+}
 
 export const webSearchTool = {
   name: 'web_search',
-  description: 'Search the web for scientific literature, patents, or supplier information.',
+  description:
+    'Search the web for scientific literature, patents, or supplier information. ' +
+    'site_filter must be one of the approved science domains (pubchem, pubmed, doi.org, crossref, rsc.org, acs.org, nature.com, sciencedirect.com, chemrxiv.org).',
   inputSchema: {
     type: 'object' as const,
     properties: {
       query: { type: 'string', description: 'Search query' },
-      site_filter: { type: 'string', description: 'Optional site: filter (e.g. "pubmed.ncbi.nlm.nih.gov")' },
+      site_filter: { type: 'string', description: 'Restrict search to an approved domain (e.g. "pubmed.ncbi.nlm.nih.gov")' },
     },
     required: ['query'],
   },
@@ -16,8 +24,13 @@ export const webSearchTool = {
     if (!apiKey) {
       return { results: [], error: 'BRAVE_SEARCH_API_KEY not configured' };
     }
-    if (input.site_filter && !/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(input.site_filter)) {
-      return { results: [], error: 'Invalid site_filter: must be a bare hostname (e.g. pubmed.ncbi.nlm.nih.gov)' };
+    if (input.site_filter) {
+      if (!/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(input.site_filter)) {
+        return { results: [], error: 'Invalid site_filter: must be a bare hostname (e.g. pubmed.ncbi.nlm.nih.gov)' };
+      }
+      if (!isAllowedSiteFilter(input.site_filter)) {
+        return { results: [], error: `site_filter '${input.site_filter}' is not in the approved domain list` };
+      }
     }
     const q = input.site_filter ? `site:${input.site_filter} ${input.query}` : input.query;
     const url = `${BRAVE_API}?q=${encodeURIComponent(q)}&count=5`;
