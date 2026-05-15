@@ -24,10 +24,8 @@ def compute_drfp(reaction_smiles: str, n_bits: int = _NBITS) -> dict:
             f"DRFP returned {len(bit_str)} bits, expected {n_bits}. "
             "Verify drfp version supports n_folded_length."
         )
-    n_bytes = (len(bit_str) + 7) // 8
-    value = int(bit_str, 2)
-    fp_hex = value.to_bytes(n_bytes, byteorder="big").hex()
-    return {"fingerprint_hex": fp_hex, "n_bits": n_bits}
+    # Return binary string ('010101...') — compatible with Postgres BIT(2048) parameter cast
+    return {"fingerprint_bits": bit_str, "n_bits": n_bits}
 
 
 def main():

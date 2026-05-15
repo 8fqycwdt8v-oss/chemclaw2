@@ -15,13 +15,9 @@ def compute_morgan_fp(smiles: str, radius: int = 2, n_bits: int = 2048) -> dict:
     if mol is None:
         raise ValueError(f"Invalid SMILES: {smiles}")
     fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=radius, nBits=n_bits)
-    # Convert to hex: each bit -> bit string -> bytes -> hex
+    # Return binary string ('010101...') — compatible with Postgres BIT(2048) parameter cast
     bit_str = fp.ToBitString()
-    # Pack bits into bytes (big-endian)
-    n_bytes = (len(bit_str) + 7) // 8
-    value = int(bit_str, 2)
-    fp_hex = value.to_bytes(n_bytes, byteorder="big").hex()
-    return {"fingerprint_hex": fp_hex, "n_bits": n_bits}
+    return {"fingerprint_bits": bit_str, "n_bits": n_bits}
 
 
 @mcp.tool()

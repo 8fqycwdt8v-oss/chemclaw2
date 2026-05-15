@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { db } from '../client';
 import { compounds } from '../schema/compounds';
+import { bitStringToBytes, tanimoto } from './fp-utils';
 
 export type SimilarCompound = {
   id: string;
@@ -15,9 +16,12 @@ export type SimilarCompound = {
  * Two-stage similarity search:
  *  1. HNSW ANN pre-filter using Hamming distance (fast, ~100 candidates)
  *  2. Exact Tanimoto re-rank in application code (bit_count(a&b) / bit_count(a|b))
+ *
+ * queryFpBits: binary string of '0'/'1' chars (2048 chars), as returned by
+ * the mcp-molfp compute_morgan_fp tool's `fingerprint_bits` field.
  */
 export async function findSimilarCompounds(
-  queryFpHex: string,
+  queryFpBits: string,
   limit = 20,
   minTanimoto = 0.4,
 ): Promise<SimilarCompound[]> {
@@ -32,11 +36,11 @@ export async function findSimilarCompounds(
     })
     .from(compounds)
     .where(sql`morgan_fp IS NOT NULL`)
-    .orderBy(sql`morgan_fp <~> ${queryFpHex}::bit(2048)`)
+    // Postgres accepts a binary string ('010101...') cast to bit(2048)
+    .orderBy(sql`morgan_fp <~> ${queryFpBits}::bit(2048)`)
     .limit(100);
 
-  // Exact Tanimoto re-rank: bit_count(a & b) / bit_count(a | b)
-  const queryBits = hexToBits(queryFpHex);
+  const queryBytes = bitStringToBytes(queryFpBits);
   return rows
     .map((row) => ({
       id: row.id,
@@ -44,7 +48,8 @@ export async function findSimilarCompounds(
       canonSmiles: row.canonSmiles,
       name: row.name,
       casNumber: row.casNumber,
-      tanimoto: tanimoto(queryBits, hexToBits(row.morganFp!)),
+      // Postgres returns BIT columns as binary strings ('010101...')
+      tanimoto: tanimoto(queryBytes, bitStringToBytes(row.morganFp!)),
     }))
     .filter((r) => r.tanimoto >= minTanimoto)
     .sort((a, b) => b.tanimoto - a.tanimoto)
@@ -61,28 +66,4 @@ export async function insertCompound(
     .values({ smiles, createdBy, name: opts?.name, casNumber: opts?.casNumber })
     .returning({ id: compounds.id });
   return row.id;
-}
-
-function hexToBits(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
-}
-
-function tanimoto(a: Uint8Array, b: Uint8Array): number {
-  let and = 0;
-  let or = 0;
-  for (let i = 0; i < a.length; i++) {
-    and += bitCount(a[i] & b[i]);
-    or += bitCount(a[i] | b[i]);
-  }
-  return or === 0 ? 0 : and / or;
-}
-
-function bitCount(n: number): number {
-  n = n - ((n >> 1) & 0x55);
-  n = (n & 0x33) + ((n >> 2) & 0x33);
-  return ((n + (n >> 4)) & 0x0f) * 0x01010101 >>> 24;
 }

@@ -12,6 +12,17 @@ const boss = new PgBoss(DATABASE_URL);
 
 boss.on('error', (err) => console.error('[pg-boss]', err));
 
+/**
+ * Call an MCP tool via stdio.
+ *
+ * MCP stdio requires a 3-step handshake before tool calls:
+ *   1. Client sends `initialize`
+ *   2. Server responds to `initialize`
+ *   3. Client sends `notifications/initialized`
+ *   4. Client sends `tools/call`
+ *
+ * Messages are newline-delimited JSON-RPC 2.0.
+ */
 async function callMcpTool(
   module: string,
   toolName: string,
@@ -19,32 +30,71 @@ async function callMcpTool(
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const proc = spawn('python', ['-m', module], { stdio: ['pipe', 'pipe', 'inherit'] });
-    const request = JSON.stringify({
+
+    let buffer = '';
+    let initDone = false;
+    const TOOL_CALL_ID = 2;
+
+    const send = (msg: object) => {
+      proc.stdin.write(JSON.stringify(msg) + '\n');
+    };
+
+    // Step 1: initialize handshake
+    send({
       jsonrpc: '2.0',
       id: 1,
-      method: 'tools/call',
-      params: { name: toolName, arguments: args },
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'fp-worker', version: '1.0' },
+      },
     });
-    let stdout = '';
-    proc.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
-    proc.on('close', (code) => {
-      if (code !== 0) return reject(new Error(`MCP process exited with code ${code}`));
-      try {
-        const parsed = JSON.parse(stdout);
-        resolve(parsed.result?.content?.[0]?.text ? JSON.parse(parsed.result.content[0].text) : parsed.result);
-      } catch (e) {
-        reject(new Error(`Failed to parse MCP response: ${stdout}`));
+
+    proc.stdout.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let msg: Record<string, unknown>;
+        try {
+          msg = JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+
+        if (!initDone && (msg as { id?: number }).id === 1) {
+          // Step 2: initialize response received — complete handshake and send tool call
+          initDone = true;
+          send({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }); // Step 3
+          send({ jsonrpc: '2.0', id: TOOL_CALL_ID, method: 'tools/call', params: { name: toolName, arguments: args } });
+        } else if ((msg as { id?: number }).id === TOOL_CALL_ID) {
+          proc.stdin.end();
+          try {
+            const result = msg as { result?: { content?: Array<{ text?: string }> } };
+            const text = result.result?.content?.[0]?.text;
+            resolve(text ? (JSON.parse(text) as Record<string, unknown>) : (msg.result as Record<string, unknown>));
+          } catch {
+            reject(new Error(`Failed to parse MCP response: ${line}`));
+          }
+        }
       }
     });
-    proc.stdin.write(request + '\n');
-    proc.stdin.end();
+
+    proc.on('close', (code) => {
+      if (code !== 0) reject(new Error(`MCP process exited with code ${code}`));
+    });
+
+    proc.on('error', reject);
   });
 }
 
 async function start() {
   await boss.start();
 
-  // Compute Morgan fingerprint for compounds inserted without one
+  // Process Morgan fingerprint jobs
   await boss.work<{ id: string }>(
     'compute-morgan-fp',
     { batchSize: 4 },
@@ -62,7 +112,7 @@ async function start() {
           await db
             .update(compounds)
             .set({
-              morganFp: result.fingerprint_hex as string,
+              morganFp: result.fingerprint_bits as string,
               canonSmiles: (result.canonical_smiles as string | undefined) ?? compound.canonSmiles,
               fpComputedAt: new Date(),
             })
@@ -75,7 +125,7 @@ async function start() {
     },
   );
 
-  // Compute DRFP for reactions inserted without one
+  // Process DRFP jobs
   await boss.work<{ id: string }>(
     'compute-drfp',
     { batchSize: 4 },
@@ -93,7 +143,7 @@ async function start() {
           await db
             .update(reactions)
             .set({
-              drfp: result.fingerprint_hex as string,
+              drfp: result.fingerprint_bits as string,
               fpComputedAt: new Date(),
             })
             .where(eq(reactions.id, id));
@@ -105,10 +155,38 @@ async function start() {
     },
   );
 
+  // Poll every 30s for rows inserted before the worker started or missed by transient errors.
+  // singletonKey prevents duplicate jobs for the same row.
+  async function pollMissingFingerprints() {
+    const pendingCompounds = await db
+      .select({ id: compounds.id })
+      .from(compounds)
+      .where(sql`morgan_fp IS NULL`)
+      .limit(50);
+
+    for (const { id } of pendingCompounds) {
+      await boss.send('compute-morgan-fp', { id }, { singletonKey: id }).catch(() => {});
+    }
+
+    const pendingReactions = await db
+      .select({ id: reactions.id })
+      .from(reactions)
+      .where(sql`drfp IS NULL`)
+      .limit(50);
+
+    for (const { id } of pendingReactions) {
+      await boss.send('compute-drfp', { id }, { singletonKey: id }).catch(() => {});
+    }
+  }
+
+  // Initial sweep on startup, then every 30 seconds
+  await pollMissingFingerprints();
+  const pollInterval = setInterval(pollMissingFingerprints, 30_000);
+
   console.log('[fp-worker] ready — processing compute-morgan-fp and compute-drfp jobs');
 
-  // Graceful shutdown
   process.on('SIGTERM', async () => {
+    clearInterval(pollInterval);
     await boss.stop();
     process.exit(0);
   });

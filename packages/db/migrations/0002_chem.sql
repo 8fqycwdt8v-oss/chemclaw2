@@ -28,24 +28,6 @@ CREATE INDEX compounds_morgan_fp_hnsw ON compounds
 CREATE INDEX reactions_drfp_hnsw ON reactions
   USING hnsw (drfp bit_hamming_ops) WITH (m = 16, ef_construction = 64);
 
--- pg-boss job enqueue function: called by triggers on INSERT
-CREATE OR REPLACE FUNCTION enqueue_fp_job() RETURNS TRIGGER AS $$
-BEGIN
-  IF TG_TABLE_NAME = 'compounds' THEN
-    PERFORM pgboss.send('compute-morgan-fp', jsonb_build_object('id', NEW.id));
-  ELSIF TG_TABLE_NAME = 'reactions' THEN
-    PERFORM pgboss.send('compute-drfp', jsonb_build_object('id', NEW.id));
-  END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER compounds_enqueue_fp
-  AFTER INSERT ON compounds
-  FOR EACH ROW WHEN (NEW.morgan_fp IS NULL)
-  EXECUTE FUNCTION enqueue_fp_job();
-
-CREATE TRIGGER reactions_enqueue_fp
-  AFTER INSERT ON reactions
-  FOR EACH ROW WHEN (NEW.drfp IS NULL)
-  EXECUTE FUNCTION enqueue_fp_job();
+-- Fingerprint jobs are enqueued by the fp-worker process, which polls for rows
+-- with NULL fingerprints every 30 seconds using pg-boss.send() (TypeScript API).
+-- No SQL trigger is used because pg-boss v10 has no pgboss.send() SQL function.
