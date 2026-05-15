@@ -26,22 +26,34 @@ export const postgresSessionStore = {
   async append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void> {
     const subpath = key.subpath ?? '';
     const now = Date.now();
-    await db
-      .insert(agentSessions)
-      .values({
-        projectKey: key.projectKey,
-        sessionId: key.sessionId,
-        subpath,
-        entries: entries,
-        mtime: now,
-      })
-      .onConflictDoUpdate({
-        target: [agentSessions.projectKey, agentSessions.sessionId, agentSessions.subpath],
-        set: {
-          entries: sql`${agentSessions.entries} || excluded.entries`,
-          mtime: sql`GREATEST(${agentSessions.mtime}, excluded.mtime)`,
-        },
-      });
+    // Wrap in a transaction with SELECT FOR UPDATE to serialize concurrent appends.
+    // Without the lock, two concurrent appends with the same base `entries` state
+    // both compute `old || new` and the last writer overwrites the other's data.
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`
+        SELECT 1 FROM agent_sessions
+        WHERE project_key = ${key.projectKey}
+          AND session_id = ${key.sessionId}
+          AND subpath = ${subpath}
+        FOR UPDATE
+      `);
+      await tx
+        .insert(agentSessions)
+        .values({
+          projectKey: key.projectKey,
+          sessionId: key.sessionId,
+          subpath,
+          entries,
+          mtime: now,
+        })
+        .onConflictDoUpdate({
+          target: [agentSessions.projectKey, agentSessions.sessionId, agentSessions.subpath],
+          set: {
+            entries: sql`${agentSessions.entries} || excluded.entries`,
+            mtime: sql`GREATEST(${agentSessions.mtime}, excluded.mtime)`,
+          },
+        });
+    });
   },
 
   async load(key: SessionKey): Promise<SessionStoreEntry[] | null> {

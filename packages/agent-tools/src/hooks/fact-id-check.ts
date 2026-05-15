@@ -1,11 +1,12 @@
 import { db } from '@chemclaw2/db';
 import { compounds } from '@chemclaw2/db';
 import { inArray } from 'drizzle-orm';
+import { trace } from '@opentelemetry/api';
 
 const CAS_RE = /\b\d{2,10}-\d{2}-\d\b/g;
 
 export async function checkToolOutput(
-  _toolName: string,
+  toolName: string,
   toolOutput: string,
 ): Promise<{ warnings: string[] }> {
   const casNumbers = [...new Set(toolOutput.match(CAS_RE) ?? [])];
@@ -18,9 +19,24 @@ export async function checkToolOutput(
     .where(inArray(compounds.casNumber, casNumbers));
 
   const foundSet = new Set(found.map((r) => r.casNumber));
-  const warnings = casNumbers
-    .filter((cas) => !foundSet.has(cas))
-    .map((cas) => `CAS ${cas} found in tool output is not in the compound registry — verify accuracy`);
+  const unverified = casNumbers.filter((cas) => !foundSet.has(cas));
+
+  if (unverified.length > 0) {
+    // Record unverified CAS numbers as a span event so they appear in Langfuse traces
+    // without blocking the agent response. Does not throw — this is a compliance flag only.
+    const span = trace.getActiveSpan();
+    if (span) {
+      span.addEvent('unverified_cas_numbers', {
+        tool_name: toolName,
+        cas_numbers: unverified.join(','),
+        count: unverified.length,
+      });
+    }
+  }
+
+  const warnings = unverified.map(
+    (cas) => `CAS ${cas} found in tool output is not in the compound registry — verify accuracy`,
+  );
 
   return { warnings };
 }
