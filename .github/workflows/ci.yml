@@ -72,3 +72,4 @@ jobs:
           ANTHROPIC_API_KEY: sk-ant-placeholder
           LANGFUSE_PUBLIC_KEY: pk-lf-placeholder
           LANGFUSE_SECRET_KEY: sk-lf-placeholder
+          OPENAI_API_KEY: sk-placeholder
