@@ -4,6 +4,7 @@ import { db } from '@chemclaw2/db';
 import { compounds } from '@chemclaw2/db';
 import { reactions } from '@chemclaw2/db';
 import { eq, sql } from 'drizzle-orm';
+import { startCampaignWorker } from './campaign-worker';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
@@ -168,6 +169,8 @@ async function start() {
       }
     },
   );
+
+  await startCampaignWorker(boss);
 
   // Poll every 30s for rows without fingerprints (catches inserts that happened
   // before this worker started). singletonKey + stately policy prevents duplicates.
