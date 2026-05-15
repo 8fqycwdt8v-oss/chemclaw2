@@ -6,8 +6,9 @@ import { wikiPages, wikiChunks, wikiCitations } from '../schema/wiki';
 // Strategy (in order of preference):
 //   1. Paragraph boundaries (\n\n) — best context for chemistry prose
 //   2. Sentence boundaries (. ! ? followed by whitespace) — for long paragraphs
-//   3. Word boundaries — final fallback for very long run-on text
-// Chunks that exceed maxSize are recursively split using the next strategy.
+//   3. Word boundaries — final fallback for run-on sentences that exceed maxSize
+// Note: the sentence splitter fires on abbreviations like "Dr." and "Fig." —
+// short resulting fragments are discarded by the length > 10 guard.
 function chunkText(text: string, maxSize = 400, overlap = 80): string[] {
   const paragraphs = text.split(/\n{2,}/).map((p) => p.trim()).filter((p) => p.length > 0);
   const result: string[] = [];
@@ -25,12 +26,28 @@ function chunkText(text: string, maxSize = 400, overlap = 80): string[] {
         current = current ? current + ' ' + sentence : sentence;
       } else {
         if (current.length > 10) result.push(current.trim());
-        // Carry overlap from the end of current into the next chunk
         const overlapText = current.length > overlap ? current.slice(-overlap) : current;
         current = overlapText + ' ' + sentence;
       }
     }
-    if (current.trim().length > 10) result.push(current.trim());
+    // Word-boundary fallback: if a single sentence exceeds maxSize (e.g. run-on
+    // chemistry text with no sentence-ending punctuation), split on words.
+    const flushed = current.trim();
+    if (flushed.length > maxSize) {
+      const words = flushed.split(/\s+/);
+      let sub = '';
+      for (const word of words) {
+        if ((sub + ' ' + word).trim().length <= maxSize) {
+          sub = sub ? sub + ' ' + word : word;
+        } else {
+          if (sub.length > 10) result.push(sub.trim());
+          sub = word;
+        }
+      }
+      if (sub.trim().length > 10) result.push(sub.trim());
+    } else if (flushed.length > 10) {
+      result.push(flushed);
+    }
   }
 
   return result;

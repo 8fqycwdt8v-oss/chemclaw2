@@ -2,3 +2,4 @@
 - [fly.toml] Verify `auto_stop_machines = "stop"` vs `min_machines_running = 1` interaction under SSE load; consider `"suspend"` for long-lived connections
 - [api/rate-limit] In-process sliding-window rate limiter resets on restart and is not shared across instances; migrate to Postgres or Redis advisory locks before multi-instance (multi-machine Fly.io) deploy
 - [safety/gate] Multi-turn bypass: gate fires on each turn independently but an attacker can front-load controlled substance context then issue synthesis instruction in a later turn without triggering the gate; mitigation requires session-level context scanning (deferred — architectural change)
+- [api/wiki] cursor pagination uses single-column updatedAt cursor — items with duplicate updatedAt may be skipped; use (updatedAt, id) composite cursor if needed
