@@ -3,3 +3,4 @@ export * from './compounds';
 export * from './reactions';
 export * from './wiki';
 export * from './campaigns';
+export * from './audit';

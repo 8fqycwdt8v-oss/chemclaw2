@@ -7,3 +7,4 @@ export { scheduledSubstanceGate } from './hooks/scheduled-substance-gate';
 export { checkToolInput } from './hooks/redaction';
 export { checkToolOutput } from './hooks/fact-id-check';
 export { synthesisCampaignTool, confirmSynthesisPlanTool } from './synthesis-campaign';
+export { elnFetchTool } from './eln-fetch';

@@ -17,3 +17,6 @@
 - [campaigns] Wiki page auto-creation on campaign completion deferred: campaign-worker sets status='complete' but does not create a wiki page or set wiki_page_id; needs a separate pg-boss job that carries an Anthropic client reference to call upsertWikiPage with embedTexts
 - [campaigns] campaign_steps 'running' status not guarded in completion check — a job crash leaving status='running' prevents campaign from reaching 'complete'; add dead-letter sweep or timeout-based reset
 - [campaigns] addCampaignStep exported but not yet called from synthesis-campaign.ts — plan steps from confirm_synthesis_plan are stored only in the JSONB blob; wire addCampaignStep to create individual step rows when confirming plan
+- [db] withUserContext: SET LOCAL in a nested savepoint survives savepoint rollback — guard against nested withUserContext calls before multi-tenant flag lands
+- [db] audit_log RLS: current USING(true) allows DELETE; add INSERT-only policy before multi-tenant flip to enforce append-only semantics
+- [agent-tools] eln-fetch: return explicit error when ELN_API_KEY is unset rather than firing unauthenticated request
