@@ -11,12 +11,8 @@ export async function* runAgentQuery(
   prompt: string,
   options: Options,
 ): AsyncGenerator<Uint8Array> {
-  try {
-    for await (const event of query({ prompt, options })) {
-      yield sseEvent(event);
-    }
-  } finally {
-    yield encoder.encode('data: [DONE]\n\n');
+  for await (const event of query({ prompt, options })) {
+    yield sseEvent(event);
   }
 }
 
@@ -27,9 +23,10 @@ export function agentToStream(prompt: string, options: Options): ReadableStream<
         for await (const chunk of runAgentQuery(prompt, options)) {
           controller.enqueue(chunk);
         }
+        // [DONE] only on success — clients stop reading at this sentinel
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
       } catch (err) {
-        const errEvent = sseEvent({ type: 'error', message: String(err) });
-        controller.enqueue(errEvent);
+        controller.enqueue(sseEvent({ type: 'error', message: String(err) }));
       } finally {
         controller.close();
       }
