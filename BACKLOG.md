@@ -1,4 +1,5 @@
 - [db/migrate] Replace `ts-node/esm` loader (deprecated in Node.js 20+) with `tsx` for the migrate script
+- [wiki] upsertWikiPage calls embedFn inside db.transaction() — holds connection lock during OpenAI round-trip; refactor to embed outside transaction if write contention becomes measurable
 - [wiki] Add `UNIQUE (page_id, chunk_idx)` constraint to `wiki_chunks` table
 - [wiki] Add `CREATE EXTENSION IF NOT EXISTS vector` guard to migration (currently relies on pgvector being pre-installed)
 - [wiki] WikiEditor: add `beforeunload`/router unsaved-changes guard to prevent accidental data loss
