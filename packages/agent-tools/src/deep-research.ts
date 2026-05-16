@@ -1,4 +1,6 @@
 import { upsertWikiPage } from '@chemclaw2/db';
+import { markdownToTiptap } from './markdown-to-tiptap';
+import { validateCitations } from './citation-validation';
 
 /**
  * Deep research: a two-tool workflow the agent runs to produce a structured
@@ -98,16 +100,21 @@ export function createDeepResearchTools(
       if (input.title.length === 0 || input.title.length > 500) return { error: 'title 1-500 chars' };
       if (input.body.length === 0 || input.body.length > 500_000) return { error: 'body too large' };
 
+      const citations = input.citations ?? [];
+      const v = validateCitations(input.body, citations);
+      if (!v.ok) return { error: `citation validation: ${v.reason}` };
+
       const id = await upsertWikiPage(
         input.slug,
         input.title,
-        { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: input.body }] }] },
+        markdownToTiptap(input.body) as unknown as Record<string, unknown>,
         input.body,
         userId,
-        input.citations ?? [],
+        citations,
         embedFn,
+        { needsReview: true },
       );
-      return { wiki_page_id: id, slug: input.slug, url: `/wiki/${input.slug}` };
+      return { wiki_page_id: id, slug: input.slug, url: `/wiki/${input.slug}`, needs_review: true };
     },
   };
 

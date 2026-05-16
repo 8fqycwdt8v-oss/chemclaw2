@@ -165,11 +165,49 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
 
         const plan = campaign.plan as Record<string, unknown> | null;
         const targetSmiles = campaign.targetSmiles ?? 'Unknown';
-        const slug = `campaign-${campaignId.slice(0, 8)}`;
+        // M8: full campaign UUID in the slug — 8-char prefix collides at ~10^-5
+        // birthday probability per 1000 campaigns.
+        const slug = `campaign-${campaignId}`;
         const title = `Synthesis Campaign: ${targetSmiles}`;
+
+        // M7: pull executed step results and emit citations for any matched
+        // reaction neighbors. The result payload (markStepComplete) carries the
+        // neighbor reaction ids; we cite those.
+        const steps = await db
+          .select({ stepIdx: campaignSteps.stepIdx, result: campaignSteps.result })
+          .from(campaignSteps)
+          .where(eq(campaignSteps.campaignId, campaignId))
+          .orderBy(campaignSteps.stepIdx);
+
+        const citations: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }> = [];
+        const seenReactionIds = new Set<string>();
+        let citationCounter = 1;
+        const stepLines: string[] = [];
+        for (const s of steps) {
+          const result = (s.result ?? {}) as Record<string, unknown>;
+          const neighbors = Array.isArray(result.neighbors) ? result.neighbors as Array<Record<string, unknown>> : [];
+          const refs: string[] = [];
+          for (const n of neighbors) {
+            const id = typeof n.id === 'string' ? n.id : null;
+            if (!id || seenReactionIds.has(id)) continue;
+            seenReactionIds.add(id);
+            const cid = String(citationCounter++);
+            citations.push({
+              citationId: cid,
+              sourceType: 'reaction',
+              sourceId: id,
+              label: typeof n.name === 'string' ? n.name : `reaction ${id.slice(0, 8)}`,
+            });
+            refs.push(`[${cid}]`);
+          }
+          const rxn = typeof result.reactionSmiles === 'string' ? result.reactionSmiles : null;
+          stepLines.push(`Step ${s.stepIdx}: ${rxn ?? '(no reaction)'}${refs.length ? ` ${refs.join(' ')}` : ''}`);
+        }
+
         const contentText = [
           `Target: ${targetSmiles}`,
           `Status: ${campaign.status}`,
+          stepLines.length ? `Steps:\n${stepLines.join('\n')}` : '',
           plan ? `Plan: ${JSON.stringify(plan, null, 2)}` : '',
         ].filter(Boolean).join('\n\n');
 
@@ -179,8 +217,9 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
           { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: contentText }] }] },
           contentText,
           campaign.createdBy,
-          [],
+          citations,
           embedTextsForWorker,
+          { needsReview: true },
         );
 
         await db.update(synthesisCampaigns).set({ wikiPageId }).where(eq(synthesisCampaigns.id, campaignId));

@@ -1,26 +1,51 @@
-import { db, getWikiPage, wikiCitations, wikiContradictions } from '@chemclaw2/db';
-import { eq, and, inArray } from 'drizzle-orm';
+import {
+  db, getWikiPage, wikiCitations, wikiContradictions, wikiChunks, setCitationDisputed,
+} from '@chemclaw2/db';
+import { eq, and, inArray, sql } from 'drizzle-orm';
 
 /**
- * resolve_contradiction: load two citations from a wiki page, prepare a
- * structured comparison the model can reason over, and record the proposed
- * verdict to wiki_contradictions. The agent calls this tool with the verdict
- * it has chosen — this tool persists, it does NOT itself decide.
+ * resolve_contradiction: load two citations from a wiki page side-by-side,
+ * surface the chunks that mention each marker so the agent can compare
+ * supporting context, and record the proposed verdict. record_contradiction
+ * also flips wiki_citations.disputed=true on the losing side so the dispute
+ * is visible in the UI without a manual reviewer step.
  *
  * Flow inside the agent:
- *   1. read_two_citations(slug, citation_a, citation_b) → returns both citation rows.
+ *   1. read_two_citations(slug, citation_a, citation_b) — returns both citation
+ *      rows plus the wiki chunks where each [marker] appears.
  *   2. agent inspects evidence, decides winner + reason.
- *   3. record_contradiction(slug, citation_a, citation_b, winner, reason) → persists.
+ *   3. record_contradiction(slug, citation_a, citation_b, winner, reason) —
+ *      persists to wiki_contradictions AND marks the loser disputed.
  *
  * Both operations are wrapped here as separate tools.
  */
+
+const MAX_CONTEXT_CHARS = 800;
+
+async function findChunksContainingMarker(pageId: string, marker: string) {
+  // [marker] is used in the body text — search wiki_chunks.text for it.
+  // Use a parameterized LIKE rather than a regex to keep the index sniff
+  // simple; chunks containing `[N]` are the relevant context.
+  const needle = `%[${marker}]%`;
+  const rows = await db
+    .select({ chunkIdx: wikiChunks.chunkIdx, text: wikiChunks.text })
+    .from(wikiChunks)
+    .where(and(eq(wikiChunks.pageId, pageId), sql`${wikiChunks.text} LIKE ${needle}`))
+    .limit(3);
+  return rows.map((r) => ({
+    chunkIdx: r.chunkIdx,
+    text: r.text.length > MAX_CONTEXT_CHARS ? r.text.slice(0, MAX_CONTEXT_CHARS) + '…' : r.text,
+  }));
+}
 
 export function createContradictionTools(userId: string) {
   const readTwo = {
     name: 'read_two_citations',
     description:
-      'Load two citations from a wiki page side-by-side. Use this before ' +
-      'judging which of two disputed claims is better supported.',
+      'Load two citations from a wiki page side-by-side, with the wiki chunks ' +
+      'where each [marker] is referenced. Use this before judging which of two ' +
+      'disputed claims is better supported — the surrounding chunk text is the ' +
+      'evidence the agent must weigh.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -43,10 +68,30 @@ export function createContradictionTools(userId: string) {
       const a = rows.find((r) => r.citationId === input.citation_a);
       const b = rows.find((r) => r.citationId === input.citation_b);
       if (!a || !b) return { error: 'one or both citations not found on this page' };
+
+      const [contextA, contextB] = await Promise.all([
+        findChunksContainingMarker(page.id, a.citationId),
+        findChunksContainingMarker(page.id, b.citationId),
+      ]);
+
       return {
         page_id: page.id,
-        a: { citationId: a.citationId, sourceType: a.sourceType, sourceId: a.sourceId, label: a.label, disputed: a.disputed },
-        b: { citationId: b.citationId, sourceType: b.sourceType, sourceId: b.sourceId, label: b.label, disputed: b.disputed },
+        a: {
+          citationId: a.citationId,
+          sourceType: a.sourceType,
+          sourceId: a.sourceId,
+          label: a.label,
+          disputed: a.disputed,
+          context: contextA,
+        },
+        b: {
+          citationId: b.citationId,
+          sourceType: b.sourceType,
+          sourceId: b.sourceId,
+          label: b.label,
+          disputed: b.disputed,
+          context: contextB,
+        },
       };
     },
   };
@@ -54,8 +99,10 @@ export function createContradictionTools(userId: string) {
   const record = {
     name: 'record_contradiction',
     description:
-      'Persist a proposed resolution between two contradicting citations. ' +
-      'Call AFTER you have read both citations and decided on a winner.',
+      'Persist a proposed resolution between two contradicting citations and ' +
+      'flag the losing citation as disputed in the wiki. Call AFTER you have ' +
+      'read both citations and decided on a winner. The disputed flag is ' +
+      'reversible (a human reviewer can clear it via the dispute UI).',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -90,7 +137,14 @@ export function createContradictionTools(userId: string) {
           resolvedBy: userId,
         })
         .returning({ id: wikiContradictions.id });
-      return { id: row.id, winner: input.winner };
+
+      let disputedMarked: string | null = null;
+      if (input.winner === 'a' || input.winner === 'b') {
+        const loser = input.winner === 'a' ? input.citation_b : input.citation_a;
+        const { found } = await setCitationDisputed(page.id, loser, true);
+        if (found) disputedMarked = loser;
+      }
+      return { id: row.id, winner: input.winner, disputed_citation: disputedMarked };
     },
   };
 
