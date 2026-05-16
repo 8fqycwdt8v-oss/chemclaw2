@@ -49,7 +49,7 @@ export async function GET(req: Request) {
     wiki: wikiResults.map((p) => ({
       slug: p.slug,
       title: p.title,
-      excerpt: p.contentText?.slice(0, 300),
+      excerpt: p.contentText.slice(0, 300),
     })),
   });
 }

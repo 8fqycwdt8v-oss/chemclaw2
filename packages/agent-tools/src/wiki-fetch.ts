@@ -21,7 +21,7 @@ async function executeWikiLookup(input: LookupInput, embedFn?: EmbedFn) {
     }
     const page = await getWikiPage(input.slug);
     if (!page) return { found: false };
-    const text = page.contentText ?? '';
+    const text = page.contentText;
     const truncated = !input.full && text.length > SLUG_PREVIEW_CHARS;
     return {
       found: true,
@@ -49,7 +49,7 @@ async function executeWikiLookup(input: LookupInput, embedFn?: EmbedFn) {
         slug: r.slug,
         title: r.title,
         maturity: r.maturity,
-        excerpt: (r.contentText ?? '').slice(0, 300),
+        excerpt: r.contentText.slice(0, 300),
       })),
     };
   }

@@ -26,10 +26,10 @@ export default async function WikiSlugPage({ params }: Props) {
       slug={page.slug}
       title={page.title}
       content={page.content as Record<string, unknown>}
-      contentText={page.contentText ?? ''}
+      contentText={page.contentText}
       version={page.version}
       updatedAt={page.updatedAt.toISOString()}
-      updatedBy={page.updatedBy ?? page.createdBy}
+      updatedBy={page.updatedBy}
       needsReview={page.needsReview}
       archived={page.archived}
       maturity={page.maturity}
