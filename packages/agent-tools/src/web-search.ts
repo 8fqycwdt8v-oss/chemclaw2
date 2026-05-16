@@ -40,7 +40,17 @@ export const webSearchTool = {
     const url = `${BRAVE_API}?q=${encodeURIComponent(q)}&count=5`;
     const res = await fetch(url, { headers: { 'X-Subscription-Token': apiKey, Accept: 'application/json' } });
     if (!res.ok) return { results: [], error: `Brave API error: ${res.status}` };
-    const data = await res.json() as { web?: { results?: Array<{ title: string; url: string; description: string }> } };
+    const MAX_BYTES = 500_000;
+    const raw = await res.text();
+    if (Buffer.byteLength(raw, 'utf8') > MAX_BYTES) {
+      return { results: [], error: 'Brave API response exceeds size limit' };
+    }
+    let data: { web?: { results?: Array<{ title: string; url: string; description: string }> } };
+    try {
+      data = JSON.parse(raw) as typeof data;
+    } catch {
+      return { results: [], error: 'Brave API returned non-JSON response' };
+    }
     const results = (data.web?.results ?? []).map((r) => ({
       title: r.title,
       url: r.url,

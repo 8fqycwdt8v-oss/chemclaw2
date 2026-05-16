@@ -72,14 +72,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  if (!body.slug || !body.title) {
-    return NextResponse.json({ error: 'slug and title are required' }, { status: 400 });
+  if (typeof body.slug !== 'string' || typeof body.title !== 'string' || !body.slug || !body.title) {
+    return NextResponse.json({ error: 'slug and title are required strings' }, { status: 400 });
   }
   if (!SLUG_RE.test(body.slug) || body.slug.length > 200) {
     return NextResponse.json({ error: 'Invalid slug: use lowercase letters, numbers, and hyphens only' }, { status: 400 });
   }
   if (body.title.length > MAX_TITLE_LEN) {
     return NextResponse.json({ error: 'title too long' }, { status: 400 });
+  }
+  if (body.contentText !== undefined && typeof body.contentText !== 'string') {
+    return NextResponse.json({ error: 'contentText must be a string' }, { status: 400 });
   }
   if (typeof body.contentText === 'string' && body.contentText.length > MAX_CONTENT_TEXT_LEN) {
     return NextResponse.json({ error: 'contentText too large' }, { status: 413 });
