@@ -53,7 +53,7 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 - Postgres-first. One database for everything — state, sessions, wiki, audit, fingerprints, search.
 - Defer until measured. No speculative infrastructure.
 - Vertical slices. No internal frameworks. Replaceable, not extensible.
-- Target: <6,000 LOC application code at v1.
+- Bias toward removal: every PR should question whether the surface it touches still earns its keep.
 
 ## Anti-features — never build these
 
