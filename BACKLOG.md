@@ -1,12 +1,12 @@
 - [fly.toml] auto_stop_machines="stop" with min_machines_running=1 is safe for SSE: the always-on machine handles all long-lived connections; "suspend" would only matter for scaled-out machines beyond the minimum
 - [rate-limits] sweep cron added in v1.5 (workers/fp-worker/src/index.ts hourly sweep-rate-limits job); supersedes earlier note
 - [agent-tools] redaction + fact-id-check hooks wired as SDK PreToolUse/PostToolUse hooks in apps/web/lib/agent.ts (SDK 0.3.142 supports Options.hooks)
-- [campaigns] step execution is a stub: workers/fp-worker/src/campaign-worker.ts:74 calls markStepComplete with {note:'step executed'} without invoking RDKit/experiment dispatch; real step execution is post-v1.5
-- [campaigns] per-step approval gate not yet a thing: kickoff_campaign approves the whole campaign at once; if real experiments are dispatched, add awaiting_approval per step
+- [campaigns] step execution now enriches result with nearest-reaction-neighbors via findSimilarReactions (v1.6) — still no real experiment dispatch, but the result payload is grounded data instead of a placeholder
+- [campaigns] per-step approval landed in v1.6 (campaign_steps.requires_approval + /api/campaigns/[id]/steps/[idx]/approve + kickoff_campaign approval=per_step arg); UI affordance is a chat preset chip "Approve next step" — upgrade to inline campaign cards once a campaign dashboard exists
 - [search/substructure] /api/search smarts mode spawns one Python MCP process per candidate sequentially — fine up to ~1k compounds; switch to RDKit Postgres cartridge past that (deferred per §5.2)
 - [search/filters] findSimilarCompounds applies createdAfter/hasCas as WHERE predicates before the HNSW order; multi-tenant project filter will need RLS bodies once tenants > 1
 - [wiki/revisions] migration 0010 captures OLD row on UPDATE; revisions UI lists last 10 but does not diff yet — diffing pending real revision-comparison need
-- [observability] /api/health backlog metrics are public (no auth); acceptable for v1.5 since the values are pending counts only, but consider gating before the registry has commercially sensitive volumes
+- [observability] /api/health auth-gated in v1.6: unauthenticated probes get {ok:true} only; signed-in users see backlog detail
 - [safety/gate] Multi-turn bypass: gate fires on each turn independently but an attacker can front-load controlled substance context then issue synthesis instruction in a later turn without triggering the gate; mitigation requires session-level context scanning (deferred — architectural change)
 - [rate-limits] Old window rows are never swept; add a pg_cron job or periodic DELETE WHERE window_start < (now_epoch_ms - 7200000) before table size becomes measurable
 - [api/wiki] wiki_pages has no composite index on (updated_at DESC, id DESC); add before list endpoint becomes high-traffic to avoid sequential scans on keyset pagination
@@ -20,3 +20,7 @@
 - [api/wiki] wiki_citations has no unique constraint on (page_id, citation_id, source_type, source_id) — duplicate citations in a single upsert call create duplicate rows; add unique constraint before multi-client concurrent writes
 - [api/chat] SSE streaming response missing X-Accel-Buffering: no header — nginx will buffer SSE chunks causing latency in proxied deployments
 - [rate-limits] pgRateLimit has no unit tests; the >= vs > boundary (count == maxRequests) previously went undetected — add a test covering exactly-at-limit and one-over-limit cases
+- [wiki/v1.6] page subscriptions store last_seen_version (migration 0014); the unread count read in app/(app)/layout.tsx is computed inline — for large user bases, materialize per-user unread counts or add an index on wiki_subscriptions(user_id, page_id) + wiki_pages(version) covering join
+- [wiki/v1.6] needs_review / archived / maturity / project added via PATCH /api/wiki/[slug]; project is a free-text column, no projects table — promote to a table once ≥3 measured projects need scoping or budgets
+- [wiki/v1.6] citation pills are still rendered in the footer list, not as inline Tiptap marks; ?cid= URL scrolls to the footer entry — closing the inline-mark gap requires a small Tiptap mark extension and a content migration to wrap citation_id occurrences
+- [wiki/v1.6] bi-temporal valid_from/valid_to added to compounds/reactions/wiki_pages (migration 0013) but no app-side reads use them yet; the pointInTimeWiki helper uses wiki_revisions instead — wire valid_to on row replacement when the data-quality story needs as-of queries on compounds/reactions

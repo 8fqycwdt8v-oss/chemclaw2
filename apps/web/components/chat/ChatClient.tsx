@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-type ToolUse = { id: string; name: string; input: unknown };
+type ToolUse = { id: string; name: string; input: unknown; output?: string };
 type Message =
   | { role: 'user'; text: string }
   | { role: 'assistant'; text: string; toolUses: ToolUse[]; citations: Citation[] }
@@ -47,6 +47,9 @@ export function ChatClient() {
       })
       .catch(() => {});
   }, []);
+
+  // Abort the in-flight SSE stream if the user navigates away mid-response.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -136,8 +139,30 @@ export function ChatClient() {
           name: String(block.name ?? ''),
           input: block.input,
         });
+      } else if (block.type === 'tool_result') {
+        const useId = String(block.tool_use_id ?? '');
+        const text = Array.isArray(block.content)
+          ? (block.content as Array<{ text?: string }>).map((c) => c.text ?? '').join('')
+          : typeof block.content === 'string' ? block.content : JSON.stringify(block.content ?? '');
+        appendToolResult(useId, text);
       }
     }
+  }
+
+  function appendToolResult(toolUseId: string, output: string) {
+    setMessages((m) => {
+      // Tool results often come on the next assistant turn — find the most recent
+      // assistant message and attach to the matching tool_use.
+      for (let i = m.length - 1; i >= 0; i--) {
+        const msg = m[i];
+        if (msg.role !== 'assistant') continue;
+        const idx = msg.toolUses.findIndex((u) => u.id === toolUseId);
+        if (idx === -1) continue;
+        const updated = msg.toolUses.map((u, j) => (j === idx ? { ...u, output } : u));
+        return [...m.slice(0, i), { ...msg, toolUses: updated }, ...m.slice(i + 1)];
+      }
+      return m;
+    });
   }
 
   function appendAssistantText(chunk: string) {
@@ -177,6 +202,21 @@ export function ChatClient() {
     void send(text);
   };
 
+  const presetApproveStep = async () => {
+    const campaignId = prompt('Campaign ID:');
+    if (!campaignId) return;
+    const stepIdx = prompt('Step index to approve:');
+    if (!stepIdx) return;
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/steps/${stepIdx}/approve`, { method: 'POST' });
+      const body = (await res.json().catch(() => null)) as { error?: string; approved?: boolean } | null;
+      if (!res.ok) throw new Error(body?.error ?? `Approve failed (${res.status})`);
+      setMessages((m) => [...m, { role: 'error', text: `Step ${stepIdx} approved — worker will execute on next sweep.` }]);
+    } catch (err) {
+      setMessages((m) => [...m, { role: 'error', text: (err as Error).message }]);
+    }
+  };
+
   return (
     <div className="flex flex-col h-[calc(100vh-7rem)]">
       <div className="flex-1 overflow-y-auto space-y-4 pb-4">
@@ -204,6 +244,14 @@ export function ChatClient() {
           disabled={streaming}
         >
           Interpret analytical data
+        </button>
+        <button
+          type="button"
+          onClick={presetApproveStep}
+          className="text-xs px-2 py-1 border rounded text-slate-700 hover:bg-slate-50"
+          disabled={streaming}
+        >
+          Approve next step
         </button>
         <textarea
           value={input}
@@ -244,11 +292,7 @@ function MessageView({ msg }: { msg: Message }) {
   }
   return (
     <div className="space-y-2">
-      {msg.toolUses.map((t) => (
-        <div key={t.id} className="text-xs text-slate-500 border-l-2 border-slate-300 pl-2">
-          tool: <span className="font-mono">{t.name}</span>
-        </div>
-      ))}
+      {msg.toolUses.map((t) => <ToolCard key={t.id} use={t} />)}
       <div className="text-sm whitespace-pre-wrap">{msg.text || (<span className="text-slate-400">…</span>)}</div>
       {msg.citations.length > 0 && (
         <div className="flex flex-wrap gap-1 pt-1">
@@ -261,6 +305,35 @@ function MessageView({ msg }: { msg: Message }) {
               {c.label}
             </Link>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ToolCard({ use }: { use: ToolUse }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="text-xs border-l-2 border-slate-300 pl-2">
+      <button onClick={() => setOpen((v) => !v)} className="text-slate-600">
+        tool: <span className="font-mono">{use.name}</span> {open ? '▾' : '▸'}
+      </button>
+      {open && (
+        <div className="mt-1 space-y-1">
+          <div>
+            <span className="text-slate-500">input:</span>
+            <pre className="font-mono text-xs bg-slate-50 p-1 rounded mt-0.5 overflow-x-auto">
+              {JSON.stringify(use.input, null, 2)}
+            </pre>
+          </div>
+          {use.output !== undefined && (
+            <div>
+              <span className="text-slate-500">output:</span>
+              <pre className="font-mono text-xs bg-slate-50 p-1 rounded mt-0.5 overflow-x-auto max-h-48">
+                {use.output.length > 2000 ? use.output.slice(0, 2000) + '\n…(truncated)' : use.output}
+              </pre>
+            </div>
+          )}
         </div>
       )}
     </div>

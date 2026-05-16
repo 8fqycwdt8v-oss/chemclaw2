@@ -10,3 +10,4 @@ export { createSynthesisCampaignTools } from './synthesis-campaign';
 export { elnFetchTool } from './eln-fetch';
 export { substructureCandidatesTool } from './substructure-search';
 export { interpretAnalyticalResultTool } from './analytical-interpret';
+export { createWikiUpsertTool } from './wiki-upsert';

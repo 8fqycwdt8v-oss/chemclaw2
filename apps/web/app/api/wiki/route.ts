@@ -1,6 +1,6 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { upsertWikiPage, listWikiPages, searchWikiByFTS } from '@chemclaw2/db';
+import { upsertWikiPage, listWikiPages, listWikiProjects, searchWikiByFTS } from '@chemclaw2/db';
 import type { WikiPageCursor } from '@chemclaw2/db';
 import { embedTexts } from '../../../lib/embeddings';
 import { rateLimit } from '@/lib/rate-limit';
@@ -21,6 +21,12 @@ export async function GET(req: Request) {
   }
 
   const url = new URL(req.url);
+
+  // GET /api/wiki?projects=1 → distinct project tags for the filter chips
+  if (url.searchParams.get('projects')) {
+    return NextResponse.json({ projects: await listWikiProjects() });
+  }
+
   const q = url.searchParams.get('q');
   if (q) {
     if (q.length > 500) return NextResponse.json({ error: 'Query too long' }, { status: 400 });
@@ -44,7 +50,9 @@ export async function GET(req: Request) {
     }
     cursor = { updatedAt: new Date(ts), id: idPart };
   }
-  const pages = await listWikiPages(50, cursor);
+  const project = url.searchParams.get('project') ?? undefined;
+  const includeArchived = url.searchParams.get('include_archived') === '1';
+  const pages = await listWikiPages(50, cursor, { project, includeArchived });
   const last = pages.length === 50 ? pages[pages.length - 1] : null;
   const nextCursor = last ? `${last.updatedAt.toISOString()}_${last.id}` : null;
   return NextResponse.json({ pages, nextCursor });
