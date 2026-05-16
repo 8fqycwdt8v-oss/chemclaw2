@@ -12,12 +12,12 @@
 - [api/wiki] wiki_pages has no composite index on (updated_at DESC, id DESC); add before list endpoint becomes high-traffic to avoid sequential scans on keyset pagination
 - [wiki/editor] WikiEditor beforeunload guard covers hard browser navigation only; Next.js App Router client-side navigation (Link, router.push) does not fire beforeunload — guard SPA navigation via navigation.addEventListener('navigate', ...) when App Router exposes a stable hook API
 - [api/wiki] wiki_pages.version is incremented by wiki_pages_auto_version BEFORE UPDATE trigger (migration 0003); Drizzle onConflictDoUpdate also sets updatedAt: sql`now()` which is redundant but harmless alongside the trigger
-- [api/wiki] upsertWikiPage: embedFn output length not validated against chunks.length; mismatch produces undefined embedded to DB insert
+- [api/wiki] upsertWikiPage: embedFn output length now asserted equal to chunks.length (v1.6.1) — throws before insert if mismatch
 - [campaigns] updateCampaignStatus terminal-state guard added to both updateCampaignStatus and updateCampaignStatusForUser in packages/db/src/queries/campaigns.ts — both now use inArray(status, NON_TERMINAL_STATUSES)
 - [session-store] pg_advisory_xact_lock uses hashtext() (32-bit) for concurrency guard; hash collisions between different projectKey+sessionId pairs are theoretically possible — low probability but upgrade to bigint hash (hashtext(a) << 32 | hashtext(b)) before high write volumes
-- [web-search] web_search tool empty query (query: "") passes validation and reaches Brave API — add min-length guard (>= 1 char, <= 500 chars) before the fetch
+- [web-search] empty/oversize web_search queries now rejected before fetch (v1.6.1)
 - [api/wiki] wiki schema: updatedBy (text, nullable) and updatedAt (timestamp, notNull) are inconsistent — either make updatedBy notNull or allow updatedAt nullable; every update should carry both user + timestamp for audit integrity
-- [api/wiki] wiki_citations has no unique constraint on (page_id, citation_id, source_type, source_id) — duplicate citations in a single upsert call create duplicate rows; add unique constraint before multi-client concurrent writes
+- [api/wiki] wiki_citations UNIQUE(page_id, citation_id, source_type, COALESCE(source_id, '')) landed in migration 0015 (v1.6.1)
 - [api/chat] SSE streaming response missing X-Accel-Buffering: no header — nginx will buffer SSE chunks causing latency in proxied deployments
 - [rate-limits] pgRateLimit has no unit tests; the >= vs > boundary (count == maxRequests) previously went undetected — add a test covering exactly-at-limit and one-over-limit cases
 - [wiki/v1.6] page subscriptions store last_seen_version (migration 0014); the unread count read in app/(app)/layout.tsx is computed inline — for large user bases, materialize per-user unread counts or add an index on wiki_subscriptions(user_id, page_id) + wiki_pages(version) covering join

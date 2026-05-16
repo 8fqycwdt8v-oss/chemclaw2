@@ -78,6 +78,9 @@ export async function upsertWikiPage(
   // during the network round-trip to the embedding API.
   const chunks = chunkText(contentText);
   const embeddings = chunks.length > 0 ? await embedFn(chunks) : [];
+  if (embeddings.length !== chunks.length) {
+    throw new Error(`embedFn returned ${embeddings.length} vectors for ${chunks.length} chunks`);
+  }
 
   return db.transaction(async (tx) => {
     const [page] = await tx

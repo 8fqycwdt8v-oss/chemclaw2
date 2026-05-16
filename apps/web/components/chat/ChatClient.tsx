@@ -12,7 +12,10 @@ type Message =
 
 type Citation = { slug: string; label: string };
 
-const SLUG_RE = /\b([a-z0-9][a-z0-9-]{1,80})\b/g;
+// Citation slugs must contain a hyphen (e.g. "aspirin-synthesis") to avoid
+// false-positive links on plain words. Single-word wiki slugs are skipped
+// from inline citation rendering; they can still be reached via /wiki list.
+const SLUG_RE = /\b([a-z][a-z0-9]+(?:-[a-z0-9]+)+)\b/g;
 
 function extractWikiSlugs(text: string, knownSlugs: Set<string>): Citation[] {
   const found: Citation[] = [];

@@ -158,6 +158,9 @@ importers:
 
   workers/fp-worker:
     dependencies:
+      '@chemclaw2/agent-tools':
+        specifier: workspace:*
+        version: link:../../packages/agent-tools
       '@chemclaw2/db':
         specifier: workspace:*
         version: link:../../packages/db

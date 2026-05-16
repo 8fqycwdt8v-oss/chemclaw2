@@ -23,6 +23,10 @@ export const webSearchTool = {
     required: ['query'],
   },
   async execute(input: { query: string; site_filter?: string }) {
+    const q = input.query.trim();
+    if (q.length === 0 || q.length > 500) {
+      return { results: [], error: 'query must be 1-500 chars after trimming' };
+    }
     const apiKey = process.env.BRAVE_SEARCH_API_KEY;
     if (!apiKey) {
       return { results: [], error: 'BRAVE_SEARCH_API_KEY not configured' };
@@ -36,8 +40,8 @@ export const webSearchTool = {
       }
     }
     const normalizedFilter = input.site_filter?.toLowerCase();
-    const q = normalizedFilter ? `site:${normalizedFilter} ${input.query}` : input.query;
-    const url = `${BRAVE_API}?q=${encodeURIComponent(q)}&count=5`;
+    const finalQ = normalizedFilter ? `site:${normalizedFilter} ${q}` : q;
+    const url = `${BRAVE_API}?q=${encodeURIComponent(finalQ)}&count=5`;
     const res = await fetch(url, { headers: { 'X-Subscription-Token': apiKey, Accept: 'application/json' } });
     if (!res.ok) return { results: [], error: `Brave API error: ${res.status}` };
     const MAX_BYTES = 500_000;
