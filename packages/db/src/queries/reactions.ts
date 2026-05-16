@@ -20,7 +20,8 @@ export async function findSimilarReactions(
   limit = 20,
   minSimilarity = 0.4,
 ): Promise<SimilarReaction[]> {
-  const safeLimit = Math.min(limit, 100);
+  const safeLimit = Math.max(1, Math.min(limit, 100));
+  const safeMinSimilarity = Math.max(0, Math.min(minSimilarity, 1));
   if (!/^[01]{2048}$/.test(queryFpBits)) {
     throw new Error('queryFpBits must be exactly 2048 binary characters (0/1)');
   }
@@ -46,7 +47,7 @@ export async function findSimilarReactions(
       conditions: row.conditions,
       similarity: tanimoto(queryBytes, bitStringToBytes(row.drfp!)),
     }))
-    .filter((r) => r.similarity >= minSimilarity)
+    .filter((r) => r.similarity >= safeMinSimilarity)
     .sort((a, b) => b.similarity - a.similarity)
     .slice(0, safeLimit);
 }

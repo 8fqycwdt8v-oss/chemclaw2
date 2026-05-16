@@ -63,8 +63,8 @@ export async function PUT(
   const existing = await getWikiPage(slug);
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
-  if (body.title && body.title.length > MAX_TITLE_LEN) {
-    return NextResponse.json({ error: 'title too long' }, { status: 400 });
+  if (body.title !== undefined && (typeof body.title !== 'string' || body.title.length > MAX_TITLE_LEN)) {
+    return NextResponse.json({ error: 'title must be a string of at most 500 characters' }, { status: 400 });
   }
   if (typeof body.contentText === 'string' && body.contentText.length > MAX_CONTENT_TEXT_LEN) {
     return NextResponse.json({ error: 'contentText too large' }, { status: 413 });

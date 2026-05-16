@@ -25,7 +25,8 @@ export async function findSimilarCompounds(
   limit = 20,
   minTanimoto = 0.4,
 ): Promise<SimilarCompound[]> {
-  const safeLimit = Math.min(limit, 100);
+  const safeLimit = Math.max(1, Math.min(limit, 100));
+  const safeMinTanimoto = Math.max(0, Math.min(minTanimoto, 1));
   if (!/^[01]{2048}$/.test(queryFpBits)) {
     throw new Error('queryFpBits must be exactly 2048 binary characters (0/1)');
   }
@@ -55,7 +56,7 @@ export async function findSimilarCompounds(
       // Postgres returns BIT columns as binary strings ('010101...')
       tanimoto: tanimoto(queryBytes, bitStringToBytes(row.morganFp!)),
     }))
-    .filter((r) => r.tanimoto >= minTanimoto)
+    .filter((r) => r.tanimoto >= safeMinTanimoto)
     .sort((a, b) => b.tanimoto - a.tanimoto)
     .slice(0, safeLimit);
 }
