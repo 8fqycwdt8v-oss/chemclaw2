@@ -56,6 +56,7 @@ export function ChatClient() {
 
   // Poll /api/notifications every 30s when the tab is visible. Surfaces
   // completed-campaign events as toasts and refreshes the nav badge.
+  // GET is idempotent; we then POST campaign ids to mark them acknowledged.
   useEffect(() => {
     let cancelled = false;
     const poll = async () => {
@@ -66,6 +67,7 @@ export function ChatClient() {
         const data = (await res.json()) as {
           campaigns: Array<{ id: string; targetSmiles: string | null; status: string; wikiPageId: string | null }>;
         };
+        if (data.campaigns.length === 0) return;
         for (const c of data.campaigns) {
           setMessages((m) => [
             ...m,
@@ -75,6 +77,12 @@ export function ChatClient() {
             },
           ]);
         }
+        // Acknowledge so the next poll doesn't re-surface the same events.
+        await fetch('/api/notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ campaignIds: data.campaigns.map((c) => c.id) }),
+        }).catch(() => {});
       } catch {
         // network glitches are fine; the next tick will retry
       }

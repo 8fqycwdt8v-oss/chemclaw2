@@ -22,6 +22,13 @@ export async function checkToolOutput(
       .where(inArray(compounds.casNumber, casNumbers));
     known = new Set(rows.map((r) => r.casNumber));
   } catch (err) {
+    // #22: emit an OTel event so Langfuse + the trace pipeline surface the
+    // fail-open path. Logging alone is invisible in production dashboards.
+    trace.getActiveSpan()?.addEvent('fact_id_check_db_error', {
+      tool_name: toolName,
+      cas_count: casNumbers.length,
+      message: err instanceof Error ? err.message : String(err),
+    });
     console.warn('[fact-id-check] DB query failed — compliance check skipped:', err instanceof Error ? err.message : err);
     return { warnings: [] };
   }

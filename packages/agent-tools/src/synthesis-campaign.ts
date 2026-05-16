@@ -1,5 +1,7 @@
 import { createCampaign, updateCampaignStatusForUser, getCampaignBySession, addCampaignStep, db, sql } from '@chemclaw2/db';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Factory: captures userId from the authenticated request so the LLM cannot
  * supply an arbitrary created_by or campaign_id belonging to another user (IDOR prevention).
@@ -21,7 +23,10 @@ export function createSynthesisCampaignTools(userId: string) {
       required: ['session_id'],
     },
     async execute(input: { session_id: string; target_smiles?: string }) {
-      const existing = await getCampaignBySession(input.session_id);
+      if (typeof input.session_id !== 'string' || !UUID_RE.test(input.session_id)) {
+        return { error: 'session_id must be a UUID' };
+      }
+      const existing = await getCampaignBySession(input.session_id, userId);
       if (existing) return { campaign_id: existing.id, status: existing.status };
 
       const id = await createCampaign(input.session_id, userId, input.target_smiles);
@@ -44,6 +49,9 @@ export function createSynthesisCampaignTools(userId: string) {
       required: ['campaign_id', 'plan'],
     },
     async execute(input: { campaign_id: string; plan: Record<string, unknown> }) {
+      if (typeof input.campaign_id !== 'string' || !UUID_RE.test(input.campaign_id)) {
+        return { error: 'campaign_id must be a UUID' };
+      }
       // Validate step count before writing to DB — avoids leaving campaign stuck in awaiting_input
       const MAX_STEPS = 20;
       const allSteps = Array.isArray(input.plan.steps) ? input.plan.steps as Array<Record<string, unknown>> : [];
@@ -95,18 +103,26 @@ export function createSynthesisCampaignTools(userId: string) {
       required: ['campaign_id'],
     },
     async execute(input: { campaign_id: string; approval?: 'per_step' | 'all_at_once' }) {
+      if (typeof input.campaign_id !== 'string' || !UUID_RE.test(input.campaign_id)) {
+        return { error: 'campaign_id must be a UUID' };
+      }
       const { found } = await updateCampaignStatusForUser(input.campaign_id, userId, 'running');
       if (!found) return { error: 'Campaign not found, not owned by you, or already terminal' };
-      // Reset next_retry_at so the worker poll picks pending steps up immediately.
+      // Re-check ownership in the raw SQL too — defence-in-depth so a race
+      // window between the status update and these UPDATEs can't be used to
+      // mutate steps on someone else's campaign.
       await db.execute(
-        sql`UPDATE campaign_steps SET next_retry_at = NOW() WHERE campaign_id = ${input.campaign_id}::uuid AND status = 'pending'`,
+        sql`UPDATE campaign_steps SET next_retry_at = NOW()
+            WHERE campaign_id = ${input.campaign_id}::uuid
+              AND status = 'pending'
+              AND campaign_id IN (SELECT id FROM synthesis_campaigns WHERE created_by = ${userId})`,
       );
       if (input.approval === 'per_step') {
-        // Gate all steps except step 0. The user (or the agent on their behalf)
-        // calls /api/campaigns/[id]/steps/[idx]/approve to release each one.
         await db.execute(
           sql`UPDATE campaign_steps SET requires_approval = true
-              WHERE campaign_id = ${input.campaign_id}::uuid AND step_idx > 0`,
+              WHERE campaign_id = ${input.campaign_id}::uuid
+                AND step_idx > 0
+                AND campaign_id IN (SELECT id FROM synthesis_campaigns WHERE created_by = ${userId})`,
         );
         return {
           status: 'running',

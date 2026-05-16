@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { auth } from '@clerk/nextjs/server';
 import { buildQueryOptions } from '@/lib/agent';
 import { agentToStream } from '@/lib/streaming';
 import { scheduledSubstanceGate } from '@chemclaw2/agent-tools';
@@ -74,6 +74,9 @@ export async function POST(req: NextRequest) {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-store',
       Connection: 'keep-alive',
+      // Followup #11: tells nginx-style proxies (incl. Fly's) not to buffer
+      // chunks; without this the live-progress UX can stall multiple seconds.
+      'X-Accel-Buffering': 'no',
     },
   });
 }

@@ -425,22 +425,14 @@ export async function searchWikiByFTS(query: string, limit = 20, includeArchived
     .limit(Math.min(limit, 200));
 }
 
-// listWikiRevisions queries the wiki_revisions table (migration 0010). Returns []
-// gracefully if the table is not yet present, so the UI works during a rolling deploy.
 export async function listWikiRevisions(pageId: string, limit = 10) {
-  try {
-    const rows = await db.execute<{ version: number; updated_at: string; updated_by: string | null }>(
-      sql`SELECT version, updated_at, updated_by FROM wiki_revisions
-          WHERE page_id = ${pageId}::uuid
-          ORDER BY version DESC
-          LIMIT ${Math.min(limit, 100)}`,
-    );
-    return rows.map((r) => ({ version: r.version, updatedAt: r.updated_at, updatedBy: r.updated_by }));
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === '42P01') return []; // undefined_table — migration not applied yet
-    throw err;
-  }
+  const rows = await db.execute<{ version: number; updated_at: string; updated_by: string | null }>(
+    sql`SELECT version, updated_at, updated_by FROM wiki_revisions
+        WHERE page_id = ${pageId}::uuid
+        ORDER BY version DESC
+        LIMIT ${Math.min(limit, 100)}`,
+  );
+  return rows.map((r) => ({ version: r.version, updatedAt: r.updated_at, updatedBy: r.updated_by }));
 }
 
 export type SemanticSearchOptions = {

@@ -1,4 +1,5 @@
 import { upsertWikiPage } from '@chemclaw2/db';
+import { isValidSlug } from './slug';
 import { markdownToTiptap } from './markdown-to-tiptap';
 import { validateCitations } from './citation-validation';
 
@@ -64,7 +65,7 @@ export function createWikiUpsertTool(
       project?: string;
       citations?: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>;
     }) {
-      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.slug) || input.slug.length > 200) {
+      if (!isValidSlug(input.slug)) {
         return { error: 'slug must be lowercase kebab-case, ≤200 chars' };
       }
       if (input.title.length > 500) return { error: 'title too long (≤500 chars)' };

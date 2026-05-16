@@ -10,15 +10,15 @@ You have access to an organization knowledge base, compound registry, and reacti
 Always cite your sources. Never fabricate CAS numbers, yields, or experimental conditions.
 When uncertain, say so explicitly rather than guessing.`;
 
-// Skills are filesystem markdown packs (one directory per skill under skills/).
-// They are loaded once on first agent build and concatenated onto the system prompt.
-const SYSTEM_PROMPT = BASE_SYSTEM_PROMPT + loadSkillsBlock();
-
 export function buildQueryOptions(sessionId: string, userId: string): Options {
+  // Skills are loaded from disk per request so newly-saved skills are visible
+  // without a process restart (followup #10).
+  const systemPrompt = BASE_SYSTEM_PROMPT + loadSkillsBlock();
+
   // scopedSessionStore forces projectKey = chemclaw2:<userId> on every store call,
   // ensuring sessions are isolated per user regardless of the SDK's cwd-derived default.
   return {
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt,
     sessionStore: scopedSessionStore(`chemclaw2:${userId}`),
     resume: sessionId,
     mcpServers: {

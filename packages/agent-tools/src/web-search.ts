@@ -42,6 +42,9 @@ export const webSearchTool = {
     const normalizedFilter = input.site_filter?.toLowerCase();
     const finalQ = normalizedFilter ? `site:${normalizedFilter} ${q}` : q;
     const url = `${BRAVE_API}?q=${encodeURIComponent(finalQ)}&count=5`;
+    // Raw fetch (not safeFetch) is intentional: BRAVE_API is a hardcoded constant
+    // pointing at the Brave Search API, not a user-supplied URL — so the
+    // SSRF allowlist that safeFetch enforces is not needed here (#21).
     const res = await fetch(url, { headers: { 'X-Subscription-Token': apiKey, Accept: 'application/json' } });
     if (!res.ok) return { results: [], error: `Brave API error: ${res.status}` };
     const MAX_BYTES = 500_000;
