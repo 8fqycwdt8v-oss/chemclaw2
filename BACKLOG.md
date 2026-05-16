@@ -12,3 +12,4 @@
 - [api/wiki] wiki schema: updatedBy (text, nullable) and updatedAt (timestamp, notNull) are inconsistent — either make updatedBy notNull or allow updatedAt nullable; every update should carry both user + timestamp for audit integrity
 - [api/wiki] wiki_citations has no unique constraint on (page_id, citation_id, source_type, source_id) — duplicate citations in a single upsert call create duplicate rows; add unique constraint before multi-client concurrent writes
 - [api/chat] SSE streaming response missing X-Accel-Buffering: no header — nginx will buffer SSE chunks causing latency in proxied deployments
+- [rate-limits] pgRateLimit has no unit tests; the >= vs > boundary (count == maxRequests) previously went undetected — add a test covering exactly-at-limit and one-over-limit cases

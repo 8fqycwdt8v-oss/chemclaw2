@@ -20,7 +20,8 @@ export async function checkToolOutput(
       .select({ casNumber: compounds.casNumber })
       .from(compounds)
       .where(inArray(compounds.casNumber, casNumbers));
-  } catch {
+  } catch (err) {
+    console.warn('[fact-id-check] DB query failed — compliance check skipped:', err instanceof Error ? err.message : err);
     return { warnings: [] };
   }
 

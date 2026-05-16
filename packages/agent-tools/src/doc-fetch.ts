@@ -33,6 +33,9 @@ export const docFetchTool = {
       return { error: err instanceof Error ? err.message : 'Fetch failed' };
     }
     if (!res.ok) return { error: `HTTP ${res.status}` };
+    // This tool is intentionally scoped to HTML/text documents only.
+    // JSON API endpoints on allowed domains (e.g. PubChem REST, Crossref API) are
+    // handled by dedicated tools (compound-search, reaction-search, etc.).
     const contentType = res.headers.get('content-type') ?? '';
     if (!contentType.startsWith('text/')) {
       return { error: `Unsupported content-type: ${contentType.split(';')[0].trim()}` };
