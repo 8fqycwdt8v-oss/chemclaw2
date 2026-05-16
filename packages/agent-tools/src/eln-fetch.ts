@@ -61,7 +61,19 @@ export const elnFetchTool = {
     });
 
     if (!res.ok) return { error: `ELN responded with HTTP ${res.status}` };
-    const data = await res.json() as Record<string, unknown>;
+
+    // Guard response size before parsing — prevents OOM on unexpectedly large ELN records
+    const MAX_BYTES = 500_000;
+    const raw = await res.text();
+    if (Buffer.byteLength(raw, 'utf8') > MAX_BYTES) {
+      return { error: 'ELN response exceeds size limit (500 KB)' };
+    }
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return { error: 'ELN response is not valid JSON' };
+    }
     return { experiment_id: input.experiment_id, data };
   },
 };

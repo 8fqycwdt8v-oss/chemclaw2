@@ -1,4 +1,4 @@
-import { eq, sql, and, lt, notInArray, desc } from 'drizzle-orm';
+import { eq, sql, and, lt, notInArray, desc, inArray } from 'drizzle-orm';
 import { db } from '../client';
 import { synthesisCampaigns, campaignSteps } from '../schema/campaigns';
 
@@ -14,15 +14,19 @@ export async function createCampaign(
   return row.id;
 }
 
+const TERMINAL_STATUSES = ['complete', 'failed'] as const;
+const NON_TERMINAL_STATUSES = ['planning', 'awaiting_input', 'running'] as const;
+
 export async function updateCampaignStatus(
   id: string,
   status: string,
   plan?: Record<string, unknown>,
 ): Promise<void> {
+  // Guard: never transition out of a terminal state (complete or failed)
   await db
     .update(synthesisCampaigns)
     .set({ status, ...(plan ? { plan } : {}) })
-    .where(eq(synthesisCampaigns.id, id));
+    .where(and(eq(synthesisCampaigns.id, id), inArray(synthesisCampaigns.status, [...NON_TERMINAL_STATUSES])));
 }
 
 export async function updateCampaignStatusForUser(
@@ -34,7 +38,11 @@ export async function updateCampaignStatusForUser(
   const rows = await db
     .update(synthesisCampaigns)
     .set({ status, ...(plan ? { plan } : {}) })
-    .where(and(eq(synthesisCampaigns.id, id), eq(synthesisCampaigns.createdBy, userId)))
+    .where(and(
+      eq(synthesisCampaigns.id, id),
+      eq(synthesisCampaigns.createdBy, userId),
+      inArray(synthesisCampaigns.status, [...NON_TERMINAL_STATUSES]),
+    ))
     .returning({ id: synthesisCampaigns.id });
   return { found: rows.length > 0 };
 }
