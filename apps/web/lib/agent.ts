@@ -18,7 +18,121 @@ const EXPERIMENT_TOOLS = new Set(['kickoff_campaign']);
 const BASE_SYSTEM_PROMPT = `You are ChemClaw, a pharma R&D knowledge-intelligence assistant.
 You have access to an organization knowledge base, compound registry, and reaction database.
 Always cite your sources. Never fabricate CAS numbers, yields, or experimental conditions.
-When uncertain, say so explicitly rather than guessing.`;
+When uncertain, say so explicitly rather than guessing.
+
+For comprehensive, multi-section investigations, prefer dispatching to a
+sub-agent via the Task tool with subagent_type='deep-research'. The sub-agent
+runs in isolated context with retrieval tools only and returns a structured
+markdown report — you then persist it via finalize_deep_research.
+
+For citation-conflict resolution on a wiki page, dispatch
+subagent_type='contradiction-resolver'. The sub-agent reads both citations
+and the chunks that reference them, weighs the evidence, and returns a
+proposed winner + reason that you persist via record_contradiction.`;
+
+// Wave-3b: sub-agent definitions. These are exposed through the SDK's built-in
+// Task tool. Each runs in isolated context with a restricted tool surface so
+// the parent agent's plan / approval state isn't polluted, and the sub-agent
+// can't accidentally call mutation tools mid-research.
+//
+// `tools` lists are SDK tool names; MCP tools are namespaced as
+// `mcp__<server-name>__<tool>` and inherited when the same MCP server is
+// mounted via `mcpServers`. We pass `mcpServers: ['chemclaw2-tools']` so the
+// sub-agent gets every in-process tool by reference; the `tools` list then
+// narrows which of those it may actually call.
+const DEEP_RESEARCH_TOOLS: string[] = [
+  'mcp__chemclaw2-tools__lookup_knowledge',
+  'mcp__chemclaw2-tools__lookup_properties',
+  'mcp__chemclaw2-tools__wiki_lookup',
+  'mcp__chemclaw2-tools__compound_similarity_search',
+  'mcp__chemclaw2-tools__find_similar_reactions',
+  'mcp__chemclaw2-tools__substructure_candidates',
+  'mcp__chemclaw2-tools__web_search',
+  'mcp__chemclaw2-tools__fetch_document',
+  'mcp__chemclaw2-tools__eln_fetch_experiment',
+  'mcp__chemclaw2-tools__lookup_hazard',
+  'mcp__chemclaw2-tools__green_solvent_score',
+  'mcp__mcp-molfp__compute_morgan_fp',
+  'mcp__mcp-rxnfp__compute_drfp',
+];
+
+const CONTRADICTION_RESOLVER_TOOLS: string[] = [
+  'mcp__chemclaw2-tools__read_two_citations',
+  'mcp__chemclaw2-tools__wiki_lookup',
+  'mcp__chemclaw2-tools__lookup_knowledge',
+  'mcp__chemclaw2-tools__fetch_document',
+];
+
+const DEEP_RESEARCH_PROMPT = `You are a focused research sub-agent for ChemClaw.
+
+Your job: produce a structured markdown research report on the user's question.
+You have retrieval tools only — no wiki writes, no campaign dispatches.
+
+Plan first, then execute:
+1. Use lookup_knowledge to scope what the org already knows.
+2. Drill in with wiki_lookup (slug or query), similarity searches, or ELN
+   fetches as appropriate.
+3. Pull at least 2 external sources via web_search → fetch_document.
+4. Compose a 3-6 section markdown report with inline [N] citation markers.
+5. Return the report body as your final assistant message. Format:
+
+   # Title
+   ## Section 1
+   prose [1]
+   ## Section 2
+   prose [2][3]
+   ...
+   ## Citations
+   [1] label / sourceId — sourceType
+   [2] ...
+
+The parent agent will parse your output and persist it via
+finalize_deep_research. Never fabricate CAS numbers, yields, or conditions.
+When evidence is thin, say "weak support" and propose follow-up tools to run.`;
+
+const CONTRADICTION_RESOLVER_PROMPT = `You are a focused dispute-resolution sub-agent for ChemClaw.
+
+Your job: weigh two citations on a wiki page and propose which is better
+supported by the evidence in the wiki body and external sources.
+
+Workflow:
+1. Call read_two_citations with the slug + both citation_ids. You'll get
+   each citation's metadata plus the wiki chunks that reference each marker.
+2. If either citation points to a URL, fetch_document for additional context.
+3. Compare the supporting evidence. Consider: source authority (peer-reviewed
+   vs. preprint vs. web), recency, reproducibility evidence, internal vs.
+   external corroboration.
+4. Return a single line with this exact shape:
+
+   WINNER: a|b|inconclusive
+   REASON: <single paragraph, max 800 chars>
+
+The parent agent will parse your output and persist it via record_contradiction.
+If evidence is genuinely balanced, prefer "inconclusive" over forcing a winner.`;
+
+export const SUBAGENT_DEFINITIONS: NonNullable<Options['agents']> = {
+  'deep-research': {
+    description:
+      'Multi-section research investigations. Use when the user asks for a comprehensive ' +
+      'review, a structured report, or any "everything we know about X" question that needs ' +
+      'to be persisted as a wiki page. Returns the report body as markdown for the parent to ' +
+      'pass to finalize_deep_research.',
+    prompt: DEEP_RESEARCH_PROMPT,
+    tools: DEEP_RESEARCH_TOOLS,
+    mcpServers: ['chemclaw2-tools'],
+    maxTurns: 30,
+  },
+  'contradiction-resolver': {
+    description:
+      'Weigh two conflicting citations on a wiki page and propose which is better supported. ' +
+      'Use after the user (or another agent) identifies a citation dispute. Returns ' +
+      'WINNER + REASON for the parent to persist via record_contradiction.',
+    prompt: CONTRADICTION_RESOLVER_PROMPT,
+    tools: CONTRADICTION_RESOLVER_TOOLS,
+    mcpServers: ['chemclaw2-tools'],
+    maxTurns: 10,
+  },
+};
 
 // Wave-1 A3: surface model + turn cap as env so operators can tune without
 // redeploying. SDK defaults are good but invisible; an explicit value is
@@ -83,6 +197,13 @@ export function buildQueryOptions(
     // blocks tool execution entirely; the agent must present a plan and the
     // user re-sends without planMode to actually run it.
     ...(extras.planMode ? { permissionMode: 'plan' as const } : {}),
+    // Wave-3b: sub-agent dispatch. The parent agent can call the Task tool
+    // with subagent_type='deep-research' or 'contradiction-resolver' to
+    // spawn one of these in isolated context. mcpServers: ['chemclaw2-tools']
+    // mounts the same in-process server we already build for the parent —
+    // the `tools` array on each definition then narrows what the sub-agent
+    // may actually invoke.
+    agents: SUBAGENT_DEFINITIONS,
     mcpServers: {
       'chemclaw2-tools': buildInProcessMcpServer(userId, sessionId),
       'mcp-molfp': {
