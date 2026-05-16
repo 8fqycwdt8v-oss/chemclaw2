@@ -34,6 +34,7 @@ export function createRegisterPaperTool(userId: string): ToolDef<typeof schema> 
       'Use after recognizing a literature citation in a wiki body. Returns ' +
       'the paper id; on upsert against an existing DOI/PubMed match, returns ' +
       'the existing id and refreshes the title/abstract/content_text fields.',
+    subagents: ['entity-extractor'],
     schema,
     async execute(input) {
       if (input.title.length === 0 || input.title.length > 1000) {

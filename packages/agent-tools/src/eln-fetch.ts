@@ -31,6 +31,7 @@ const elnFetchSchema = {
 export const elnFetchTool: ToolDef<typeof elnFetchSchema> = {
   name: 'eln_fetch_experiment',
   description: 'Fetch a read-only experiment record from the connected ELN system.',
+  subagents: ['deep-research'],
   schema: elnFetchSchema,
   async execute(input) {
     if (!ELN_BASE) return { error: 'ELN integration not configured (ELN_API_BASE_URL not set)' };

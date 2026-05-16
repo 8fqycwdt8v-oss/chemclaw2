@@ -8,8 +8,13 @@ import {
   incrementSpend,
   type BudgetWithSpend,
 } from '@chemclaw2/db';
-import { buildInProcessMcpServer } from './sdk-tools';
+import { buildInProcessMcpServer, subagentToolNames } from './sdk-tools';
 import { loadSkillsBlock } from './skills';
+import {
+  DEEP_RESEARCH_PROMPT,
+  CONTRADICTION_RESOLVER_PROMPT,
+  ENTITY_EXTRACTOR_PROMPT,
+} from './subagent-prompts';
 
 // v2.1-D: tools that count against the experiments_cap. Everything else only
 // counts against tool_calls_cap.
@@ -38,172 +43,47 @@ and paper citations (DOI / PubMed) and registers them as structured
 entities — populating the properties / papers tables for downstream SAR
 queries via lookup_properties and lookup_knowledge.`;
 
-// Wave-3b: sub-agent definitions. These are exposed through the SDK's built-in
-// Task tool. Each runs in isolated context with a restricted tool surface so
-// the parent agent's plan / approval state isn't polluted, and the sub-agent
-// can't accidentally call mutation tools mid-research.
-//
-// `tools` lists are SDK tool names; MCP tools are namespaced as
-// `mcp__<server-name>__<tool>` and inherited when the same MCP server is
-// mounted via `mcpServers`. We pass `mcpServers: ['chemclaw2-tools']` so the
-// sub-agent gets every in-process tool by reference; the `tools` list then
-// narrows which of those it may actually call.
-// Wave-3f bug-fix: tool names must match the `name` field on each tool's
-// definition (the SDK namespaces in-process MCP tools as
-// `mcp__<server>__<tool.name>`). Two names were wrong in Wave 3b and the
-// deep-research sub-agent silently lacked those two tools:
-//   - 'substructure_candidates'  → actual name is 'list_substructure_candidates'
-//   - 'green_solvent_score'      → actual name is 'score_solvents'
-const DEEP_RESEARCH_TOOLS: string[] = [
-  'mcp__chemclaw2-tools__lookup_knowledge',
-  'mcp__chemclaw2-tools__lookup_properties',
-  'mcp__chemclaw2-tools__wiki_lookup',
-  'mcp__chemclaw2-tools__compound_similarity_search',
-  'mcp__chemclaw2-tools__find_similar_reactions',
-  'mcp__chemclaw2-tools__list_substructure_candidates',
-  'mcp__chemclaw2-tools__web_search',
-  'mcp__chemclaw2-tools__fetch_document',
-  'mcp__chemclaw2-tools__eln_fetch_experiment',
-  'mcp__chemclaw2-tools__lookup_hazard',
-  'mcp__chemclaw2-tools__score_solvents',
-  'mcp__mcp-molfp__compute_morgan_fp',
-  'mcp__mcp-rxnfp__compute_drfp',
-];
-
-const CONTRADICTION_RESOLVER_TOOLS: string[] = [
-  'mcp__chemclaw2-tools__read_two_citations',
-  'mcp__chemclaw2-tools__wiki_lookup',
-  'mcp__chemclaw2-tools__lookup_knowledge',
-  'mcp__chemclaw2-tools__fetch_document',
-];
-
-const ENTITY_EXTRACTOR_TOOLS: string[] = [
-  // Reads: needs full wiki body + compound lookups
-  'mcp__chemclaw2-tools__wiki_lookup',
-  'mcp__chemclaw2-tools__lookup_knowledge',
-  'mcp__chemclaw2-tools__compound_similarity_search',
-  'mcp__chemclaw2-tools__lookup_properties',
-  // Writes: the only mutations this sub-agent may perform
-  'mcp__chemclaw2-tools__register_compound_property',
-  'mcp__chemclaw2-tools__register_paper',
-];
-
-const DEEP_RESEARCH_PROMPT = `You are a focused research sub-agent for ChemClaw.
-
-Your job: produce a structured markdown research report on the user's question.
-You have retrieval tools only — no wiki writes, no campaign dispatches.
-
-Plan first, then execute:
-1. Use lookup_knowledge to scope what the org already knows.
-2. Drill in with wiki_lookup (slug or query), similarity searches, or ELN
-   fetches as appropriate.
-3. Pull at least 2 external sources via web_search → fetch_document.
-4. Compose a 3-6 section markdown report with inline [N] citation markers.
-5. Return the report body as your final assistant message. Format:
-
-   # Title
-   ## Section 1
-   prose [1]
-   ## Section 2
-   prose [2][3]
-   ...
-   ## Citations
-   [1] label / sourceId — sourceType
-   [2] ...
-
-The parent agent will parse your output and persist it via
-finalize_deep_research. Never fabricate CAS numbers, yields, or conditions.
-When evidence is thin, say "weak support" and propose follow-up tools to run.`;
-
-const CONTRADICTION_RESOLVER_PROMPT = `You are a focused dispute-resolution sub-agent for ChemClaw.
-
-Your job: weigh two citations on a wiki page and propose which is better
-supported by the evidence in the wiki body and external sources.
-
-Workflow:
-1. Call read_two_citations with the slug + both citation_ids. You'll get
-   each citation's metadata plus the wiki chunks that reference each marker.
-2. If either citation points to a URL, fetch_document for additional context.
-3. Compare the supporting evidence. Consider: source authority (peer-reviewed
-   vs. preprint vs. web), recency, reproducibility evidence, internal vs.
-   external corroboration.
-4. Return a single line with this exact shape:
-
-   WINNER: a|b|inconclusive
-   REASON: <single paragraph, max 800 chars>
-
-The parent agent will parse your output and persist it via record_contradiction.
-If evidence is genuinely balanced, prefer "inconclusive" over forcing a winner.`;
-
-const ENTITY_EXTRACTOR_PROMPT = `You are an entity-extraction sub-agent for ChemClaw.
-
-Your job: parse a wiki page body and populate the structured properties
-and papers tables. You have read tools + two write tools
-(register_compound_property, register_paper). Nothing else.
-
-Workflow:
-1. Call wiki_lookup with the given slug + full=true to get the body.
-2. Identify measurement rows. Look for patterns like:
-   - "yield 75%" / "yield: 60-80%" / "isolated yield 82 %"
-   - "logP = 2.1" / "logP 2.1 (Crippen)"
-   - "IC50 12 nM" / "Ki = 4.5 \\u03BCM"
-   - "Tm 145-147 \\u00B0C"
-   The compound being measured must be a UUID you can find either as a
-   citation sourceId (sourceType='compound') or via
-   compound_similarity_search on a SMILES in the body. If you cannot tie
-   a value to a known compound UUID, SKIP it — never invent compound ids.
-3. Identify literature citations. Look for citation entries with
-   sourceType in {'doc','paper','url'} that include a DOI
-   (10.NNNN/...) or PubMed url (pubmed.ncbi.nlm.nih.gov/NNNN). For each,
-   call register_paper with the title (from the citation label),
-   DOI / pubmed_id, and url.
-4. Use register_compound_property in batches (up to 100 per call) and
-   register_paper one-at-a-time. Report your final results as a single
-   short summary message: "Extracted N properties for K compounds; M
-   papers registered."
-
-Hard rules:
-- Never invent CAS numbers, yields, or compound IDs.
-- Skip ambiguous values rather than guessing.
-- Numeric units must match the value (don't store "75" without "%").
-- Include source_citation_id on every property row when the wiki body
-  ties the value to a [N] marker.`;
-
-export const SUBAGENT_DEFINITIONS: NonNullable<Options['agents']> = {
-  'deep-research': {
-    description:
-      'Multi-section research investigations. Use when the user asks for a comprehensive ' +
-      'review, a structured report, or any "everything we know about X" question that needs ' +
-      'to be persisted as a wiki page. Returns the report body as markdown for the parent to ' +
-      'pass to finalize_deep_research.',
-    prompt: DEEP_RESEARCH_PROMPT,
-    tools: DEEP_RESEARCH_TOOLS,
-    mcpServers: ['chemclaw2-tools'],
-    maxTurns: 30,
-  },
-  'contradiction-resolver': {
-    description:
-      'Weigh two conflicting citations on a wiki page and propose which is better supported. ' +
-      'Use after the user (or another agent) identifies a citation dispute. Returns ' +
-      'WINNER + REASON for the parent to persist via record_contradiction.',
-    prompt: CONTRADICTION_RESOLVER_PROMPT,
-    tools: CONTRADICTION_RESOLVER_TOOLS,
-    mcpServers: ['chemclaw2-tools'],
-    maxTurns: 10,
-  },
-  'entity-extractor': {
-    description:
-      'Parse a wiki page body and populate the structured properties + papers tables. ' +
-      'Dispatch with the page slug after finalize_deep_research / wiki_upsert on chemistry ' +
-      'content containing measurements (yield, logP, IC50, …) or literature citations ' +
-      '(DOI / PubMed). The sub-agent runs in isolated context with retrieval tools + the two ' +
-      'register_* write tools only.',
-    prompt: ENTITY_EXTRACTOR_PROMPT,
-    tools: ENTITY_EXTRACTOR_TOOLS,
-    mcpServers: ['chemclaw2-tools'],
-    maxTurns: 20,
-  },
-};
+// Sub-agent definitions. Each runs in isolated context with a restricted tool
+// surface, derived from ToolDef.subagents tagging in agent-tools — no
+// hand-rolled allowlists. mcpServers: ['chemclaw2-tools'] mounts the same
+// in-process server; the `tools` array narrows what each sub-agent may call.
+function buildSubagentDefinitions(userId: string, sessionId?: string): NonNullable<Options['agents']> {
+  return {
+    'deep-research': {
+      description:
+        'Multi-section research investigations. Use when the user asks for a comprehensive ' +
+        'review, a structured report, or any "everything we know about X" question that needs ' +
+        'to be persisted as a wiki page. Returns the report body as markdown for the parent to ' +
+        'pass to finalize_deep_research.',
+      prompt: DEEP_RESEARCH_PROMPT,
+      tools: subagentToolNames('deep-research', userId, sessionId),
+      mcpServers: ['chemclaw2-tools'],
+      maxTurns: 30,
+    },
+    'contradiction-resolver': {
+      description:
+        'Weigh two conflicting citations on a wiki page and propose which is better supported. ' +
+        'Use after the user (or another agent) identifies a citation dispute. Returns ' +
+        'WINNER + REASON for the parent to persist via record_contradiction.',
+      prompt: CONTRADICTION_RESOLVER_PROMPT,
+      tools: subagentToolNames('contradiction-resolver', userId, sessionId),
+      mcpServers: ['chemclaw2-tools'],
+      maxTurns: 10,
+    },
+    'entity-extractor': {
+      description:
+        'Parse a wiki page body and populate the structured properties + papers tables. ' +
+        'Dispatch with the page slug after finalize_deep_research / wiki_upsert on chemistry ' +
+        'content containing measurements (yield, logP, IC50, …) or literature citations ' +
+        '(DOI / PubMed). The sub-agent runs in isolated context with retrieval tools + the two ' +
+        'register_* write tools only.',
+      prompt: ENTITY_EXTRACTOR_PROMPT,
+      tools: subagentToolNames('entity-extractor', userId, sessionId),
+      mcpServers: ['chemclaw2-tools'],
+      maxTurns: 20,
+    },
+  };
+}
 
 // Wave-1 A3: surface model + turn cap as env so operators can tune without
 // redeploying. SDK defaults are good but invisible; an explicit value is
@@ -274,7 +154,7 @@ export function buildQueryOptions(
     // mounts the same in-process server we already build for the parent —
     // the `tools` array on each definition then narrows what the sub-agent
     // may actually invoke.
-    agents: SUBAGENT_DEFINITIONS,
+    agents: buildSubagentDefinitions(userId, sessionId),
     mcpServers: {
       'chemclaw2-tools': buildInProcessMcpServer(userId, sessionId),
       'mcp-molfp': {

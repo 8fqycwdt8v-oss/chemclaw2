@@ -24,6 +24,7 @@ export const webSearchTool: ToolDef<typeof webSearchSchema> = {
     'site_filter, if provided, must be a hostname from the approved science domain list ' +
     '(pubchem.ncbi.nlm.nih.gov, pubmed.ncbi.nlm.nih.gov, doi.org, crossref.org, ' +
     'chemrxiv.org, rsc.org, acs.org, nature.com, sciencedirect.com, elsevier.com).',
+  subagents: ['deep-research'],
   schema: webSearchSchema,
   async execute(input) {
     const q = input.query.trim();

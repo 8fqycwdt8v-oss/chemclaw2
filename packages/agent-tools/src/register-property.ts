@@ -38,6 +38,7 @@ export function createRegisterPropertyTool(userId: string): ToolDef<typeof schem
       'row must have either a numeric value (value_num) or a free-text ' +
       'value (value_text). Returns the count inserted; on validation error ' +
       'returns { error } and inserts NOTHING (no partial writes).',
+    subagents: ['entity-extractor'],
     schema,
     async execute(input) {
       if (!Array.isArray(input.properties) || input.properties.length === 0) {

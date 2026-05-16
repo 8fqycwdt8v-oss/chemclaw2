@@ -29,6 +29,7 @@ export const docFetchTool: ToolDef<typeof docFetchSchema> = {
     'Fetch a scientific document from an allowed domain. format=markdown (default) ' +
     'returns stripped text, format=html returns the raw HTML (size-capped), ' +
     'format=bytes returns base64 + content-type for non-text downloads like PDFs.',
+  subagents: ['deep-research', 'contradiction-resolver'],
   schema: docFetchSchema,
   async execute(input) {
     const format = input.format ?? 'markdown';

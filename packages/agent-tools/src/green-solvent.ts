@@ -46,6 +46,7 @@ export const greenSolventTool: ToolDef<typeof schema> = {
     'Score solvent choices against green-chemistry guides (CHEM21, GSK, Pfizer, ' +
     'Sanofi, ACS). Input is an array of solvent SMILES; output is per-guide ' +
     'scores 0-10 plus safer-solvent suggestions when a solvent is red-flagged.',
+  subagents: ['deep-research'],
   schema,
   async execute(input) {
     if (!Array.isArray(input.solvents) || input.solvents.length === 0) {

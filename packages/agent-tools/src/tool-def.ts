@@ -20,6 +20,11 @@ export type ZodRawShape = Record<string, z.ZodTypeAny>;
 // The exact Zod-Object inference path. Helper alias keeps tool sites short.
 export type ToolInput<S extends ZodRawShape> = z.infer<z.ZodObject<S>>;
 
+/** Tags driving which sub-agent definitions inherit which tools. The agent
+ * builder reads each ToolDef's `subagents` tag set and derives the SDK
+ * sub-agent `tools` arrays from it — no hand-rolled allowlists in agent.ts. */
+export type SubagentTag = 'deep-research' | 'contradiction-resolver' | 'entity-extractor';
+
 export interface ToolDef<S extends ZodRawShape, R = unknown> {
   /** MCP-namespaced tool name. Must match the registered MCP tool name on
    *  the in-process server (see apps/web/lib/sdk-tools.ts). */
@@ -31,4 +36,6 @@ export interface ToolDef<S extends ZodRawShape, R = unknown> {
   schema: S;
   /** Tool implementation. Input type is inferred from the schema. */
   execute: (input: ToolInput<S>) => Promise<R>;
+  /** Sub-agents that may invoke this tool. Empty/absent = parent-agent only. */
+  subagents?: readonly SubagentTag[];
 }

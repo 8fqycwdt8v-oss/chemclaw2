@@ -23,6 +23,7 @@ export const substructureCandidatesTool: ToolDef<typeof schema> = {
     'Return up to maxCandidates compounds whose SMILES should be tested against a SMARTS pattern. ' +
     'Use mcp-molfp substructure_match per candidate to filter. ' +
     'Prefer this only when similarity search is not sufficient — substructure matching is O(N) over the registry.',
+  subagents: ['deep-research'],
   schema,
   async execute(input) {
     try {
