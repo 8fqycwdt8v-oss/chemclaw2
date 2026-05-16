@@ -13,7 +13,13 @@
  *   - ordered lists (`1.`, `2.`, ... at line start)
  *   - blockquotes (`>` at line start)
  *   - fenced code blocks (```)
- *   - inline marks: bold (`**x**`), italic (`*x*`), inline code (`` `x` ``)
+ *   - inline marks: bold (`**x**`), inline code (`` `x` ``)
+ *
+ * Italic (`*x*`) is intentionally NOT parsed: it collides with SMILES wildcard
+ * atoms (e.g. `CC*CC*CCO` would render `CC<italic>CC</italic>CCO`). The cost
+ * is that genuine markdown italic shows up with literal asterisks in the
+ * editor — acceptable for a chemistry KB where italics are uncommon and
+ * mis-parsed SMILES is a correctness issue.
  *
  * Things NOT handled (would silently flow through as plain text):
  *   - tables, images, links (kept as literal `[text](url)` for now)
@@ -23,7 +29,7 @@
  * Tiptap StarterKit covers all the emitted node types.
  */
 
-type TiptapMark = { type: 'bold' | 'italic' | 'code' };
+type TiptapMark = { type: 'bold' | 'code' };
 
 type TiptapTextNode = { type: 'text'; text: string; marks?: TiptapMark[] };
 
@@ -39,9 +45,8 @@ type TiptapBlock =
 export type TiptapDoc = { type: 'doc'; content: TiptapBlock[] };
 
 function tokenizeInline(text: string): TiptapTextNode[] {
-  // Emit text nodes with marks for bold (`**x**`), italic (`*x*`), code (`` `x` ``).
-  // Order matters: code first (no recursive parse inside), then bold, then italic.
-  // Single `*` in SMILES (no closing pair) won't match the italic regex.
+  // Emit text nodes with marks for bold (`**x**`) and inline code (`` `x` ``).
+  // Single `*` characters (SMILES wildcards) are passed through verbatim.
   const out: TiptapTextNode[] = [];
   let i = 0;
   const len = text.length;
@@ -73,7 +78,7 @@ function tokenizeInline(text: string): TiptapTextNode[] {
       if (end !== -1) {
         const inner = text.slice(i + 2, end);
         if (inner.length > 0) {
-          // Bold contents may themselves contain italic / code marks
+          // Bold contents may themselves contain code marks.
           for (const child of tokenizeInline(inner)) {
             const marks: TiptapMark[] = [{ type: 'bold' }, ...(child.marks ?? [])];
             out.push({ type: 'text', text: child.text, marks });
@@ -81,23 +86,6 @@ function tokenizeInline(text: string): TiptapTextNode[] {
         }
         i = end + 2;
         continue;
-      }
-    }
-    // Italic: *x* (must be a paired marker not adjacent to **)
-    if (text[i] === '*' && text[i + 1] !== '*' && (i === 0 || text[i - 1] !== '*')) {
-      const end = text.indexOf('*', i + 1);
-      if (end !== -1 && text[end + 1] !== '*' && end > i + 1) {
-        const inner = text.slice(i + 1, end);
-        // Reject if the inner contains whitespace at the boundaries (markdown rule
-        // — and avoids munging SMILES like `[*]`)
-        if (!/^\s|\s$/.test(inner) && !inner.includes('\n')) {
-          for (const child of tokenizeInline(inner)) {
-            const marks: TiptapMark[] = [{ type: 'italic' }, ...(child.marks ?? [])];
-            out.push({ type: 'text', text: child.text, marks });
-          }
-          i = end + 1;
-          continue;
-        }
       }
     }
     pushPlain(text[i]);

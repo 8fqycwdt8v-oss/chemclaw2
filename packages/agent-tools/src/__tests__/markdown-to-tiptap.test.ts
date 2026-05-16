@@ -51,12 +51,21 @@ describe('markdownToTiptap', () => {
     expect(codeNode?.text).toBe('CCO');
   });
 
-  it('does not parse lone asterisks in SMILES as italic', () => {
+  it('does not parse lone asterisks in SMILES brackets as marks', () => {
     const doc = markdownToTiptap('Pattern is CCN(C)C[*]CC throughout.');
     const para = doc.content[0] as Extract<typeof doc.content[0], { type: 'paragraph' }>;
     const text = (para.content ?? []).map((n) => n.text).join('');
-    expect(text).toContain('CCN(C)C[*]CC');
     expect(text).toBe('Pattern is CCN(C)C[*]CC throughout.');
+  });
+
+  it('does not parse double-wildcard SMILES as italic (R8 regression)', () => {
+    // CC*CC*CCO — two wildcard atoms — must not become CC<italic>CC</italic>CCO.
+    const doc = markdownToTiptap('SMILES CC*CC*CCO has two wildcards.');
+    const para = doc.content[0] as Extract<typeof doc.content[0], { type: 'paragraph' }>;
+    const text = (para.content ?? []).map((n) => n.text).join('');
+    expect(text).toBe('SMILES CC*CC*CCO has two wildcards.');
+    const italic = para.content?.find((n) => n.marks?.some((m) => (m as { type: string }).type === 'italic'));
+    expect(italic).toBeUndefined();
   });
 
   it('preserves [N] citation markers verbatim', () => {

@@ -11,7 +11,19 @@ export type CitationValidationResult =
   | { ok: true }
   | { ok: false; reason: string };
 
-const URL_LIKE_TYPES = new Set(['url', 'http', 'https', 'web', 'link']);
+// A citation marker in the body is `[N]` where N is purely digits.
+// Numeric-only deliberately rules out:
+//   - SMILES brackets: [nH], [CH3], [H], [Cl], [NH4], [C@H], ...
+//   - Markdown links: [paper](url)
+//   - Generic bracketed text: [fig 1], [note]
+// Agents that use non-numeric ids (e.g. [a], [REF-2024]) lose the consistency
+// check but no longer get blocked by chemistry-content false positives.
+const BODY_MARKER_RE = /\[(\d{1,4})\]/g;
+
+function looksLikeHttpUrl(s: string | undefined): s is string {
+  if (typeof s !== 'string') return false;
+  return s.startsWith('http://') || s.startsWith('https://');
+}
 
 function isAllowedCitationUrl(raw: string): boolean {
   let u: URL;
@@ -27,15 +39,13 @@ function isAllowedCitationUrl(raw: string): boolean {
 
 /**
  * Validate that:
- *   - every `[N]` marker referenced in the body has a matching citation entry
- *   - every URL-type citation points to an allowed science domain
- *   - no two citations share the same citationId (collisions break disambiguation)
+ *   - every numeric `[N]` marker in the body has a matching citation entry
+ *   - any citation whose sourceId is an http(s) URL points to an allowed
+ *     science domain — the sourceType label is not trusted because an agent
+ *     can pick any string ("doi", "paper", "pdf", ...) and bypass the guard
+ *   - no two citations share the same citationId
  *
- * Returns the first failure (agents are easier to debug with a single concrete
- * error than a list of issues). Returns `{ok: true}` if nothing is wrong.
- *
- * Note: this is intentionally strict on URL citations because they bypass the
- * doc-fetch allowlist — a rendered citation pill is a clickable outbound link.
+ * Returns the first failure. Returns `{ok: true}` if nothing is wrong.
  */
 export function validateCitations(
   body: string,
@@ -48,28 +58,24 @@ export function validateCitations(
     }
     ids.add(c.citationId);
 
-    if (URL_LIKE_TYPES.has(c.sourceType.toLowerCase())) {
-      const url = c.sourceId ?? c.label;
-      if (!isAllowedCitationUrl(url)) {
+    // Allowlist check is gated on the VALUE looking like an http URL, not on
+    // the sourceType string. The label field may also carry a URL.
+    for (const candidate of [c.sourceId, c.label]) {
+      if (looksLikeHttpUrl(candidate) && !isAllowedCitationUrl(candidate)) {
         return {
           ok: false,
-          reason: `citation "${c.citationId}" points to "${url}" which is not on the allowed science-domain list`,
+          reason: `citation "${c.citationId}" points to "${candidate}" which is not on the allowed science-domain list`,
         };
       }
     }
   }
 
-  // Collect [N] markers from the body. Match plain numeric markers; ignore
-  // [text] forms that may be markdown links.
   const referenced = new Set<string>();
-  const re = /\[([^\]\s]+)\]/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(body)) !== null) {
-    const inner = m[1];
-    // Pure numeric markers like [1], [12] — also short alphanumeric like [a]
-    if (/^[A-Za-z0-9_-]{1,20}$/.test(inner)) {
-      referenced.add(inner);
-    }
+  // Reset lastIndex defensively (BODY_MARKER_RE is module-level + /g).
+  BODY_MARKER_RE.lastIndex = 0;
+  while ((m = BODY_MARKER_RE.exec(body)) !== null) {
+    referenced.add(m[1]);
   }
   for (const marker of referenced) {
     if (!ids.has(marker)) {

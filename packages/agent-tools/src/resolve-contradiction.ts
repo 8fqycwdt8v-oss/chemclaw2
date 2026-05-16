@@ -38,15 +38,26 @@ const recordSchema = {
 
 const MAX_CONTEXT_CHARS = 800;
 
+/**
+ * Escape LIKE-pattern metacharacters (`%`, `_`, `\`) so a literal-text needle
+ * matches only itself. The wiki_citations.citation_id column is free-text from
+ * past upserts, so we can't trust it to be clean.
+ */
+function escapeLikePattern(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
 async function findChunksContainingMarker(pageId: string, marker: string) {
   // [marker] is used in the body text — search wiki_chunks.text for it.
-  // Use a parameterized LIKE rather than a regex to keep the index sniff
-  // simple; chunks containing `[N]` are the relevant context.
-  const needle = `%[${marker}]%`;
+  const needle = `%[${escapeLikePattern(marker)}]%`;
   const rows = await db
     .select({ chunkIdx: wikiChunks.chunkIdx, text: wikiChunks.text })
     .from(wikiChunks)
-    .where(and(eq(wikiChunks.pageId, pageId), sql`${wikiChunks.text} LIKE ${needle}`))
+    .where(and(
+      eq(wikiChunks.pageId, pageId),
+      sql`${wikiChunks.text} LIKE ${needle} ESCAPE '\\'`,
+    ))
+    .orderBy(wikiChunks.chunkIdx)
     .limit(3);
   return rows.map((r) => ({
     chunkIdx: r.chunkIdx,
