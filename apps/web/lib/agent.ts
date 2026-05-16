@@ -1,6 +1,7 @@
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import { scopedSessionStore } from '@chemclaw2/db/session-store';
 import { checkToolInput, checkToolOutput } from '@chemclaw2/agent-tools';
+import { resolveToolMode } from '@chemclaw2/db';
 import { buildInProcessMcpServer } from './sdk-tools';
 import { loadSkillsBlock } from './skills';
 
@@ -39,6 +40,36 @@ export function buildQueryOptions(sessionId: string, userId: string): Options {
           hooks: [
             async (input) => {
               if (input.hook_event_name !== 'PreToolUse') return {};
+
+              // J2: per-tool authorization. The deny path short-circuits before
+              // the redaction check runs — saves the redaction work on a tool
+              // we'd never allow anyway.
+              const mode = await resolveToolMode(input.tool_name, userId).catch(() => 'allow' as const);
+              if (mode === 'deny') {
+                const reason = `Tool '${input.tool_name}' is denied for this user by tool_permissions.`;
+                return {
+                  decision: 'block',
+                  reason,
+                  hookSpecificOutput: {
+                    hookEventName: 'PreToolUse',
+                    permissionDecision: 'deny',
+                    permissionDecisionReason: reason,
+                  },
+                };
+              }
+              if (mode === 'ask') {
+                // Surface as a permission ask the chat UI can render as a confirm
+                // card. (G1's plan-mode preset uses a prompt-engineered version;
+                // this is the SDK-native path.)
+                return {
+                  hookSpecificOutput: {
+                    hookEventName: 'PreToolUse',
+                    permissionDecision: 'ask',
+                    permissionDecisionReason: `Tool '${input.tool_name}' requires confirmation per tool_permissions.`,
+                  },
+                };
+              }
+
               const res = checkToolInput(
                 input.tool_name,
                 (input.tool_input ?? {}) as Record<string, unknown>,

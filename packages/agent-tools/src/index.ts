@@ -16,3 +16,4 @@ export { hazardLookupTool } from './hazard-lookup';
 export { greenSolventTool } from './green-solvent';
 export { exportReactionsAsOrd } from './ord-export';
 export { createContradictionTools } from './resolve-contradiction';
+export { createDeepResearchTools } from './deep-research';

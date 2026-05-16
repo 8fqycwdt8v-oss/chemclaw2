@@ -9,3 +9,4 @@ export * from './queries/campaigns';
 export * from './queries/sessions';
 export * from './queries/rate-limit';
 export * from './queries/feedback';
+export * from './queries/tool-permissions';
