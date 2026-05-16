@@ -52,7 +52,12 @@ export async function PUT(req: Request, { params }: { params: Promise<{ projectK
     return NextResponse.json({ error: 'projectKey must be 1-200 chars' }, { status: 400 });
   }
 
-  let body: { period?: unknown; toolCallsCap?: unknown; experimentsCap?: unknown };
+  let body: {
+    period?: unknown;
+    toolCallsCap?: unknown;
+    experimentsCap?: unknown;
+    tokensCap?: unknown;
+  };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -62,25 +67,25 @@ export async function PUT(req: Request, { params }: { params: Promise<{ projectK
   if (body.period !== 'day' && body.period !== 'week' && body.period !== 'month') {
     return NextResponse.json({ error: 'period must be day|week|month' }, { status: 400 });
   }
-  const toolCallsCap = body.toolCallsCap === null || body.toolCallsCap === undefined
-    ? null
-    : (typeof body.toolCallsCap === 'number' && Number.isInteger(body.toolCallsCap) && body.toolCallsCap >= 0
-        ? body.toolCallsCap : 'invalid');
-  if (toolCallsCap === 'invalid') {
-    return NextResponse.json({ error: 'toolCallsCap must be a non-negative integer or null' }, { status: 400 });
-  }
-  const experimentsCap = body.experimentsCap === null || body.experimentsCap === undefined
-    ? null
-    : (typeof body.experimentsCap === 'number' && Number.isInteger(body.experimentsCap) && body.experimentsCap >= 0
-        ? body.experimentsCap : 'invalid');
-  if (experimentsCap === 'invalid') {
-    return NextResponse.json({ error: 'experimentsCap must be a non-negative integer or null' }, { status: 400 });
-  }
+  const validateCap = (v: unknown, name: string): number | null | NextResponse => {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'number' && Number.isInteger(v) && v >= 0) return v;
+    return NextResponse.json(
+      { error: `${name} must be a non-negative integer or null` },
+      { status: 400 },
+    );
+  };
+  const toolCallsCap = validateCap(body.toolCallsCap, 'toolCallsCap');
+  if (toolCallsCap instanceof NextResponse) return toolCallsCap;
+  const experimentsCap = validateCap(body.experimentsCap, 'experimentsCap');
+  if (experimentsCap instanceof NextResponse) return experimentsCap;
+  const tokensCap = validateCap(body.tokensCap, 'tokensCap');
+  if (tokensCap instanceof NextResponse) return tokensCap;
 
   await upsertProjectBudget(
     projectKey,
     body.period as BudgetPeriod,
-    { toolCallsCap, experimentsCap },
+    { toolCallsCap, experimentsCap, tokensCap },
     adminUserId,
   );
   return NextResponse.json({ ok: true });

@@ -47,4 +47,45 @@ describe('chunkText', () => {
       expect(c.length).toBeLessThanOrEqual(700);
     }
   });
+
+  it('emits a markdown table as a single chunk (Wave-2c B4)', () => {
+    const md = [
+      'Some intro prose explaining what follows.',
+      '',
+      '| yield | catalyst | solvent |',
+      '|---|---|---|',
+      '| 80%   | Pd/C     | EtOH    |',
+      '| 60%   | Ni       | MeOH    |',
+      '',
+      'Closing prose paragraph.',
+    ].join('\n');
+    const chunks = chunkText(md);
+    // exactly one chunk should contain the divider row — verifies the table
+    // wasn't split into header / row / row across separate chunks.
+    const tableChunks = chunks.filter((c) => /\|---/.test(c));
+    expect(tableChunks).toHaveLength(1);
+    expect(tableChunks[0]).toContain('80%');
+    expect(tableChunks[0]).toContain('60%');
+    expect(tableChunks[0]).toContain('catalyst');
+  });
+
+  it('still splits prose surrounding a table normally', () => {
+    // Each prose paragraph must exceed the > 10 char filter in pushWithOverlap.
+    const md = [
+      'Paragraph A discusses the experimental setup at length.',
+      '',
+      '| x | y |',
+      '|---|---|',
+      '| 1 | 2 |',
+      '',
+      'Paragraph B discusses the observed outcomes at length.',
+    ].join('\n');
+    const chunks = chunkText(md);
+    // prose A, table, prose B — table must be its own chunk; prose chunks
+    // must NOT contain the table divider.
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    const proseChunks = chunks.filter((c) => !/\|---/.test(c));
+    expect(proseChunks.some((c) => c.includes('Paragraph A'))).toBe(true);
+    expect(proseChunks.some((c) => c.includes('Paragraph B'))).toBe(true);
+  });
 });

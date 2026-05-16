@@ -5,6 +5,24 @@ import { randomUUID } from 'crypto';
 const encoder = new TextEncoder();
 const LOOP_THRESHOLD = 3;
 
+/**
+ * Wave-2c: SDK emits a single `result` message at end-of-stream containing
+ * total usage + cost. The chat route uses this to persist token spend into
+ * project_budget_spend.
+ */
+export type AgentStreamResult = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreateTokens: number;
+  totalCostUsd: number;
+  isError: boolean;
+};
+
+export type AgentStreamOptions = {
+  onResult?: (result: AgentStreamResult) => void | Promise<void>;
+};
+
 function sseEvent(data: unknown): Uint8Array {
   return encoder.encode(`data: ${JSON.stringify(data)}\n\n`);
 }
@@ -30,13 +48,42 @@ function makeLoopDetector() {
   };
 }
 
+type SDKResultLike = {
+  type: 'result';
+  subtype?: string;
+  is_error?: boolean;
+  total_cost_usd?: number;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
+};
+
+function extractResult(event: unknown): AgentStreamResult | null {
+  const e = event as SDKResultLike;
+  if (!e || e.type !== 'result' || !e.usage) return null;
+  return {
+    inputTokens: e.usage.input_tokens ?? 0,
+    outputTokens: e.usage.output_tokens ?? 0,
+    cacheReadTokens: e.usage.cache_read_input_tokens ?? 0,
+    cacheCreateTokens: e.usage.cache_creation_input_tokens ?? 0,
+    totalCostUsd: e.total_cost_usd ?? 0,
+    isError: e.is_error === true,
+  };
+}
+
 export async function* runAgentQuery(
   prompt: string,
   options: Options,
+  onResult?: (r: AgentStreamResult) => void,
 ): AsyncGenerator<Uint8Array> {
   const detect = makeLoopDetector();
   for await (const event of query({ prompt, options })) {
     yield sseEvent(event);
+    const result = extractResult(event);
+    if (result && onResult) onResult(result);
     const message = (event as { message?: { content?: unknown[] } }).message;
     if (message && Array.isArray(message.content)) {
       for (const block of message.content as Array<Record<string, unknown>>) {
@@ -54,11 +101,16 @@ export async function* runAgentQuery(
   }
 }
 
-export function agentToStream(prompt: string, options: Options): ReadableStream<Uint8Array> {
+export function agentToStream(
+  prompt: string,
+  options: Options,
+  streamOpts: AgentStreamOptions = {},
+): ReadableStream<Uint8Array> {
   return new ReadableStream({
     async start(controller) {
+      let lastResult: AgentStreamResult | null = null;
       try {
-        for await (const chunk of runAgentQuery(prompt, options)) {
+        for await (const chunk of runAgentQuery(prompt, options, (r) => { lastResult = r; })) {
           controller.enqueue(chunk);
         }
         // [DONE] only on success — clients stop reading at this sentinel
@@ -70,6 +122,13 @@ export function agentToStream(prompt: string, options: Options): ReadableStream<
         console.error({ errorId, err });
         controller.enqueue(sseEvent({ type: 'error', message: 'Request failed', errorId }));
       } finally {
+        // Wave-2c: surface end-of-stream usage to the caller for budget
+        // accounting. Run AFTER the [DONE] sentinel is sent so a slow DB
+        // write doesn't delay the client closing the connection.
+        if (lastResult && streamOpts.onResult) {
+          try { await streamOpts.onResult(lastResult); }
+          catch (err) { console.error('[stream] onResult callback failed:', err); }
+        }
         controller.close();
       }
     },
