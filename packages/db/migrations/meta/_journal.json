@@ -38,6 +38,7 @@
     { "idx": 21, "version": "7", "when": 1749134400000, "tag": "0022_session_cascade_cleanup", "breakpoints": true },
     { "idx": 22, "version": "7", "when": 1749220800000, "tag": "0023_budget_caps", "breakpoints": true },
     { "idx": 23, "version": "7", "when": 1749307200000, "tag": "0024_agent_todos", "breakpoints": true },
-    { "idx": 24, "version": "7", "when": 1749393600000, "tag": "0025_schema_cleanup_and_indexes", "breakpoints": true }
+    { "idx": 24, "version": "7", "when": 1749393600000, "tag": "0025_schema_cleanup_and_indexes", "breakpoints": true },
+    { "idx": 25, "version": "7", "when": 1749480000000, "tag": "0026_knowledge_persistence", "breakpoints": true }
   ]
 }
