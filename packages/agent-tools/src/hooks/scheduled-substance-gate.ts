@@ -27,15 +27,17 @@ function normalizeForGate(s: string): string {
  * attack (substance in a prior message, synthesis verb in the current one)
  * is not caught here. See BACKLOG for the architectural mitigation.
  */
-export function scheduledSubstanceGate(prompt: string): { blocked: boolean; reason?: string } {
+export function scheduledSubstanceGate(prompt: string): { blocked: boolean; reason?: string; matched: boolean } {
   const normalized = normalizeForGate(prompt);
-  if (CONTROLLED_SUBSTANCE_NAMES.test(normalized) && SYNTHESIS_VERBS.test(normalized)) {
+  const matched = CONTROLLED_SUBSTANCE_NAMES.test(normalized) && SYNTHESIS_VERBS.test(normalized);
+  if (matched) {
     return {
       blocked: true,
+      matched: true,
       reason: 'Request blocked: synthesis instructions for scheduled/controlled substances are not permitted.',
     };
   }
-  return { blocked: false };
+  return { blocked: false, matched: false };
 }
 
 export { normalizeForGate };

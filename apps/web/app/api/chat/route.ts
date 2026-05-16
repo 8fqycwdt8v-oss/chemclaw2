@@ -3,11 +3,13 @@ import { auth } from '@/lib/auth';
 import { buildQueryOptions } from '@/lib/agent';
 import { agentToStream } from '@/lib/streaming';
 import { scheduledSubstanceGate } from '@chemclaw2/agent-tools';
+import { recordOverride } from '@chemclaw2/db';
 import { randomUUID } from 'crypto';
 import { rateLimit } from '@/lib/rate-limit';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PROMPT_BYTES = 32_768;
+const MAX_JUSTIFICATION_LEN = 2000;
 const RATE_LIMIT_REQUESTS = 20;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
@@ -25,7 +27,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let body: { prompt?: unknown; sessionId?: unknown };
+  let body: { prompt?: unknown; sessionId?: unknown; override_justification?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -40,17 +42,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'prompt too large' }, { status: 413 });
   }
 
-  // Safety: block prompts containing scheduled substance synthesis terms
-  const gate = scheduledSubstanceGate(prompt);
-  if (gate.blocked) {
-    return NextResponse.json({ error: gate.reason }, { status: 403 });
-  }
-
   // Validate client-supplied sessionId to prevent header injection; fall back to fresh UUID
   const sessionId =
     typeof body.sessionId === 'string' && UUID_RE.test(body.sessionId)
       ? body.sessionId
       : randomUUID();
+
+  // Scheduled-substance gate: blocks by default. An authenticated user may
+  // supply override_justification (≥20 chars) to bypass — the justification
+  // and a prompt hash are recorded BEFORE the agent runs (append-only).
+  const gate = scheduledSubstanceGate(prompt);
+  if (gate.blocked) {
+    const justification = typeof body.override_justification === 'string'
+      ? body.override_justification.trim()
+      : '';
+    if (justification.length < 20 || justification.length > MAX_JUSTIFICATION_LEN) {
+      return NextResponse.json({
+        error: gate.reason,
+        override_available: true,
+        override_hint: 'Provide override_justification (20-2000 chars) to proceed with this request.',
+      }, { status: 403 });
+    }
+    await recordOverride(sessionId, userId, 'scheduled_substance', justification, prompt);
+  }
 
   const options = buildQueryOptions(sessionId, userId);
   const stream = agentToStream(prompt.trim(), options);

@@ -8,3 +8,4 @@ export * from './queries/wiki';
 export * from './queries/campaigns';
 export * from './queries/sessions';
 export * from './queries/rate-limit';
+export * from './queries/feedback';

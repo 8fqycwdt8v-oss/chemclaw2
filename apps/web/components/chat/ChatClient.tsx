@@ -59,7 +59,7 @@ export function ChatClient() {
   }, [messages]);
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, overrideJustification?: string) => {
       const trimmed = text.trim();
       if (!trimmed || streaming) return;
       setInput('');
@@ -79,9 +79,27 @@ export function ChatClient() {
           body: JSON.stringify({
             prompt: trimmed,
             sessionId: sessionIdRef.current ?? undefined,
+            ...(overrideJustification ? { override_justification: overrideJustification } : {}),
           }),
           signal: controller.signal,
         });
+        if (res.status === 403) {
+          const body = (await res.json().catch(() => null)) as
+            | { error?: string; override_available?: boolean; override_hint?: string }
+            | null;
+          if (body?.override_available && !overrideJustification) {
+            const j = prompt(`${body.error}\n\n${body.override_hint}\n\nProvide justification:`);
+            if (j && j.trim().length >= 20) {
+              setMessages((m) => m.slice(0, -2));
+              setStreaming(false);
+              abortRef.current = null;
+              await send(text, j.trim());
+              return;
+            }
+          }
+          setMessages((m) => [...m, { role: 'error', text: body?.error ?? 'Forbidden' }]);
+          return;
+        }
         if (!res.ok || !res.body) {
           const err = await res.text().catch(() => 'request failed');
           setMessages((m) => [...m, { role: 'error', text: err }]);
@@ -192,6 +210,28 @@ export function ChatClient() {
     abortRef.current?.abort();
   };
 
+  const presetFeedback = async (score: 1 | -1) => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) {
+      setMessages((m) => [...m, { role: 'error', text: 'No active session to grade.' }]);
+      return;
+    }
+    // turnIndex = number of completed assistant messages (the most-recent one is the one being graded)
+    const turnIndex = messages.filter((mm) => mm.role === 'assistant').length - 1;
+    if (turnIndex < 0) return;
+    const reason = window.prompt(`Reason (optional) for ${score === 1 ? '👍' : '👎'}:`) ?? null;
+    try {
+      const res = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, turnIndex, score, reason }),
+      });
+      if (!res.ok) throw new Error(`Feedback failed (${res.status})`);
+    } catch (err) {
+      setMessages((m) => [...m, { role: 'error', text: (err as Error).message }]);
+    }
+  };
+
   const presetAnalytical = () => {
     const technique = prompt('Technique (NMR / MS / IR):');
     if (!technique) return;
@@ -255,6 +295,24 @@ export function ChatClient() {
           disabled={streaming}
         >
           Approve next step
+        </button>
+        <button
+          type="button"
+          onClick={() => void presetFeedback(1)}
+          className="text-xs px-2 py-1 border rounded text-slate-700 hover:bg-slate-50"
+          disabled={streaming || messages.filter((mm) => mm.role === 'assistant').length === 0}
+          title="Grade the most recent assistant turn 👍"
+        >
+          👍
+        </button>
+        <button
+          type="button"
+          onClick={() => void presetFeedback(-1)}
+          className="text-xs px-2 py-1 border rounded text-slate-700 hover:bg-slate-50"
+          disabled={streaming || messages.filter((mm) => mm.role === 'assistant').length === 0}
+          title="Grade the most recent assistant turn 👎"
+        >
+          👎
         </button>
         <textarea
           value={input}

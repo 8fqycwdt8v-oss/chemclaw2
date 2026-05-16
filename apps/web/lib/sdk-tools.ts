@@ -11,6 +11,7 @@ import {
   substructureCandidatesTool,
   interpretAnalyticalResultTool,
   createWikiUpsertTool,
+  hazardLookupTool,
 } from '@chemclaw2/agent-tools';
 import { embedText, embedTexts } from './embeddings';
 
@@ -67,8 +68,19 @@ const docFetch = tool(
   docFetchTool.description,
   {
     url: z.string().url().describe('URL from an approved science domain'),
+    format: z.enum(['markdown', 'html', 'bytes']).optional().describe('Output format (default markdown)'),
   },
   async (args) => toMcpText(await docFetchTool.execute(args)),
+);
+
+const hazardLookup = tool(
+  hazardLookupTool.name,
+  hazardLookupTool.description,
+  {
+    cas_or_smiles: z.string(),
+    kind: z.enum(['cas', 'smiles']),
+  },
+  async (args) => toMcpText(await hazardLookupTool.execute(args)),
 );
 
 const elnFetch = tool(
@@ -160,6 +172,7 @@ export function buildInProcessMcpServer(userId: string) {
       webSearch,
       docFetch,
       elnFetch,
+      hazardLookup,
       substructureCandidates,
       interpretAnalyticalResult,
       startCampaign,
