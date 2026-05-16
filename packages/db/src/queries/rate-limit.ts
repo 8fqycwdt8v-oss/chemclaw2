@@ -26,7 +26,7 @@ export async function pgRateLimit(
       })
       .returning({ count: rateLimits.count });
 
-    return { limited: row.count > maxRequests };
+    return { limited: row.count >= maxRequests };
   } catch {
     // Fail open — a DB outage should degrade gracefully, not block all users.
     return { limited: false };
