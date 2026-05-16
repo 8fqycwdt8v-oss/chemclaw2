@@ -23,10 +23,10 @@ ALTER TABLE agent_todos ENABLE ROW LEVEL SECURITY;
 CREATE POLICY agent_todos_all ON agent_todos FOR ALL USING (true) WITH CHECK (true);
 
 -- Extend the session cascade trigger from 0022 to also remove todos.
+-- agent_overrides intentionally NOT swept — see 0022 (compliance evidence).
 CREATE OR REPLACE FUNCTION cascade_session_audit_rows() RETURNS TRIGGER AS $$
 BEGIN
   DELETE FROM agent_feedback WHERE session_id = OLD.session_id;
-  DELETE FROM agent_overrides WHERE session_id = OLD.session_id;
   DELETE FROM agent_todos WHERE session_id = OLD.session_id;
   RETURN OLD;
 END;

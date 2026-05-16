@@ -57,7 +57,12 @@ export function buildQueryOptions(sessionId: string, userId: string): Options {
               const exceeded = await checkBudgetWouldExceed(projectKey, {
                 toolCalls: 1,
                 experiments: isExperiment ? 1 : 0,
-              }).catch(() => null);
+              }).catch((err) => {
+                // Fail-open is the right product call (don't take the agent down
+                // on a budget table misconfig) but stay loud so it surfaces.
+                console.error('[agent] budget check failed:', err);
+                return null;
+              });
               if (exceeded) {
                 const reason =
                   `Budget cap reached: ${exceeded.exceeded} (${exceeded.current}/${exceeded.cap}). ` +
@@ -136,10 +141,14 @@ export function buildQueryOptions(sessionId: string, userId: string): Options {
             async (input) => {
               if (input.hook_event_name !== 'PostToolUse') return {};
 
-              // v2.1-D3: accumulate spend after a successful tool call. If no
-              // budget is configured we skip the increment write entirely —
-              // measuring users who never set a cap is dead weight.
-              const budget = await getProjectBudget(projectKey).catch(() => null);
+              // v2.1-D3: accumulate spend after every tool invocation (success
+              // or error — the cost has already been paid). If no budget is
+              // configured we skip the increment write entirely; measuring
+              // users who never set a cap is dead weight.
+              const budget = await getProjectBudget(projectKey).catch((err) => {
+                console.error('[agent] getProjectBudget failed:', err);
+                return null;
+              });
               if (budget) {
                 const isExperiment = EXPERIMENT_TOOLS.has(input.tool_name);
                 await incrementSpend(projectKey, budget.period, {

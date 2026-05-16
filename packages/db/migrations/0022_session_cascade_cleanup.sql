@@ -13,11 +13,11 @@
 CREATE OR REPLACE FUNCTION cascade_session_audit_rows() RETURNS TRIGGER AS $$
 BEGIN
   DELETE FROM agent_feedback WHERE session_id = OLD.session_id;
-  -- Note: agent_overrides is *also* swept here. Compliance evidence remains
-  -- available via the audit_log JSONB snapshot if the override happened on a
-  -- still-live session row; deleting the session itself is the user's signal
-  -- to drop the override record as well.
-  DELETE FROM agent_overrides WHERE session_id = OLD.session_id;
+  -- agent_overrides is intentionally NOT swept. Migration 0016 deliberately
+  -- omits any UPDATE/DELETE policy on agent_overrides, making it append-only
+  -- for compliance evidence (a scheduled-substance gate override must persist
+  -- past the session that triggered it). The trigger runs with table-owner
+  -- privilege and would otherwise bypass that intent — leave overrides alone.
   RETURN OLD;
 END;
 $$ LANGUAGE plpgsql;

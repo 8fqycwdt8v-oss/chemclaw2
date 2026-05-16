@@ -91,6 +91,19 @@ describe('resolveToolMode precedence', () => {
     expect(mocks.insertCalls).toHaveLength(1);
   });
 
+  it('invalidates correctly when scope ids contain colons (regression for cache-key delimiter)', async () => {
+    // The agent's projectKey is `chemclaw2:<userId>` — exactly the shape that
+    // would foot-gun a `:` cache-key delimiter. Verify invalidation still hits.
+    const colonyId = 'chemclaw2:user_alice';
+    mocks.selectQueue.push([{ scope: 'user', scopeId: colonyId, mode: 'allow' }]);
+    expect(await resolveToolMode('web_search', colonyId)).toBe('allow');
+
+    await setToolPermission('user', colonyId, 'web_search', 'deny', 'admin_user');
+
+    mocks.selectQueue.push([{ scope: 'user', scopeId: colonyId, mode: 'deny' }]);
+    expect(await resolveToolMode('web_search', colonyId)).toBe('deny');
+  });
+
   it('org-scope invalidation clears every cache entry for the tool', async () => {
     // Prime: two users each get a resolution.
     mocks.selectQueue.push([{ scope: 'user', scopeId: 'user_a', mode: 'allow' }]);
