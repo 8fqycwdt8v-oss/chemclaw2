@@ -9,6 +9,7 @@ import {
   createWikiFetchTool,
   createSynthesisCampaignTools,
   substructureCandidatesTool,
+  interpretAnalyticalResultTool,
 } from '@chemclaw2/agent-tools';
 import { embedText } from './embeddings';
 
@@ -87,6 +88,18 @@ const substructureCandidates = tool(
   async (args) => toMcpText(await substructureCandidatesTool.execute(args)),
 );
 
+const interpretAnalyticalResult = tool(
+  interpretAnalyticalResultTool.name,
+  interpretAnalyticalResultTool.description,
+  {
+    technique: z.enum(['NMR', 'MS', 'IR']),
+    observations: z.string().describe('Observed peaks / fragments / signals (free text)'),
+    proposed_structure_smiles: z.string().optional(),
+    proposed_fingerprint_bits: z.string().optional(),
+  },
+  async (args) => toMcpText(await interpretAnalyticalResultTool.execute(args)),
+);
+
 export function buildInProcessMcpServer(userId: string) {
   const campaign = createSynthesisCampaignTools(userId);
   const startCampaign = tool(
@@ -124,6 +137,7 @@ export function buildInProcessMcpServer(userId: string) {
       docFetch,
       elnFetch,
       substructureCandidates,
+      interpretAnalyticalResult,
       startCampaign,
       confirmCampaign,
       kickoffCampaign,
