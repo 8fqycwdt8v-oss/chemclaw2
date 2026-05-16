@@ -1,4 +1,5 @@
 import { upsertWikiPage } from '@chemclaw2/db';
+import { isValidSlug } from './slug';
 
 /**
  * Deep research: a two-tool workflow the agent runs to produce a structured
@@ -92,8 +93,8 @@ export function createDeepResearchTools(
       body: string;
       citations?: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>;
     }) {
-      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.slug) || input.slug.length > 200) {
-        return { error: 'slug must be lowercase kebab-case, ≤200 chars' };
+      if (!isValidSlug(input.slug)) {
+        return { error: 'slug must be lowercase kebab-case, ≤200 chars, and not reserved' };
       }
       if (input.title.length === 0 || input.title.length > 500) return { error: 'title 1-500 chars' };
       if (input.body.length === 0 || input.body.length > 500_000) return { error: 'body too large' };

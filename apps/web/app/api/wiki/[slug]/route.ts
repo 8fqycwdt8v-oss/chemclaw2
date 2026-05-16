@@ -1,4 +1,4 @@
-import { auth } from '@clerk/nextjs/server';
+import { auth, currentUser } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { getWikiPage, getWikiPageCitations, upsertWikiPage, updateWikiMetadata } from '@chemclaw2/db';
 import { embedTexts } from '../../../../lib/embeddings';
@@ -153,6 +153,27 @@ export async function PATCH(
   }
   if (Object.keys(patch).length === 0) {
     return NextResponse.json({ error: 'no metadata fields provided' }, { status: 400 });
+  }
+
+  // Followup #8: lifecycle changes (archive, maturity demotion/promotion,
+  // project reassignment) are curation actions — restrict to the page's
+  // original creator or an admin. needsReview alone is collaborative-OK
+  // because it's the "flag for attention" affordance any chemist needs.
+  const isLifecycleEdit =
+    patch.archived !== undefined ||
+    patch.maturity !== undefined ||
+    patch.project !== undefined;
+  if (isLifecycleEdit) {
+    const existing = await getWikiPage(slug);
+    if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    const user = await currentUser();
+    const role = (user?.publicMetadata as { role?: string } | undefined)?.role;
+    if (existing.createdBy !== userId && role !== 'admin') {
+      return NextResponse.json(
+        { error: 'Forbidden — lifecycle changes require page ownership or admin role' },
+        { status: 403 },
+      );
+    }
   }
 
   const { found } = await updateWikiMetadata(slug, userId, patch);

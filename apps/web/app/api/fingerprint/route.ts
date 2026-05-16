@@ -1,6 +1,6 @@
-import { auth } from '@/lib/auth';
+import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { callMcpTool } from '@/lib/mcp';
+import { callMcpTool } from '@chemclaw2/agent-tools';
 import { rateLimit } from '@/lib/rate-limit';
 
 const MAX_SMILES_LEN = 2000;

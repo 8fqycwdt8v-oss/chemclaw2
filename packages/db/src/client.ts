@@ -1,7 +1,5 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
-import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
-import { AsyncLocalStorage } from 'node:async_hooks';
 import * as schema from './schema/index';
 
 // Lazy initialization: defer validation until first DB call so Next.js
@@ -34,19 +32,3 @@ export function getPgClient() {
 
 // Named export alias for legacy callers that import pgClient directly.
 export { getPgClient as pgClient };
-
-// Tracks whether we're already inside a withUserContext transaction.
-// Nested calls would start a savepoint where SET LOCAL is lost on savepoint rollback.
-const userContextStore = new AsyncLocalStorage<boolean>();
-
-export async function withUserContext<T>(userId: string, fn: (tx: typeof db) => Promise<T>): Promise<T> {
-  if (userContextStore.getStore()) {
-    throw new Error('withUserContext called inside an existing withUserContext — nesting is not supported');
-  }
-  return userContextStore.run(true, () =>
-    getDb().transaction(async (tx) => {
-      await tx.execute(sql`SET LOCAL app.current_user_id = ${userId}`);
-      return fn(tx as unknown as typeof db);
-    }),
-  );
-}

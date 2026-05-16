@@ -1,6 +1,5 @@
 import { getWikiPage, searchWikiByFTS, semanticSearchWiki } from '@chemclaw2/db';
-
-const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+import { isValidSlug } from './slug';
 
 type EmbedFn = (text: string) => Promise<number[]>;
 
@@ -9,7 +8,7 @@ async function executeWikiLookup(
   embedFn?: EmbedFn,
 ) {
   if (input.slug) {
-    if (!SLUG_RE.test(input.slug) || input.slug.length > 200) {
+    if (!isValidSlug(input.slug)) {
       return { error: 'Invalid slug format' };
     }
     const page = await getWikiPage(input.slug);

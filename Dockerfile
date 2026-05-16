@@ -59,6 +59,9 @@ USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
+# Followup #15: pin SKILLS_DIR so loadSkillsBlock() doesn't depend on what
+# cwd Next launches server.js from. The COPY above lands files at /app/skills.
+ENV SKILLS_DIR=/app/skills
 
 # Process selected by Fly via [processes] in fly.toml.
 # Default to the web app for local docker run.

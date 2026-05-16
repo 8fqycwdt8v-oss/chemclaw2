@@ -4,22 +4,21 @@ import { join } from 'node:path';
 const SKILLS_DIR = process.env.SKILLS_DIR ?? join(process.cwd(), '..', '..', 'skills');
 
 /**
- * Load all skill packs from disk on first call (then cache). Each skill is a
- * directory under `skills/` containing a `skill.md` file. The full body of
- * every skill.md is concatenated into a single Skills section that gets
- * appended to the system prompt.
+ * Load all skill packs from disk. Each skill is a directory under `skills/`
+ * containing a `skill.md` file. The full body of every skill.md is
+ * concatenated into a single Skills section that gets appended to the system
+ * prompt.
  *
  * Returns an empty string when the directory is absent — keeps the agent
- * functional in environments where skills aren't shipped (e.g. test).
+ * functional in test environments where skills aren't shipped.
+ *
+ * Followup #10: was cached for the lifetime of the Node process; saved
+ * skills (POST /api/skills writes a new file) became invisible until image
+ * rebuild. Disk I/O per chat turn is a handful of files — fine for the
+ * expected traffic load. Drop the cache.
  */
-let cached: string | null = null;
-
 export function loadSkillsBlock(): string {
-  if (cached !== null) return cached;
-  if (!existsSync(SKILLS_DIR)) {
-    cached = '';
-    return cached;
-  }
+  if (!existsSync(SKILLS_DIR)) return '';
   const entries = readdirSync(SKILLS_DIR, { withFileTypes: true })
     .filter((e) => e.isDirectory())
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -33,6 +32,5 @@ export function loadSkillsBlock(): string {
       // Skip individual unreadable skills; an operator should notice via logs.
     }
   }
-  cached = parts.length === 0 ? '' : '\n\n## Skills available\n\n' + parts.join('\n\n---\n\n');
-  return cached;
+  return parts.length === 0 ? '' : '\n\n## Skills available\n\n' + parts.join('\n\n---\n\n');
 }

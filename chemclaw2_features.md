@@ -163,13 +163,13 @@ CI/CD	GitHub Actions	Standard.
 Two deterministic fingerprint families cover the v1 chemistry-search needs:
 
 What	Method	Library	Storage	Similarity
-Molecule	Morgan / ECFP4 circular fingerprint, radius 2, 2048-bit	RDKit (Python)	compounds.morgan_fp bit(2048) mirrored to pgvector as vector(2048) for HNSW indexing	Tanimoto on bit columns; cosine on vector column (Tanimoto-adjacent for nearest-neighbor ranking)
-Reaction	DRFP differential reaction fingerprint, 2048-bit	drfp PyPI package	reactions.drfp_fp bit(2048) mirrored to pgvector as vector(2048)	Same
+Molecule	Morgan / ECFP4 circular fingerprint, radius 2, 2048-bit	RDKit (Python)	compounds.morgan_fp bit(2048) with HNSW (bit_hamming_ops) for nearest-neighbor pre-filter	Tanimoto on bit columns for exact re-rank; Hamming HNSW for pre-filter
+Reaction	DRFP differential reaction fingerprint, 2048-bit	drfp PyPI package	reactions.drfp_fp bit(2048) with HNSW (bit_hamming_ops)	Same
 Substructure	RDKit SMARTS matching	RDKit (Python) via MCP tool	Computed at query time over filtered candidate set	n/a (binary match)
 Why this stack:
 
 Both methods are deterministic and library-shipped. No model training, no GPU, no embeddings infrastructure. RDKit + DRFP are both pip-installable.
-Both produce bit vectors. Storage as bit(2048) enables native Tanimoto via SQL (bit_count(a & b)::float / bit_count(a | b)); mirror to pgvector(2048) for HNSW-indexed approximate nearest-neighbor queries when the table is large.
+Both produce bit vectors. Storage as bit(2048) enables native Tanimoto via SQL (bit_count(a & b)::float / bit_count(a | b)); HNSW with the bit_hamming_ops opclass (pgvector ≥0.7) indexes the bit columns directly for approximate nearest-neighbor pre-filtering — no separate vector(2048) mirror column is needed.
 No new infrastructure. Fingerprinting happens in two small MCP servers (mcp-molfp, mcp-rxnfp) — each ~100 LOC of Python. Vectorization is async via pg-boss after row insert; users don't wait.
 Substructure search is a separate, optional path. Most queries use similarity; substructure is a slower SMARTS-match path over a candidate set narrowed by metadata + fingerprint.
 If pgvector ever proves insufficient (millions of compounds, demanding latency), the upgrade path is the RDKit Postgres cartridge (rdkit-postgres) — native chemistry types and operators in SQL. Defer until measured.
@@ -266,7 +266,7 @@ The team has been able to take vacations.
 9. First-90-days plan
 Weeks 1–2. Next.js + Postgres (with pgvector extension enabled) + Auth + Claude Agent SDK. One /api/chat route. Session persistence via SDK Postgres adapter. Langfuse wired. Hosted on Fly.io.
 
-Weeks 3–4. Compound and reaction tables with bit(2048) fingerprint columns + pgvector mirror columns + HNSW indexes. Two MCP servers: mcp-molfp (RDKit Morgan/ECFP) and mcp-rxnfp (DRFP). pg-boss worker that fingerprints rows on insert. Three agent tools: find_similar_molecules, find_similar_reactions, find_substructure_matches.
+Weeks 3–4. Compound and reaction tables with bit(2048) fingerprint columns indexed via HNSW (bit_hamming_ops). Two MCP servers: mcp-molfp (RDKit Morgan/ECFP) and mcp-rxnfp (DRFP). pg-boss worker that fingerprints rows on insert. Three agent tools: find_similar_molecules, find_similar_reactions, find_substructure_matches.
 
 Weeks 5–6. Wiki: Postgres articles + revisions + citations tables. Tiptap editor in Next.js. Read / edit / list / search routes. Citation pills as a Tiptap extension. Wiki chunk embeddings stored in pgvector for semantic wiki search.
 

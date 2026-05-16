@@ -47,12 +47,16 @@ export async function updateCampaignStatusForUser(
   return { found: rows.length > 0 };
 }
 
-export async function getCampaignBySession(sessionId: string) {
+// userId is required: prevents an attacker who guesses or knows another
+// user's session UUID from reading their active campaign (cross-tenant IDOR
+// disclosure of target_smiles + status).
+export async function getCampaignBySession(sessionId: string, userId: string) {
   const [row] = await db
     .select()
     .from(synthesisCampaigns)
     .where(and(
       eq(synthesisCampaigns.sessionId, sessionId),
+      eq(synthesisCampaigns.createdBy, userId),
       notInArray(synthesisCampaigns.status, [...TERMINAL_STATUSES]),
     ))
     .orderBy(desc(synthesisCampaigns.createdAt))

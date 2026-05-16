@@ -7,7 +7,7 @@ import {
   listCompoundsForSubstructure,
 } from '@chemclaw2/db';
 import { rateLimit } from '@/lib/rate-limit';
-import { callMcpTool } from '@/lib/mcp';
+import { callMcpTool } from '@chemclaw2/agent-tools';
 
 const MAX_QUERY_LEN = 500;
 const MAX_SMARTS_LEN = 500;
