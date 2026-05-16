@@ -13,7 +13,6 @@ import {
   createWikiUpsertTool,
   hazardLookupTool,
   greenSolventTool,
-  nmrPredictTool,
   createContradictionTools,
 } from '@chemclaw2/agent-tools';
 import { embedText, embedTexts } from './embeddings';
@@ -93,16 +92,6 @@ const greenSolvent = tool(
     solvents: z.array(z.string()).describe('SMILES of solvents to score'),
   },
   async (args) => toMcpText(await greenSolventTool.execute(args)),
-);
-
-const nmrPredict = tool(
-  nmrPredictTool.name,
-  nmrPredictTool.description,
-  {
-    smiles: z.string(),
-    nucleus: z.enum(['1H', '13C']).optional(),
-  },
-  async (args) => toMcpText(await nmrPredictTool.execute(args)),
 );
 
 const elnFetch = tool(
@@ -220,7 +209,6 @@ export function buildInProcessMcpServer(userId: string) {
       elnFetch,
       hazardLookup,
       greenSolvent,
-      nmrPredict,
       readTwoCitations,
       recordContradiction,
       substructureCandidates,
