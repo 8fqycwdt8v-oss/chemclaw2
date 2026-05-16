@@ -6,3 +6,4 @@
 - [wiki/editor] WikiEditor beforeunload guard covers hard browser navigation only; Next.js App Router client-side navigation (Link, router.push) does not fire beforeunload — guard SPA navigation via navigation.addEventListener('navigate', ...) when App Router exposes a stable hook API
 - [api/wiki] upsertWikiPage: version column declared in wiki_pages schema but never incremented on update — inert until optimistic concurrency is added
 - [api/wiki] upsertWikiPage: embedFn output length not validated against chunks.length; mismatch produces undefined embedded to DB insert
+- [campaigns] updateCampaignStatus in packages/db/src/queries/campaigns.ts has no terminal-state guard; can overwrite complete/failed status unconditionally

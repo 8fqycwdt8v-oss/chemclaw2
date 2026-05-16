@@ -31,8 +31,7 @@ export const webSearchTool = {
       if (!/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(input.site_filter)) {
         return { results: [], error: 'Invalid site_filter: must be a bare hostname (e.g. pubmed.ncbi.nlm.nih.gov)' };
       }
-      const normalizedFilter = input.site_filter.toLowerCase();
-      if (!isAllowedSiteFilter(normalizedFilter)) {
+      if (!isAllowedSiteFilter(input.site_filter.toLowerCase())) {
         return { results: [], error: `site_filter '${input.site_filter}' is not in the approved domain list` };
       }
     }

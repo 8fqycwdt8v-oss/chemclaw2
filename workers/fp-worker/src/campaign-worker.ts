@@ -79,12 +79,15 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
             .from(campaignSteps)
             .where(and(eq(campaignSteps.campaignId, claimed.campaignId), ne(campaignSteps.status, 'complete')));
           if (remaining.length === 0) {
-            // Guard: only complete if not already in a terminal state (failed or complete)
-            await db.update(synthesisCampaigns).set({ status: 'complete' }).where(
+            // Guard: only complete if not already in a terminal state (failed or complete).
+            // .returning() gives an empty array when the WHERE predicate was false, so the
+            // wiki enqueue only fires on an actual status transition.
+            const updated = await db.update(synthesisCampaigns).set({ status: 'complete' }).where(
               and(eq(synthesisCampaigns.id, campaign.id), notInArray(synthesisCampaigns.status, ['complete', 'failed'])),
-            );
-            // Enqueue wiki page creation; singletonKey prevents duplicate pages per campaign
-            await boss.send('create-campaign-wiki', { campaignId: campaign.id }, { singletonKey: campaign.id }).catch(() => {});
+            ).returning({ id: synthesisCampaigns.id });
+            if (updated.length > 0) {
+              await boss.send('create-campaign-wiki', { campaignId: campaign.id }, { singletonKey: campaign.id }).catch(() => {});
+            }
           }
         }
       } catch (err) {
