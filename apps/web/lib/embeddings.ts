@@ -27,19 +27,31 @@ export async function embedText(text: string): Promise<number[]> {
  * before the call so the model doesn't waste tokens on `**`/`#`/backticks etc.
  * Returns vectors in the same order and length as the input — empty/whitespace
  * inputs throw rather than silently desync the index alignment.
+ *
+ * Wave-1 D4: cap each upstream request at MAX_BATCH chunks. A 500k-char wiki
+ * page yields ~400 chunks; without the cap a single request approaches the
+ * OpenAI per-call limit and any future chunker change that lifts the chunk
+ * count would silently break. Split-and-merge keeps order intact.
  */
+const MAX_BATCH = 100;
+
 export async function embedTexts(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
   const stripped = texts.map(stripMarkdownForEmbedding);
   const inputs = prepareEmbeddingInputs(stripped);
-  const res = await getClient().embeddings.create({ model: EMBED_MODEL, input: inputs });
-  if (res.data.length !== inputs.length) {
-    throw new Error(`embedTexts: model returned ${res.data.length} vectors for ${inputs.length} inputs`);
-  }
-  return res.data.map((d) => {
-    if (d.embedding.length !== EMBED_DIM) {
-      throw new Error(`embedTexts: vector dim ${d.embedding.length} ≠ expected ${EMBED_DIM}`);
+  const out: number[][] = [];
+  for (let start = 0; start < inputs.length; start += MAX_BATCH) {
+    const batch = inputs.slice(start, start + MAX_BATCH);
+    const res = await getClient().embeddings.create({ model: EMBED_MODEL, input: batch });
+    if (res.data.length !== batch.length) {
+      throw new Error(`embedTexts: model returned ${res.data.length} vectors for ${batch.length} inputs`);
     }
-    return d.embedding;
-  });
+    for (const d of res.data) {
+      if (d.embedding.length !== EMBED_DIM) {
+        throw new Error(`embedTexts: vector dim ${d.embedding.length} ≠ expected ${EMBED_DIM}`);
+      }
+      out.push(d.embedding);
+    }
+  }
+  return out;
 }

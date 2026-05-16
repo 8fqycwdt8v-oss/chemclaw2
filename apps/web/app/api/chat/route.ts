@@ -27,7 +27,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let body: { prompt?: unknown; sessionId?: unknown; override_justification?: unknown };
+  let body: {
+    prompt?: unknown;
+    sessionId?: unknown;
+    override_justification?: unknown;
+    plan_mode?: unknown;
+  };
   try {
     body = await req.json();
   } catch {
@@ -66,7 +71,8 @@ export async function POST(req: NextRequest) {
     await recordOverride(sessionId, userId, 'scheduled_substance', justification, prompt);
   }
 
-  const options = buildQueryOptions(sessionId, userId);
+  const planMode = body.plan_mode === true;
+  const options = buildQueryOptions(sessionId, userId, { planMode });
   const stream = agentToStream(prompt.trim(), options);
 
   return new Response(stream, {

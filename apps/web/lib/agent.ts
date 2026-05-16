@@ -1,7 +1,13 @@
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
+import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@anthropic-ai/claude-agent-sdk';
 import { scopedSessionStore } from '@chemclaw2/db/session-store';
 import { checkToolInput, checkToolOutput } from '@chemclaw2/agent-tools';
-import { resolveToolMode, checkBudgetWouldExceed, incrementSpend, getProjectBudget } from '@chemclaw2/db';
+import {
+  resolveToolMode,
+  getBudgetWithSpend,
+  incrementSpend,
+  type BudgetWithSpend,
+} from '@chemclaw2/db';
 import { buildInProcessMcpServer } from './sdk-tools';
 import { loadSkillsBlock } from './skills';
 
@@ -14,13 +20,55 @@ You have access to an organization knowledge base, compound registry, and reacti
 Always cite your sources. Never fabricate CAS numbers, yields, or experimental conditions.
 When uncertain, say so explicitly rather than guessing.`;
 
-export function buildQueryOptions(sessionId: string, userId: string): Options {
+// Wave-1 A3: surface model + turn cap as env so operators can tune without
+// redeploying. SDK defaults are good but invisible; an explicit value is
+// auditable. Sonnet 4.6 matches the chemistry-reasoning weight we target.
+const DEFAULT_MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6';
+const DEFAULT_MAX_TURNS = Number(process.env.AGENT_MAX_TURNS ?? '50');
+
+export type QueryOptionsExtras = {
+  /** Wave-1 A1: request plan-mode for this turn — no tools execute. */
+  planMode?: boolean;
+};
+
+export function buildQueryOptions(
+  sessionId: string,
+  userId: string,
+  extras: QueryOptionsExtras = {},
+): Options {
   // Skills are loaded from disk per request so newly-saved skills are visible
   // without a process restart (followup #10).
-  const systemPrompt = BASE_SYSTEM_PROMPT + loadSkillsBlock();
+  //
+  // Wave-1 A2: split systemPrompt across SYSTEM_PROMPT_DYNAMIC_BOUNDARY so the
+  // static base prefix is eligible for cross-session prompt caching on models
+  // that support it (Sonnet 4.6+). Skills change per user / per disk-edit, so
+  // they live AFTER the boundary. When no skills are loaded, pass the static
+  // string directly — no boundary needed and the whole prompt caches.
+  const skillsBlock = loadSkillsBlock();
+  const systemPrompt: Options['systemPrompt'] = skillsBlock
+    ? [BASE_SYSTEM_PROMPT, SYSTEM_PROMPT_DYNAMIC_BOUNDARY, skillsBlock]
+    : BASE_SYSTEM_PROMPT;
   // v2.1-D: budgets are keyed by the same projectKey the session store uses, so
   // per-user spend rolls up under the same identity as session ownership.
   const projectKey = `chemclaw2:${userId}`;
+
+  // Wave-1 D1: one budget lookup per request, cached for the lifetime of the
+  // query closure. PreToolUse and PostToolUse both call getBudget() — the
+  // promise is shared, so only the first call hits the DB. localSpend tracks
+  // increments accumulated WITHIN this request so the cap check stays accurate
+  // across multiple tool calls in the same turn (the DB row would otherwise
+  // still show start-of-request spend).
+  let budgetCache: Promise<BudgetWithSpend | null> | undefined;
+  const getBudget = (): Promise<BudgetWithSpend | null> => {
+    if (!budgetCache) {
+      budgetCache = getBudgetWithSpend(projectKey).catch((err) => {
+        console.error('[agent] budget lookup failed:', err);
+        return null;
+      });
+    }
+    return budgetCache;
+  };
+  const localSpend = { toolCalls: 0, experiments: 0 };
 
   // scopedSessionStore forces projectKey = chemclaw2:<userId> on every store call,
   // ensuring sessions are isolated per user regardless of the SDK's cwd-derived default.
@@ -28,6 +76,13 @@ export function buildQueryOptions(sessionId: string, userId: string): Options {
     systemPrompt,
     sessionStore: scopedSessionStore(`chemclaw2:${userId}`),
     resume: sessionId,
+    model: DEFAULT_MODEL,
+    maxTurns: DEFAULT_MAX_TURNS,
+    // Wave-1 A1: native plan mode. Replaces the prompt-engineered
+    // `[PLAN MODE]` prefix that ChatClient used to send. When true the SDK
+    // blocks tool execution entirely; the agent must present a plan and the
+    // user re-sends without planMode to actually run it.
+    ...(extras.planMode ? { permissionMode: 'plan' as const } : {}),
     mcpServers: {
       'chemclaw2-tools': buildInProcessMcpServer(userId, sessionId),
       'mcp-molfp': {
@@ -48,34 +103,42 @@ export function buildQueryOptions(sessionId: string, userId: string): Options {
             async (input) => {
               if (input.hook_event_name !== 'PreToolUse') return {};
 
-              // v2.1-D2: budget gate. Runs before the permission check so a
-              // capped-out project can't accidentally grant itself another
-              // experiment by setting a per-tool override. Errors in the budget
-              // lookup fail open (allow) to avoid taking the agent down on a
+              // v2.1-D2 + Wave-1 D1: budget gate. Runs before the permission
+              // check so a capped-out project can't accidentally grant itself
+              // another experiment by setting a per-tool override. Budget is
+              // fetched once per request via getBudget() (single round-trip
+              // LEFT JOIN); subsequent calls in the same turn hit the cache.
+              // localSpend tracks in-request increments so the cap check
+              // remains accurate even though the DB row is from request start.
+              // Fail-open on lookup error to avoid taking the agent down on a
               // missing/misconfigured budgets table.
               const isExperiment = EXPERIMENT_TOOLS.has(input.tool_name);
-              const exceeded = await checkBudgetWouldExceed(projectKey, {
-                toolCalls: 1,
-                experiments: isExperiment ? 1 : 0,
-              }).catch((err) => {
-                // Fail-open is the right product call (don't take the agent down
-                // on a budget table misconfig) but stay loud so it surfaces.
-                console.error('[agent] budget check failed:', err);
-                return null;
-              });
-              if (exceeded) {
-                const reason =
-                  `Budget cap reached: ${exceeded.exceeded} (${exceeded.current}/${exceeded.cap}). ` +
-                  `Wait for the period to roll over or ask an admin to raise the cap.`;
-                return {
-                  decision: 'block',
-                  reason,
-                  hookSpecificOutput: {
-                    hookEventName: 'PreToolUse',
-                    permissionDecision: 'deny',
-                    permissionDecisionReason: reason,
-                  },
-                };
+              const budgetInfo = await getBudget();
+              if (budgetInfo) {
+                const { budget, spend } = budgetInfo;
+                const projectedTool = spend.toolCalls + localSpend.toolCalls + 1;
+                const projectedExp =
+                  spend.experiments + localSpend.experiments + (isExperiment ? 1 : 0);
+                let exceeded: { kind: 'tool_calls' | 'experiments'; cap: number; current: number } | null = null;
+                if (budget.toolCallsCap != null && projectedTool > budget.toolCallsCap) {
+                  exceeded = { kind: 'tool_calls', cap: budget.toolCallsCap, current: spend.toolCalls + localSpend.toolCalls };
+                } else if (budget.experimentsCap != null && projectedExp > budget.experimentsCap) {
+                  exceeded = { kind: 'experiments', cap: budget.experimentsCap, current: spend.experiments + localSpend.experiments };
+                }
+                if (exceeded) {
+                  const reason =
+                    `Budget cap reached: ${exceeded.kind} (${exceeded.current}/${exceeded.cap}). ` +
+                    `Wait for the period to roll over or ask an admin to raise the cap.`;
+                  return {
+                    decision: 'block',
+                    reason,
+                    hookSpecificOutput: {
+                      hookEventName: 'PreToolUse',
+                      permissionDecision: 'deny',
+                      permissionDecisionReason: reason,
+                    },
+                  };
+                }
               }
 
               // J2: per-tool authorization. The deny path short-circuits before
@@ -141,17 +204,17 @@ export function buildQueryOptions(sessionId: string, userId: string): Options {
             async (input) => {
               if (input.hook_event_name !== 'PostToolUse') return {};
 
-              // v2.1-D3: accumulate spend after every tool invocation (success
-              // or error — the cost has already been paid). If no budget is
-              // configured we skip the increment write entirely; measuring
-              // users who never set a cap is dead weight.
-              const budget = await getProjectBudget(projectKey).catch((err) => {
-                console.error('[agent] getProjectBudget failed:', err);
-                return null;
-              });
-              if (budget) {
+              // v2.1-D3 + Wave-1 D1: accumulate spend after every tool
+              // invocation (success or error — the cost has already been paid).
+              // Re-uses the cached budget config from PreToolUse, so no
+              // additional DB read; bumps localSpend in lock-step with the DB
+              // increment so the next PreToolUse cap check sees fresh state.
+              const budgetInfo = await getBudget();
+              if (budgetInfo) {
                 const isExperiment = EXPERIMENT_TOOLS.has(input.tool_name);
-                await incrementSpend(projectKey, budget.period, {
+                localSpend.toolCalls += 1;
+                if (isExperiment) localSpend.experiments += 1;
+                await incrementSpend(projectKey, budgetInfo.budget.period, {
                   toolCalls: 1,
                   experiments: isExperiment ? 1 : 0,
                 }).catch((err) => {

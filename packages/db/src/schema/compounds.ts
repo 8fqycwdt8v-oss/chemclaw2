@@ -15,6 +15,4 @@ export const compounds = pgTable('compounds', {
   fpComputedAt: timestamp('fp_computed_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   createdBy: text('created_by').notNull(),
-  validFrom: timestamp('valid_from', { withTimezone: true }).notNull().defaultNow(),
-  validTo: timestamp('valid_to', { withTimezone: true }),
 });
