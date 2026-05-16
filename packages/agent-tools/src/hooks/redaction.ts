@@ -64,3 +64,34 @@ function extractStringValues(obj: unknown): string[] {
   }
   return [];
 }
+
+/**
+ * Wave-3a A5: redact / block the user's free-text prompt before it reaches
+ * the model. Mirrors `checkToolInput` semantics but applies to the raw
+ * prompt string.
+ *
+ * Why block rather than silent-redact: the SDK's UserPromptSubmit hook can
+ * only return `additionalContext` or suppress the prompt entirely; it can't
+ * mutate the prompt the model sees. A silent-redact would leave the model
+ * looking at the original PII string, defeating the purpose. Blocking with
+ * a clear message lets the user resubmit a cleaned version.
+ *
+ * Controlled-substance terms hard-block via the scheduledSubstanceGate
+ * upstream of the chat route (apps/web/app/api/chat/route.ts). This helper
+ * stays focused on the redaction case — SSN-like patterns — so we don't
+ * double-fire the substance gate.
+ */
+export function checkUserPrompt(
+  prompt: string,
+): { action: 'allow' } | { action: 'block'; reason: string } {
+  if (SSN_RE.test(prompt)) {
+    // Reset lastIndex; SSN_RE is a /g regex and stateful across .test calls.
+    SSN_RE.lastIndex = 0;
+    return {
+      action: 'block',
+      reason: 'Prompt blocked: contains what looks like a Social Security Number. Remove the SSN and resubmit.',
+    };
+  }
+  SSN_RE.lastIndex = 0;
+  return { action: 'allow' };
+}
