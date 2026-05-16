@@ -1,6 +1,8 @@
 import dns from 'dns';
+import { z } from 'zod';
 import ipaddr from 'ipaddr.js';
 import { recordExternalFactSafe } from '@chemclaw2/db';
+import type { ToolDef } from './tool-def';
 
 const ELN_BASE = process.env.ELN_API_BASE_URL ?? '';
 const ELN_KEY = process.env.ELN_API_KEY ?? '';
@@ -22,17 +24,15 @@ async function assertElnHostNotPrivate(hostname: string): Promise<string | null>
   }
 }
 
-export const elnFetchTool = {
+const elnFetchSchema = {
+  experiment_id: z.string().describe('ELN experiment identifier (e.g. EXP-001)'),
+};
+
+export const elnFetchTool: ToolDef<typeof elnFetchSchema> = {
   name: 'eln_fetch_experiment',
   description: 'Fetch a read-only experiment record from the connected ELN system.',
-  inputSchema: {
-    type: 'object' as const,
-    properties: {
-      experiment_id: { type: 'string', description: 'ELN experiment identifier (e.g. EXP-001)' },
-    },
-    required: ['experiment_id'],
-  },
-  async execute(input: { experiment_id: string }) {
+  schema: elnFetchSchema,
+  async execute(input) {
     if (!ELN_BASE) return { error: 'ELN integration not configured (ELN_API_BASE_URL not set)' };
 
     let baseUrl: URL;
@@ -88,10 +88,10 @@ export const elnFetchTool = {
  * the ELN API. Persistence failures are logged but never break the agent —
  * the in-band response always wins.
  */
-export function createElnFetchTool(userId: string) {
+export function createElnFetchTool(userId: string): ToolDef<typeof elnFetchSchema> {
   return {
     ...elnFetchTool,
-    async execute(input: { experiment_id: string }) {
+    async execute(input) {
       const result = await elnFetchTool.execute(input);
       if (typeof result === 'object' && result && 'data' in result && !('error' in result)) {
         // No obvious text extract; FTS is opt-out by storing null content_text.

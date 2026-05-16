@@ -1,5 +1,7 @@
+import { z } from 'zod';
 import { findSimilarCompounds } from '@chemclaw2/db';
 import { compoundSimilaritySearchTool } from './compound-search';
+import type { ToolDef } from './tool-def';
 
 /**
  * Interpret analytical observations (NMR / MS / IR) by grounding the LLM in
@@ -14,37 +16,27 @@ import { compoundSimilaritySearchTool } from './compound-search';
  * Returns a payload the agent should incorporate into its next response,
  * not the final interpretation itself.
  */
-export const interpretAnalyticalResultTool = {
+const schema = {
+  technique: z.enum(['NMR', 'MS', 'IR']).describe('Spectroscopy technique'),
+  observations: z.string().describe('Observed peaks / fragments / signals (free text)'),
+  proposed_structure_smiles: z.string().optional().describe(
+    'Optional SMILES the user thinks matches the data',
+  ),
+  proposed_fingerprint_bits: z.string().optional().describe(
+    'Optional Morgan fingerprint (2048-char bit string) for the proposed structure. ' +
+    'Pre-compute via mcp-molfp.compute_morgan_fp if a structure is supplied.',
+  ),
+};
+
+export const interpretAnalyticalResultTool: ToolDef<typeof schema> = {
   name: 'interpret_analytical_result',
   description:
     'Build an interpretation context for analytical observations (NMR / MS / IR). ' +
     'Takes the technique, observations as free text, and optionally a proposed structure SMILES. ' +
     'Returns nearest-neighbor compounds (when a structure is given) so the model can ground its ' +
     'interpretation in prior data. The model should incorporate the context and cite sources.',
-  inputSchema: {
-    type: 'object' as const,
-    properties: {
-      technique: { type: 'string', enum: ['NMR', 'MS', 'IR'], description: 'Spectroscopy technique' },
-      observations: { type: 'string', description: 'Observed peaks / fragments / signals (free text)' },
-      proposed_structure_smiles: {
-        type: 'string',
-        description: 'Optional SMILES the user thinks matches the data',
-      },
-      proposed_fingerprint_bits: {
-        type: 'string',
-        description:
-          'Optional Morgan fingerprint (2048-char bit string) for the proposed structure. ' +
-          'Pre-compute via mcp-molfp.compute_morgan_fp if a structure is supplied.',
-      },
-    },
-    required: ['technique', 'observations'],
-  },
-  async execute(input: {
-    technique: 'NMR' | 'MS' | 'IR';
-    observations: string;
-    proposed_structure_smiles?: string;
-    proposed_fingerprint_bits?: string;
-  }) {
+  schema,
+  async execute(input) {
     const obs = input.observations.trim();
     if (!obs) return { error: 'observations is required' };
     if (obs.length > 4000) return { error: 'observations must be ≤ 4000 characters' };

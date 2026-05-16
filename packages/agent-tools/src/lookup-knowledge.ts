@@ -1,14 +1,18 @@
-import { lookupKnowledge, type KnowledgeHitType } from '@chemclaw2/db';
+import { z } from 'zod';
+import { lookupKnowledge } from '@chemclaw2/db';
+import type { ToolDef } from './tool-def';
 
 type EmbedFn = (text: string) => Promise<number[]>;
 
-type LookupInput = {
-  query: string;
-  limit?: number;
-  types?: KnowledgeHitType[];
-  /** Default true. Set false to skip the embedding round-trip when the caller
-   *  knows they want lexical-only matches. */
-  semantic?: boolean;
+const lookupKnowledgeSchema = {
+  query: z.string().describe('Free-text query'),
+  limit: z.number().int().min(1).max(50).optional().describe('Max hits (default 10)'),
+  types: z.array(z.enum(['wiki', 'paper', 'property', 'external'])).optional().describe(
+    'Subset of sources to consult. Default: all four.',
+  ),
+  semantic: z.boolean().optional().describe(
+    'Include vector-similarity wiki retrieval. Default true.',
+  ),
 };
 
 /**
@@ -21,7 +25,7 @@ type LookupInput = {
  * granular tools (wiki_lookup with full=true, compound_similarity_search,
  * find_similar_reactions) stay available for targeted reads.
  */
-export function createLookupKnowledgeTool(embedFn: EmbedFn) {
+export function createLookupKnowledgeTool(embedFn: EmbedFn): ToolDef<typeof lookupKnowledgeSchema> {
   return {
     name: 'lookup_knowledge',
     description:
@@ -31,24 +35,8 @@ export function createLookupKnowledgeTool(embedFn: EmbedFn) {
       'list with each hit labelled by type. Prefer this for "what do we know ' +
       'about X" questions; use the dedicated wiki_lookup / similarity tools ' +
       'when you already know the entity you need.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        query: { type: 'string', description: 'Free-text query' },
-        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Max hits (default 10)' },
-        types: {
-          type: 'array',
-          items: { type: 'string', enum: ['wiki', 'paper', 'property', 'external'] },
-          description: 'Subset of sources to consult. Default: all four.',
-        },
-        semantic: {
-          type: 'boolean',
-          description: 'Include vector-similarity wiki retrieval. Default true.',
-        },
-      },
-      required: ['query'],
-    },
-    async execute(input: LookupInput) {
+    schema: lookupKnowledgeSchema,
+    async execute(input) {
       const q = input.query.trim();
       if (q.length === 0 || q.length > 500) {
         return { error: 'query must be 1-500 chars after trimming' };

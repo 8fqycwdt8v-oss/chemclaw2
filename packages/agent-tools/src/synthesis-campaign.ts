@@ -1,28 +1,44 @@
+import { z } from 'zod';
 import { createCampaign, updateCampaignStatusForUser, getCampaignBySession, addCampaignStep, db, sql } from '@chemclaw2/db';
 import { UUID_RE } from './uuid';
+import type { ToolDef } from './tool-def';
+
+const startSchema = {
+  session_id: z.string().describe('Current session ID'),
+  target_smiles: z.string().optional().describe('Target molecule SMILES'),
+};
+const confirmSchema = {
+  campaign_id: z.string().describe('Campaign ID from start_synthesis_campaign'),
+  plan: z.record(z.string(), z.unknown()).describe(
+    'Synthesis plan with steps, conditions, and references',
+  ),
+};
+const kickoffSchema = {
+  campaign_id: z.string().describe('Campaign ID'),
+  approval: z.enum(['per_step', 'all_at_once']).optional().describe(
+    'per_step gates each non-first step on user approval. Default all_at_once.',
+  ),
+};
 
 /**
  * Factory: captures userId from the authenticated request so the LLM cannot
  * supply an arbitrary created_by or campaign_id belonging to another user (IDOR prevention).
  */
-export function createSynthesisCampaignTools(userId: string) {
-  const synthesisCampaignTool = {
+export function createSynthesisCampaignTools(userId: string): {
+  synthesisCampaignTool: ToolDef<typeof startSchema>;
+  confirmSynthesisPlanTool: ToolDef<typeof confirmSchema>;
+  kickoffCampaignTool: ToolDef<typeof kickoffSchema>;
+} {
+  const synthesisCampaignTool: ToolDef<typeof startSchema> = {
     name: 'start_synthesis_campaign',
     description:
       'Start a multi-step synthesis planning campaign for a target molecule. ' +
       'Creates a campaign record and returns the campaign ID. ' +
       'The agent should then call compound_similarity_search and find_similar_reactions to build the plan, ' +
       'then call confirm_synthesis_plan to save it.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        session_id: { type: 'string', description: 'Current session ID' },
-        target_smiles: { type: 'string', description: 'Target molecule SMILES' },
-      },
-      required: ['session_id'],
-    },
-    async execute(input: { session_id: string; target_smiles?: string }) {
-      if (typeof input.session_id !== 'string' || !UUID_RE.test(input.session_id)) {
+    schema: startSchema,
+    async execute(input) {
+      if (!UUID_RE.test(input.session_id)) {
         return { error: 'session_id must be a UUID' };
       }
       const existing = await getCampaignBySession(input.session_id, userId);
@@ -33,22 +49,12 @@ export function createSynthesisCampaignTools(userId: string) {
     },
   };
 
-  const confirmSynthesisPlanTool = {
+  const confirmSynthesisPlanTool: ToolDef<typeof confirmSchema> = {
     name: 'confirm_synthesis_plan',
     description: 'Save the confirmed synthesis plan for a campaign and set status to awaiting_input.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        campaign_id: { type: 'string', description: 'Campaign ID from start_synthesis_campaign' },
-        plan: {
-          type: 'object',
-          description: 'Synthesis plan with steps, conditions, and references',
-        },
-      },
-      required: ['campaign_id', 'plan'],
-    },
-    async execute(input: { campaign_id: string; plan: Record<string, unknown> }) {
-      if (typeof input.campaign_id !== 'string' || !UUID_RE.test(input.campaign_id)) {
+    schema: confirmSchema,
+    async execute(input) {
+      if (!UUID_RE.test(input.campaign_id)) {
         return { error: 'campaign_id must be a UUID' };
       }
       // Validate step count before writing to DB — avoids leaving campaign stuck in awaiting_input
@@ -80,7 +86,7 @@ export function createSynthesisCampaignTools(userId: string) {
     },
   };
 
-  const kickoffCampaignTool = {
+  const kickoffCampaignTool: ToolDef<typeof kickoffSchema> = {
     name: 'kickoff_campaign',
     description:
       'After the user has reviewed and approved the synthesis plan, flip the campaign from ' +
@@ -89,20 +95,9 @@ export function createSynthesisCampaignTools(userId: string) {
       'experiment dispatch). Idempotent — re-calling on a running campaign is a no-op. ' +
       'approval=per_step: only step 0 runs automatically; subsequent steps wait for ' +
       'POST /api/campaigns/[id]/steps/[idx]/approve.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        campaign_id: { type: 'string', description: 'Campaign ID' },
-        approval: {
-          type: 'string',
-          enum: ['per_step', 'all_at_once'],
-          description: 'per_step gates each non-first step on user approval. Default all_at_once.',
-        },
-      },
-      required: ['campaign_id'],
-    },
-    async execute(input: { campaign_id: string; approval?: 'per_step' | 'all_at_once' }) {
-      if (typeof input.campaign_id !== 'string' || !UUID_RE.test(input.campaign_id)) {
+    schema: kickoffSchema,
+    async execute(input) {
+      if (!UUID_RE.test(input.campaign_id)) {
         return { error: 'campaign_id must be a UUID' };
       }
       const { found } = await updateCampaignStatusForUser(input.campaign_id, userId, 'running');

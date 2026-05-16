@@ -1,7 +1,24 @@
+import { z } from 'zod';
 import { upsertWikiPage, replaceSessionTodos, markAllTodosDone } from '@chemclaw2/db';
 import { isValidSlug } from './slug';
 import { markdownToTiptap } from './markdown-to-tiptap';
 import { validateCitations } from './citation-validation';
+import type { ToolDef } from './tool-def';
+
+const beginSchema = {
+  question: z.string().describe('The research question.'),
+};
+const finalizeSchema = {
+  slug: z.string().describe('Lowercase kebab-case slug (e.g. parp-inhibitor-sar-2026)'),
+  title: z.string().describe('Human-readable title'),
+  body: z.string().describe('Full report body (markdown).'),
+  citations: z.array(z.object({
+    citationId: z.string(),
+    sourceType: z.string().describe('e.g. "compound", "reaction", "url", "doc"'),
+    sourceId: z.string().optional(),
+    label: z.string(),
+  })).optional().describe('Inline [N] citation entries used in the body.'),
+};
 
 /**
  * Deep research: a two-tool workflow the agent runs to produce a structured
@@ -25,22 +42,16 @@ export function createDeepResearchTools(
   userId: string,
   embedFn: (texts: string[]) => Promise<number[][]>,
   sessionId?: string,
-) {
-  const begin = {
+): { begin: ToolDef<typeof beginSchema>; finalize: ToolDef<typeof finalizeSchema> } {
+  const begin: ToolDef<typeof beginSchema> = {
     name: 'begin_deep_research',
     description:
       'Start a deep-research workflow. Returns a structured plan checklist + ' +
       'research-mode directive the agent should follow. Call this when the user ' +
       'asks for a multi-section report, a comprehensive review, or a /dr-style ' +
       'investigation. Use the returned plan to drive the next several turns.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        question: { type: 'string', description: 'The research question.' },
-      },
-      required: ['question'],
-    },
-    async execute(input: { question: string }) {
+    schema: beginSchema,
+    async execute(input) {
       const q = input.question.trim();
       if (q.length === 0 || q.length > 2000) return { error: 'question must be 1-2000 chars' };
       const checklist = [
@@ -72,41 +83,14 @@ export function createDeepResearchTools(
     },
   };
 
-  const finalize = {
+  const finalize: ToolDef<typeof finalizeSchema> = {
     name: 'finalize_deep_research',
     description:
       'Persist the composed research report as a wiki page. Call this after ' +
       'begin_deep_research and after the report body is fully drafted with ' +
       'inline citations.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        slug: { type: 'string', description: 'Lowercase kebab-case slug (e.g. parp-inhibitor-sar-2026)' },
-        title: { type: 'string', description: 'Human-readable title' },
-        body: { type: 'string', description: 'Full report body (markdown).' },
-        citations: {
-          type: 'array',
-          description: 'Inline [N] citation entries used in the body.',
-          items: {
-            type: 'object',
-            properties: {
-              citationId: { type: 'string' },
-              sourceType: { type: 'string', description: 'e.g. "compound", "reaction", "url", "doc"' },
-              sourceId: { type: 'string' },
-              label: { type: 'string' },
-            },
-            required: ['citationId', 'sourceType', 'label'],
-          },
-        },
-      },
-      required: ['slug', 'title', 'body'],
-    },
-    async execute(input: {
-      slug: string;
-      title: string;
-      body: string;
-      citations?: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>;
-    }) {
+    schema: finalizeSchema,
+    async execute(input) {
       if (!isValidSlug(input.slug)) {
         return { error: 'slug must be lowercase kebab-case, ≤200 chars, and not reserved' };
       }

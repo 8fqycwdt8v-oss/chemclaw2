@@ -1,5 +1,7 @@
+import { z } from 'zod';
 import { safeFetch } from './safe-fetch';
 import { recordExternalFactSafe } from '@chemclaw2/db';
+import type { ToolDef } from './tool-def';
 
 export const ALLOWED_DOMAINS = [
   'pubchem.ncbi.nlm.nih.gov',
@@ -14,21 +16,21 @@ export const ALLOWED_DOMAINS = [
   'elsevier.com',      // linkinghub.elsevier.com is a common doi.org redirect target
 ];
 
-export const docFetchTool = {
+const docFetchSchema = {
+  url: z.string().url().describe('URL to fetch (must be from an allowed science domain)'),
+  format: z.enum(['markdown', 'html', 'bytes']).optional().describe(
+    'Output format (default: markdown)',
+  ),
+};
+
+export const docFetchTool: ToolDef<typeof docFetchSchema> = {
   name: 'fetch_document',
   description:
     'Fetch a scientific document from an allowed domain. format=markdown (default) ' +
     'returns stripped text, format=html returns the raw HTML (size-capped), ' +
     'format=bytes returns base64 + content-type for non-text downloads like PDFs.',
-  inputSchema: {
-    type: 'object' as const,
-    properties: {
-      url: { type: 'string', description: 'URL to fetch (must be from an allowed science domain)' },
-      format: { type: 'string', enum: ['markdown', 'html', 'bytes'], description: 'Output format (default: markdown)' },
-    },
-    required: ['url'],
-  },
-  async execute(input: { url: string; format?: 'markdown' | 'html' | 'bytes' }) {
+  schema: docFetchSchema,
+  async execute(input) {
     const format = input.format ?? 'markdown';
     let res: Response;
     try {
@@ -82,10 +84,10 @@ export const docFetchTool = {
  * cache. contentText is the plain-text extract (markdown mode); for html/
  * bytes mode we store payload only — those formats aren't FTS-friendly.
  */
-export function createDocFetchTool(userId: string) {
+export function createDocFetchTool(userId: string): ToolDef<typeof docFetchSchema> {
   return {
     ...docFetchTool,
-    async execute(input: { url: string; format?: 'markdown' | 'html' | 'bytes' }) {
+    async execute(input) {
       const result = await docFetchTool.execute(input);
       if (typeof result === 'object' && result && 'url' in result && !('error' in result)) {
         const canonicalUrl = (result as { url: string }).url;
