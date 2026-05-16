@@ -4,6 +4,6 @@
 - [rate-limits] Old window rows are never swept; add a pg_cron job or periodic DELETE WHERE window_start < (now_epoch_ms - 7200000) before table size becomes measurable
 - [api/wiki] wiki_pages has no composite index on (updated_at DESC, id DESC); add before list endpoint becomes high-traffic to avoid sequential scans on keyset pagination
 - [wiki/editor] WikiEditor beforeunload guard covers hard browser navigation only; Next.js App Router client-side navigation (Link, router.push) does not fire beforeunload — guard SPA navigation via navigation.addEventListener('navigate', ...) when App Router exposes a stable hook API
-- [api/wiki] upsertWikiPage: version column declared in wiki_pages schema but never incremented on update — inert until optimistic concurrency is added
+- [api/wiki] wiki_pages.version is incremented by wiki_pages_auto_version BEFORE UPDATE trigger (migration 0003); Drizzle onConflictDoUpdate also sets updatedAt: sql`now()` which is redundant but harmless alongside the trigger
 - [api/wiki] upsertWikiPage: embedFn output length not validated against chunks.length; mismatch produces undefined embedded to DB insert
-- [campaigns] updateCampaignStatus in packages/db/src/queries/campaigns.ts has no terminal-state guard; can overwrite complete/failed status unconditionally
+- [campaigns] updateCampaignStatus terminal-state guard added to both updateCampaignStatus and updateCampaignStatusForUser in packages/db/src/queries/campaigns.ts — both now use inArray(status, NON_TERMINAL_STATUSES)

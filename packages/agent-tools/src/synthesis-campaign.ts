@@ -44,6 +44,13 @@ export function createSynthesisCampaignTools(userId: string) {
       required: ['campaign_id', 'plan'],
     },
     async execute(input: { campaign_id: string; plan: Record<string, unknown> }) {
+      // Validate step count before writing to DB — avoids leaving campaign stuck in awaiting_input
+      const MAX_STEPS = 20;
+      const allSteps = Array.isArray(input.plan.steps) ? input.plan.steps as Array<Record<string, unknown>> : [];
+      if (allSteps.length > MAX_STEPS) {
+        return { error: `Plan exceeds maximum of ${MAX_STEPS} synthesis steps` };
+      }
+
       const { found } = await updateCampaignStatusForUser(
         input.campaign_id,
         userId,
@@ -54,16 +61,15 @@ export function createSynthesisCampaignTools(userId: string) {
 
       // Create individual step rows from the plan's steps array so the worker
       // can track and retry each step independently.
-      const steps = Array.isArray(input.plan.steps) ? input.plan.steps as Array<Record<string, unknown>> : [];
-      for (let i = 0; i < steps.length; i++) {
-        const s = steps[i];
+      for (let i = 0; i < allSteps.length; i++) {
+        const s = allSteps[i];
         await addCampaignStep(input.campaign_id, i, {
           reactionSmiles: typeof s.reaction_smiles === 'string' ? s.reaction_smiles : undefined,
           conditions: typeof s.conditions === 'string' ? s.conditions : undefined,
         });
       }
 
-      return { status: 'awaiting_input', message: 'Plan saved. Waiting for user confirmation.', steps_created: steps.length };
+      return { status: 'awaiting_input', message: 'Plan saved. Waiting for user confirmation.', steps_created: allSteps.length };
     },
   };
 

@@ -8,6 +8,7 @@ import {
   getStepsForRetry,
   markStepFailed,
   markStepComplete,
+  TERMINAL_STATUSES,
 } from '@chemclaw2/db';
 
 // Wiki auto-creation uses OpenAI text-embedding-3-small, same model as the web app
@@ -83,7 +84,7 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
             // .returning() gives an empty array when the WHERE predicate was false, so the
             // wiki enqueue only fires on an actual status transition.
             const updated = await db.update(synthesisCampaigns).set({ status: 'complete' }).where(
-              and(eq(synthesisCampaigns.id, campaign.id), notInArray(synthesisCampaigns.status, ['complete', 'failed'])),
+              and(eq(synthesisCampaigns.id, campaign.id), notInArray(synthesisCampaigns.status, [...TERMINAL_STATUSES])),
             ).returning({ id: synthesisCampaigns.id });
             if (updated.length > 0) {
               await boss.send('create-campaign-wiki', { campaignId: campaign.id }, { singletonKey: campaign.id }).catch(() => {});

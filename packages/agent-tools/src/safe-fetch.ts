@@ -21,7 +21,10 @@ async function assertNotPrivateHost(hostname: string): Promise<void> {
     throw new Error(`DNS resolution failed for ${hostname}`);
   }
   for (const { address } of addresses) {
-    if (!ipaddr.isValid(address)) continue;
+    // Fail closed: treat unrecognised address formats as non-public to prevent bypass
+    if (!ipaddr.isValid(address)) {
+      throw new Error(`SSRF blocked: ${hostname} resolved to an unrecognised address format`);
+    }
     const parsed = ipaddr.parse(address);
     if (parsed.range() !== 'unicast') {
       throw new Error(`SSRF blocked: ${hostname} resolves to a non-public address`);

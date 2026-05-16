@@ -18,11 +18,15 @@ export const compoundSimilaritySearchTool = {
     required: ['fingerprint_bits'],
   },
   async execute(input: { fingerprint_bits: string; min_tanimoto?: number; limit?: number }) {
-    const results = await findSimilarCompounds(
-      input.fingerprint_bits,
-      input.limit ?? 20,
-      input.min_tanimoto ?? 0.4,
-    );
-    return { results };
+    try {
+      const results = await findSimilarCompounds(
+        input.fingerprint_bits,
+        input.limit ?? 20,
+        input.min_tanimoto ?? 0.4,
+      );
+      return { results };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : 'Search failed' };
+    }
   },
 };
