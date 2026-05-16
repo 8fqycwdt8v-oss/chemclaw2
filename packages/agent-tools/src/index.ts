@@ -8,3 +8,4 @@ export { checkToolInput } from './hooks/redaction';
 export { checkToolOutput } from './hooks/fact-id-check';
 export { createSynthesisCampaignTools } from './synthesis-campaign';
 export { elnFetchTool } from './eln-fetch';
+export { substructureCandidatesTool } from './substructure-search';

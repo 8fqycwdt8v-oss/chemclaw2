@@ -33,6 +33,25 @@ def validate_smiles(smiles: str) -> dict:
 
 
 @mcp.tool()
+def substructure_match(smiles: str, smarts: str) -> dict:
+    """Test whether a SMILES contains a SMARTS substructure pattern.
+
+    Returns {"match": bool}. Invalid SMILES → match: false (not an error,
+    so the caller can iterate over a candidate set without aborting on bad data).
+    Invalid SMARTS raises — SMARTS errors are programmer bugs, not data issues.
+    """
+    if not smarts.strip():
+        raise ValueError("smarts pattern is required")
+    pattern = Chem.MolFromSmarts(smarts)
+    if pattern is None:
+        raise ValueError(f"Invalid SMARTS: {smarts}")
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return {"match": False}
+    return {"match": mol.HasSubstructMatch(pattern)}
+
+
+@mcp.tool()
 def tanimoto_similarity(smiles_a: str, smiles_b: str) -> dict:
     """Compute exact Tanimoto similarity between two SMILES strings (Morgan ECFP4)."""
     mol_a = Chem.MolFromSmiles(smiles_a)

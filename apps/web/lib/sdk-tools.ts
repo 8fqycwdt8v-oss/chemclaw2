@@ -8,6 +8,7 @@ import {
   elnFetchTool,
   createWikiFetchTool,
   createSynthesisCampaignTools,
+  substructureCandidatesTool,
 } from '@chemclaw2/agent-tools';
 import { embedText } from './embeddings';
 
@@ -77,6 +78,15 @@ const elnFetch = tool(
   async (args) => toMcpText(await elnFetchTool.execute(args)),
 );
 
+const substructureCandidates = tool(
+  substructureCandidatesTool.name,
+  substructureCandidatesTool.description,
+  {
+    max_candidates: z.number().int().min(1).max(5000).optional(),
+  },
+  async (args) => toMcpText(await substructureCandidatesTool.execute(args)),
+);
+
 export function buildInProcessMcpServer(userId: string) {
   const campaign = createSynthesisCampaignTools(userId);
   const startCampaign = tool(
@@ -113,6 +123,7 @@ export function buildInProcessMcpServer(userId: string) {
       webSearch,
       docFetch,
       elnFetch,
+      substructureCandidates,
       startCampaign,
       confirmCampaign,
       kickoffCampaign,
