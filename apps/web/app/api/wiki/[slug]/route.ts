@@ -1,6 +1,8 @@
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { getWikiPage, getWikiPageCitations, upsertWikiPage, updateWikiMetadata } from '@chemclaw2/db';
+import {
+  getWikiPage, getWikiPageCitations, upsertWikiPage, updateWikiMetadata, pointInTimeWiki,
+} from '@chemclaw2/db';
 import { embedTexts } from '../../../../lib/embeddings';
 import { rateLimit } from '@/lib/rate-limit';
 import { isValidSlug, isValidTiptapDoc } from '@/lib/validation';
@@ -11,7 +13,7 @@ const MAX_CITATIONS = 200;
 const MAX_CITATION_FIELD_LEN = 1_000;
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
   const { userId } = await auth();
@@ -26,6 +28,22 @@ export async function GET(
   if (!isValidSlug(slug)) {
     return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
   }
+
+  // v2.1-B1: bi-temporal lookup. ?asOf=<ISO8601> returns the page revision
+  // active at that instant via pointInTimeWiki (which reads wiki_revisions and
+  // falls back to the current row when no edit predates asOf). Compliance use:
+  // "what did this page say on 2026-03-01?".
+  const asOfRaw = new URL(req.url).searchParams.get('asOf');
+  if (asOfRaw !== null) {
+    const asOf = new Date(asOfRaw);
+    if (isNaN(asOf.getTime())) {
+      return NextResponse.json({ error: 'asOf must be an ISO-8601 timestamp' }, { status: 400 });
+    }
+    const snapshot = await pointInTimeWiki(slug, asOf);
+    if (!snapshot) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    return NextResponse.json(snapshot);
+  }
+
   const page = await getWikiPage(slug);
   if (!page) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   return NextResponse.json(page);

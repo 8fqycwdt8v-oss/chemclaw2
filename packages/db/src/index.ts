@@ -10,3 +10,5 @@ export * from './queries/sessions';
 export * from './queries/rate-limit';
 export * from './queries/feedback';
 export * from './queries/tool-permissions';
+export * from './queries/budgets';
+export * from './queries/todos';
