@@ -32,6 +32,10 @@ Request yield, byproduct, and failure-mode predictions before running a step.
 Compare two proposed routes along cost, time, and risk.
 Walk through the mechanism of a proposed step with the agent flagging concerns.
 Ask "what's likely to break at scale" and get specific concerns grounded in prior data.
+Design a high-throughput screening plate (96 / 384 / 1536 wells) from a candidate set so a parallel experiment can run in one batch.
+Score the solvent choices in a proposed step against green-chemistry guides and see safer alternatives.
+Run a statistical analysis on a set of prior reactions and get a ranked list of which features (catalyst, base, temperature, solvent) most predict yield.
+Export a set of reactions to a standard interchange format so the wider community can consume them.
 3.2 Medicinal / project chemist
 Read the project's wiki page to see current SAR consensus, best-compound lineage, what's been ruled out.
 Paste a structure and find structural neighbors in our compound database — across all projects (or scoped to mine) — ranked by similarity.
@@ -48,12 +52,14 @@ Request chromatography conditions for a separation problem.
 Validate a proposed structure against measured spectra with confidence assessment.
 Pull all analytical datasets linked to a sample or batch.
 Ask "what are the impurities in this crude" and get a grounded hypothesis (often informed by similar reactions in the database).
+Predict the expected NMR spectrum of a proposed structure so the predicted peaks can be compared to a measurement.
 3.4 Computational chemist
 Request QM calculations (semi-empirical or DFT) without managing compute infrastructure.
 Cluster a screen of N candidates by structural similarity to see the chemical-space coverage.
 Screen N candidates against an objective; receive ranked output with calibrated uncertainty.
 Request conformer ensembles, tautomer enumeration, or mechanism comparisons.
 Publish a calculation result into a wiki page section so downstream users find it.
+Run a one-off scripted computation in an isolated sandbox without first packaging it as a reusable tool.
 3.5 R&D project lead
 Open the project's wiki landing page and see a curated, auto-fresh summary of the program's state.
 See the contradictions backlog for the project and triage it.
@@ -62,6 +68,9 @@ Receive proactive notifications when something significant happens (a campaign c
 Set budget caps (cost, compute, experiments) per project / per user.
 Require approval before the agent runs operations above a cost or risk threshold.
 Compare two campaigns side-by-side.
+Opt the project in or out of cross-project learning (anonymised motif patterns shared across projects).
+See the agent's auto-proposed resolutions to contradictions in the project's knowledge, with the evidence backing each side.
+See which prompts and skills the system is currently testing or has recently promoted, based on measured success rates over the last N runs.
 3.6 Chemistry-native search (cross-persona)
 As a chemist, I can search compounds by structural similarity (paste a structure, get the top-K most similar with similarity scores).
 As a chemist, I can search compounds by substructure (paste a substructure, get every compound that contains it).
@@ -79,6 +88,8 @@ Editing. Edit a synthesized page with a rich block editor (formatted text, table
 
 Sharing. Permalink to a specific revision. Rich previews in chat / Teams / email. Land on a page anchor from a chat citation. Export as PDF or Markdown.
 
+Research output. Run a "deep research" mode that traverses the knowledge graph across compounds, reactions, prior wiki pages, and documents and returns a structured report with inline citations as a saveable deliverable. Retrieve any document in the format the next step needs — rendered markdown, original PDF, or raw bytes.
+
 3.8 Compliance / QA
 Complete audit trail for any agent answer — sources used, tools called, confidence claimed.
 Full revision history of any wiki page (system, human, triggering facts).
@@ -86,6 +97,8 @@ Verify sensitive identifiers were redacted before leaving the controlled perimet
 Replay any agent decision and reproduce the answer from historical state.
 See what the system knew at any past point (bi-temporal); reproduce a wiki page as of a date.
 Verify role-based access controls — User A cannot see Project B's data or pages.
+Look up hazard classification and GHS pictograms for any compound or CAS number before working with it.
+Override the scheduled-substance gate with a documented justification for a legitimate research scenario, with the override recorded in the audit trail.
 3.9 System administrator
 Onboard a new tenant with isolated data, configuration, budgets, wiki namespace.
 Configure settings at global / org / project / user scopes.
@@ -94,6 +107,8 @@ See system health, tool availability, queue depth, fingerprinting backlog, wiki 
 Rotate auth keys without taking the system down.
 Disable a tool or feature fleet-wide for incident response.
 Manage redaction categories for outbound model traffic.
+Configure per-tool authorization with deny / ask / allow rules scoped per user, project, or org-wide.
+Run scheduled regression evaluations of the agent against a golden set of chemistry problems and see week-over-week score deltas.
 3.10 Any chemist (cross-cutting)
 Ask a question in natural language; receive a cited answer.
 Receive wiki page and compound/reaction links in the answer so I can navigate to durable knowledge.
@@ -105,6 +120,11 @@ Chat in long-running sessions that survive process restarts.
 Receive proactive alerts when new data relevant to my project appears.
 Watch the agent's live progress as it works.
 Cancel a runaway operation cleanly.
+Submit thumbs-up or thumbs-down feedback with a reason on any agent answer so the system improves over time.
+Mark a successful interaction as a reusable skill the agent can invoke directly the next time the same kind of question arises.
+See and manage the agent's todo list during a long-running investigation — mark items done, reorder, or skip steps.
+Have the agent auto-detect when it is looping (calling the same tool with the same arguments repeatedly) and stop gracefully instead of burning the budget.
+Preview the agent's multi-step execution plan before it runs and approve, edit, or reject individual steps.
 3.11 Autonomous campaign owner
 Start an automated optimization campaign with a stopping criterion.
 System creates a campaign wiki page that updates as the campaign progresses.
@@ -117,6 +137,11 @@ Review the auto-generated campaign wiki page at conclusion and edit it as the du
 A downstream system (ELN, LIMS, SDMS) can push new data and trigger autonomous investigation, automatic fingerprinting, and wiki re-flagging.
 A chat client can consume streaming responses through a stable API contract.
 An external chat surface (Microsoft Copilot) can route queries with user identity preserved end-to-end.
+3.13 Custom tooling and skill forging (cross-persona)
+Describe a custom analysis or computation in natural language; the system synthesizes a tool, tests it against the example inputs you provide, and adds it to the available toolkit ready to invoke.
+Browse the personal / project / org-wide catalog of custom tools available to me right now and see who authored each.
+Promote a custom tool from personal scope to project or organisation scope after an admin sign-off, so collaborators can use it.
+Receive a notification when a custom tool starts failing its scheduled validation tests, with a path to re-forge it or retire it cleanly.
 4. Technical architecture
 4.1 Stack
 Layer	Technology	Why this choice
