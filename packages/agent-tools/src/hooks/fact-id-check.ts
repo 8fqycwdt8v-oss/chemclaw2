@@ -12,11 +12,17 @@ export async function checkToolOutput(
   const casNumbers = [...new Set(toolOutput.match(CAS_RE) ?? [])];
   if (casNumbers.length === 0) return { warnings: [] };
 
-  // Batch query — single IN(...) instead of N individual SELECTs
-  const found = await db
-    .select({ casNumber: compounds.casNumber })
-    .from(compounds)
-    .where(inArray(compounds.casNumber, casNumbers));
+  // Batch query — single IN(...) instead of N individual SELECTs.
+  // Fail open on DB errors: a compliance flag should not break the agent response.
+  let found: Array<{ casNumber: string | null }>;
+  try {
+    found = await db
+      .select({ casNumber: compounds.casNumber })
+      .from(compounds)
+      .where(inArray(compounds.casNumber, casNumbers));
+  } catch {
+    return { warnings: [] };
+  }
 
   const foundSet = new Set(found.map((r) => r.casNumber));
   const unverified = casNumbers.filter((cas) => !foundSet.has(cas));

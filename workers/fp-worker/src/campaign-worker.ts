@@ -35,7 +35,7 @@ const DEAD_LETTER_TIMEOUT_MINUTES = 30;
 
 export async function startCampaignWorker(boss: PgBoss): Promise<void> {
   await boss.createQueue('retry-campaign-steps', { policy: PgBoss.policies.standard } as PgBoss.Queue);
-  await boss.createQueue('run-campaign-step', { policy: PgBoss.policies.standard } as PgBoss.Queue);
+  await boss.createQueue('run-campaign-step', { policy: PgBoss.policies.stately } as PgBoss.Queue);
   await boss.createQueue('create-campaign-wiki', { policy: PgBoss.policies.stately } as PgBoss.Queue);
 
   // Cron every 5 minutes: retry failed steps + sweep dead 'running' steps

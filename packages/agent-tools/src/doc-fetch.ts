@@ -33,6 +33,10 @@ export const docFetchTool = {
       return { error: err instanceof Error ? err.message : 'Fetch failed' };
     }
     if (!res.ok) return { error: `HTTP ${res.status}` };
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!contentType.startsWith('text/')) {
+      return { error: `Unsupported content-type: ${contentType.split(';')[0].trim()}` };
+    }
     // Stream body with a byte limit to avoid loading large HTML docs into memory
     const MAX_BYTES = 500_000;
     const reader = res.body?.getReader();
