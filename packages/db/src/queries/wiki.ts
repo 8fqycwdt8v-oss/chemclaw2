@@ -122,6 +122,7 @@ export async function getWikiPageCitations(pageId: string) {
 export type WikiPageCursor = { updatedAt: Date; id: string };
 
 export async function listWikiPages(limit = 50, cursor?: WikiPageCursor) {
+  const safeLimit = Math.min(limit, 200);
   const base = db
     .select({ id: wikiPages.id, slug: wikiPages.slug, title: wikiPages.title, updatedAt: wikiPages.updatedAt })
     .from(wikiPages)
@@ -134,7 +135,7 @@ export async function listWikiPages(limit = 50, cursor?: WikiPageCursor) {
         ),
       )
     : base;
-  return q.limit(limit);
+  return q.limit(safeLimit);
 }
 
 export async function searchWikiByFTS(query: string, limit = 20) {
@@ -142,7 +143,7 @@ export async function searchWikiByFTS(query: string, limit = 20) {
     .select({ id: wikiPages.id, slug: wikiPages.slug, title: wikiPages.title, contentText: wikiPages.contentText })
     .from(wikiPages)
     .where(sql`to_tsvector('english', coalesce(content_text, '')) @@ plainto_tsquery('english', ${query})`)
-    .limit(limit);
+    .limit(Math.min(limit, 200));
 }
 
 export async function semanticSearchWiki(embedding: number[], limit = 5) {
@@ -166,5 +167,5 @@ export async function semanticSearchWiki(embedding: number[], limit = 5) {
     .from(wikiChunks)
     .where(sql`embedding IS NOT NULL`)
     .orderBy(distExpr)
-    .limit(limit);
+    .limit(Math.min(limit, 50));
 }

@@ -3,7 +3,8 @@ import { ALLOWED_DOMAINS } from './doc-fetch';
 const BRAVE_API = 'https://api.search.brave.com/res/v1/web/search';
 
 function isAllowedSiteFilter(hostname: string): boolean {
-  return ALLOWED_DOMAINS.some((d) => hostname === d || hostname.endsWith('.' + d));
+  const h = hostname.toLowerCase();
+  return ALLOWED_DOMAINS.some((d) => h === d || h.endsWith('.' + d));
 }
 
 export const webSearchTool = {
@@ -30,11 +31,13 @@ export const webSearchTool = {
       if (!/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(input.site_filter)) {
         return { results: [], error: 'Invalid site_filter: must be a bare hostname (e.g. pubmed.ncbi.nlm.nih.gov)' };
       }
-      if (!isAllowedSiteFilter(input.site_filter)) {
+      const normalizedFilter = input.site_filter.toLowerCase();
+      if (!isAllowedSiteFilter(normalizedFilter)) {
         return { results: [], error: `site_filter '${input.site_filter}' is not in the approved domain list` };
       }
     }
-    const q = input.site_filter ? `site:${input.site_filter} ${input.query}` : input.query;
+    const normalizedFilter = input.site_filter?.toLowerCase();
+    const q = normalizedFilter ? `site:${normalizedFilter} ${input.query}` : input.query;
     const url = `${BRAVE_API}?q=${encodeURIComponent(q)}&count=5`;
     const res = await fetch(url, { headers: { 'X-Subscription-Token': apiKey, Accept: 'application/json' } });
     if (!res.ok) return { results: [], error: `Brave API error: ${res.status}` };
