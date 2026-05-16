@@ -104,7 +104,7 @@ export function createDeepResearchTools(
       const id = await upsertWikiPage(
         input.slug,
         input.title,
-        markdownToTiptap(input.body) as unknown as Record<string, unknown>,
+        markdownToTiptap(input.body),
         input.body,
         userId,
         citations,

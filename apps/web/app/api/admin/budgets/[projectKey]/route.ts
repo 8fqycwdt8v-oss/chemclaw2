@@ -6,6 +6,7 @@ import {
   type BudgetPeriod,
 } from '@chemclaw2/db';
 import { requireAdminApi } from '@/lib/auth';
+import { PROJECT_KEY_RE } from '@chemclaw2/agent-tools';
 
 /**
  * Per-project budget caps. Admin-only (Clerk publicMetadata.role='admin').
@@ -27,6 +28,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ project
   if (gate instanceof NextResponse) return gate;
 
   const { projectKey } = await params;
+  if (!PROJECT_KEY_RE.test(projectKey)) {
+    return NextResponse.json({ error: 'invalid projectKey' }, { status: 400 });
+  }
   const budget = await getProjectBudget(projectKey);
   if (!budget) return NextResponse.json({ projectKey, budget: null, spend: null });
 
@@ -40,8 +44,11 @@ export async function PUT(req: Request, { params }: { params: Promise<{ projectK
   const { userId: adminUserId } = gate;
 
   const { projectKey } = await params;
-  if (projectKey.length === 0 || projectKey.length > 200) {
-    return NextResponse.json({ error: 'projectKey must be 1-200 chars' }, { status: 400 });
+  if (!PROJECT_KEY_RE.test(projectKey)) {
+    return NextResponse.json(
+      { error: 'projectKey must match /^[A-Za-z0-9:_-]{1,64}$/' },
+      { status: 400 },
+    );
   }
 
   let body: {

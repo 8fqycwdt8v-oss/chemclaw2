@@ -199,7 +199,10 @@ export type UpsertWikiMetadata = {
 export async function upsertWikiPage(
   slug: string,
   title: string,
-  content: Record<string, unknown>,
+  // Stored as JSONB; shape is validated at the agent-tool seam via
+  // isValidTiptapDoc. Accept `unknown` here so factories don't need
+  // double-casts at the call site.
+  content: unknown,
   contentText: string,
   createdBy: string,
   citations: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>,

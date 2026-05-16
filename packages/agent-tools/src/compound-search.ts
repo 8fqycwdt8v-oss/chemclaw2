@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { findSimilarCompounds } from '@chemclaw2/db';
 import type { ToolDef } from './tool-def';
+import { toolError } from './tool-error';
 
 const schema = {
   fingerprint_bits: z.string().describe(
@@ -25,7 +26,7 @@ export const compoundSimilaritySearchTool: ToolDef<typeof schema> = {
       );
       return { results };
     } catch (err) {
-      return { error: err instanceof Error ? err.message : 'Search failed' };
+      return toolError('compound_similarity_search', err);
     }
   },
 };

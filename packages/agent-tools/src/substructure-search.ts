@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { listCompoundsForSubstructure } from '@chemclaw2/db';
 import type { ToolDef } from './tool-def';
+import { toolError } from './tool-error';
 
 const schema = {
   max_candidates: z.number().int().min(1).max(5000).optional().describe(
@@ -28,7 +29,7 @@ export const substructureCandidatesTool: ToolDef<typeof schema> = {
       const results = await listCompoundsForSubstructure(input.max_candidates ?? 500);
       return { candidates: results };
     } catch (err) {
-      return { error: err instanceof Error ? err.message : 'Substructure candidate lookup failed' };
+      return toolError('list_substructure_candidates', err);
     }
   },
 };
