@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { getWikiPage, getWikiPageCitations, upsertWikiPage, updateWikiMetadata } from '@chemclaw2/db';
 import { embedTexts } from '../../../../lib/embeddings';
 import { rateLimit } from '@/lib/rate-limit';
-import { isValidSlug } from '@/lib/validation';
+import { isValidSlug, isValidTiptapDoc } from '@/lib/validation';
 
 const MAX_TITLE_LEN = 500;
 const MAX_CONTENT_TEXT_LEN = 500_000;
@@ -86,6 +86,11 @@ export async function PUT(
         return NextResponse.json({ error: 'invalid citation fields' }, { status: 400 });
       }
     }
+  }
+
+  // M5: reject malformed Tiptap docs on update.
+  if (body.content !== undefined && !isValidTiptapDoc(body.content)) {
+    return NextResponse.json({ error: 'content must be a Tiptap doc {type:"doc",content:[]}' }, { status: 400 });
   }
 
   const citations = body.citations !== undefined

@@ -4,7 +4,7 @@ import { upsertWikiPage, listWikiPages, listWikiProjects, searchWikiByFTS } from
 import type { WikiPageCursor } from '@chemclaw2/db';
 import { embedTexts } from '../../../lib/embeddings';
 import { rateLimit } from '@/lib/rate-limit';
-import { isValidSlug } from '@/lib/validation';
+import { isValidSlug, isValidTiptapDoc } from '@/lib/validation';
 
 const MAX_TITLE_LEN = 500;
 const MAX_CONTENT_TEXT_LEN = 500_000;
@@ -111,10 +111,15 @@ export async function POST(req: Request) {
     }
   }
 
+  // M5: reject obviously malformed Tiptap docs so the editor doesn't crash on next load.
+  if (body.content !== undefined && !isValidTiptapDoc(body.content)) {
+    return NextResponse.json({ error: 'content must be a Tiptap doc {type:"doc",content:[]}' }, { status: 400 });
+  }
+
   const id = await upsertWikiPage(
     body.slug,
     body.title,
-    body.content ?? {},
+    body.content ?? { type: 'doc', content: [] },
     body.contentText ?? '',
     userId,
     body.citations ?? [],

@@ -60,6 +60,25 @@ export const interpretAnalyticalResultTool = {
       }
     }
 
+    // L5: warn the agent when every neighbor is far from the proposed structure.
+    // Tanimoto < 0.5 typically means the neighbor shares scaffold-level features
+    // at best, not specific functional groups — so spectral assignments grounded
+    // in those neighbors are unreliable.
+    const maxTanimoto = neighbors.reduce((m, n) => Math.max(m, n.tanimoto), 0);
+    let hint: string | undefined;
+    if (input.proposed_structure_smiles) {
+      if (neighbors.length === 0) {
+        hint =
+          `No nearest neighbors found above Tanimoto 0.3 for the proposed structure. ` +
+          `Use ${compoundSimilaritySearchTool.name} with a lower min_tanimoto if needed.`;
+      } else if (maxTanimoto < 0.5) {
+        hint =
+          `All nearest neighbors are below Tanimoto 0.5 (max ${maxTanimoto.toFixed(2)}); ` +
+          `they share at most scaffold-level features. Treat any neighbor-grounded ` +
+          `spectral assignment as weak support and flag explicitly in your interpretation.`;
+      }
+    }
+
     return {
       technique: input.technique,
       observations: obs,
@@ -71,6 +90,7 @@ export const interpretAnalyticalResultTool = {
         casNumber: n.casNumber,
         tanimoto: n.tanimoto,
       })),
+      max_tanimoto: maxTanimoto,
       guidance: [
         `Interpret the ${input.technique} observations using the nearest-neighbor compounds as a reference (if any).`,
         'Cite specific peaks / signals from the user input.',
@@ -78,11 +98,7 @@ export const interpretAnalyticalResultTool = {
         'Call wiki_lookup for any neighbor name to ground claims in our knowledge base.',
         'When uncertain about a peak assignment, say so explicitly and propose follow-up experiments.',
       ].join(' '),
-      // Re-emit the search hint so the agent knows it can refine
-      hint: neighbors.length === 0 && input.proposed_structure_smiles
-        ? `No nearest neighbors found above Tanimoto 0.3 for the proposed structure. ` +
-          `Use ${compoundSimilaritySearchTool.name} with a lower min_tanimoto if needed.`
-        : undefined,
+      hint,
     };
   },
 };

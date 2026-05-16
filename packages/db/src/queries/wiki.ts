@@ -1,6 +1,9 @@
 import { sql, eq, lt, desc, or, and, type SQL } from 'drizzle-orm';
+import { trace } from '@opentelemetry/api';
 import { db } from '../client';
 import { wikiPages, wikiChunks, wikiCitations, wikiSubscriptions } from '../schema/wiki';
+
+const tracer = trace.getTracer('@chemclaw2/db');
 
 // Split text into semantically coherent chunks for embedding.
 // Strategy (in order of preference):
@@ -84,6 +87,16 @@ export function chunkText(text: string, maxSize = 1200, overlap = 200): string[]
 }
 
 /**
+ * Optional metadata applied at upsert time. Distinct from PATCH-only fields
+ * because agent writes set these on creation (needs_review=true for agent-
+ * authored pages; project tag from the agent's tool input).
+ */
+export type UpsertWikiMetadata = {
+  project?: string;
+  needsReview?: boolean;
+};
+
+/**
  * Upsert a wiki page: page row, chunk embeddings, citations.
  *
  * Embeddings are computed BEFORE opening the transaction so the OpenAI
@@ -111,49 +124,87 @@ export async function upsertWikiPage(
   createdBy: string,
   citations: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>,
   embedFn: (texts: string[]) => Promise<number[][]>,
+  metadata: UpsertWikiMetadata = {},
 ): Promise<string> {
-  const [existing] = await db
-    .select({ contentText: wikiPages.contentText })
-    .from(wikiPages)
-    .where(eq(wikiPages.slug, slug))
-    .limit(1);
-  const contentChanged = !existing || existing.contentText !== contentText;
+  return tracer.startActiveSpan('wiki.upsert', async (span) => {
+    try {
+      span.setAttribute('wiki.slug', slug);
+      span.setAttribute('wiki.content_text.length', contentText.length);
+      span.setAttribute('wiki.citations.count', citations.length);
 
-  let chunks: string[] = [];
-  let embeddings: number[][] = [];
-  if (contentChanged) {
-    chunks = chunkText(contentText);
-    embeddings = chunks.length > 0 ? await embedFn(chunks) : [];
-    if (embeddings.length !== chunks.length) {
-      throw new Error(`embedFn returned ${embeddings.length} vectors for ${chunks.length} chunks`);
-    }
-  }
+      // Pre-flight: skip embedding work when content_text is unchanged.
+      // Concurrency note: the read is outside the transaction; a concurrent
+      // writer landing between read and transaction may cause a benign re-embed
+      // or a benign re-write of identical content. Same race as every prior
+      // version of this function.
+      const [existing] = await db
+        .select({ contentText: wikiPages.contentText })
+        .from(wikiPages)
+        .where(eq(wikiPages.slug, slug))
+        .limit(1);
+      const contentChanged = !existing || existing.contentText !== contentText;
+      span.setAttribute('wiki.content_changed', contentChanged);
 
-  return db.transaction(async (tx) => {
-    const [page] = await tx
-      .insert(wikiPages)
-      .values({ slug, title, content, contentText, createdBy, updatedBy: createdBy })
-      .onConflictDoUpdate({
-        target: wikiPages.slug,
-        set: { title, content, contentText, updatedBy: createdBy, updatedAt: sql`now()` },
-      })
-      .returning({ id: wikiPages.id });
-
-    if (contentChanged) {
-      await tx.delete(wikiChunks).where(eq(wikiChunks.pageId, page.id));
-      if (chunks.length > 0) {
-        await tx.insert(wikiChunks).values(
-          chunks.map((text, i) => ({ pageId: page.id, chunkIdx: i, text, embedding: embeddings[i] })),
-        );
+      let chunks: string[] = [];
+      let embeddings: number[][] = [];
+      if (contentChanged) {
+        chunks = chunkText(contentText);
+        embeddings = chunks.length > 0 ? await embedFn(chunks) : [];
+        if (embeddings.length !== chunks.length) {
+          throw new Error(`embedFn returned ${embeddings.length} vectors for ${chunks.length} chunks`);
+        }
       }
-    }
+      span.setAttribute('wiki.chunks.count', chunks.length);
 
-    await tx.delete(wikiCitations).where(eq(wikiCitations.pageId, page.id));
-    if (citations.length > 0) {
-      await tx.insert(wikiCitations).values(citations.map((c) => ({ ...c, pageId: page.id })));
-    }
+      const insertValues = {
+        slug,
+        title,
+        content,
+        contentText,
+        createdBy,
+        updatedBy: createdBy,
+        ...(metadata.project !== undefined ? { project: metadata.project } : {}),
+        ...(metadata.needsReview !== undefined ? { needsReview: metadata.needsReview } : {}),
+      };
+      const updateSet = {
+        title,
+        content,
+        contentText,
+        updatedBy: createdBy,
+        updatedAt: sql`now()`,
+        ...(metadata.project !== undefined ? { project: metadata.project } : {}),
+        ...(metadata.needsReview !== undefined ? { needsReview: metadata.needsReview } : {}),
+      };
 
-    return page.id;
+      const pageId = await db.transaction(async (tx) => {
+        const [page] = await tx
+          .insert(wikiPages)
+          .values(insertValues)
+          .onConflictDoUpdate({ target: wikiPages.slug, set: updateSet })
+          .returning({ id: wikiPages.id });
+
+        if (contentChanged) {
+          await tx.delete(wikiChunks).where(eq(wikiChunks.pageId, page.id));
+          if (chunks.length > 0) {
+            await tx.insert(wikiChunks).values(
+              chunks.map((text, i) => ({ pageId: page.id, chunkIdx: i, text, embedding: embeddings[i] })),
+            );
+          }
+        }
+
+        // Citations are always replaced — they can change even when content didn't.
+        await tx.delete(wikiCitations).where(eq(wikiCitations.pageId, page.id));
+        if (citations.length > 0) {
+          await tx.insert(wikiCitations).values(citations.map((c) => ({ ...c, pageId: page.id })));
+        }
+
+        return page.id;
+      });
+      span.setAttribute('wiki.page_id', pageId);
+      return pageId;
+    } finally {
+      span.end();
+    }
   });
 }
 

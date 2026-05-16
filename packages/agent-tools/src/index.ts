@@ -24,3 +24,5 @@ export {
   stripMarkdownForEmbedding,
   prepareEmbeddingInputs,
 } from './embeddings';
+export { markdownToTiptap, type TiptapDoc } from './markdown-to-tiptap';
+export { validateCitations, type CitationInput } from './citation-validation';
