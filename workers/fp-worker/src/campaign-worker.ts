@@ -2,8 +2,8 @@ import PgBoss from 'pg-boss';
 import OpenAI from 'openai';
 import { ne, eq, and, lt, inArray, notInArray, sql } from 'drizzle-orm';
 import { db } from '@chemclaw2/db';
-import { campaignSteps, synthesisCampaigns } from '@chemclaw2/db';
-import { upsertWikiPage } from '@chemclaw2/db';
+import { campaignSteps, synthesisCampaigns, reactions } from '@chemclaw2/db';
+import { upsertWikiPage, findSimilarReactions } from '@chemclaw2/db';
 import {
   getStepsForRetry,
   markStepFailed,
@@ -33,6 +33,39 @@ async function embedTextsForWorker(texts: string[]): Promise<number[][]> {
 // Campaigns that stay 'running' for > 30 minutes are assumed crashed and reset
 const DEAD_LETTER_TIMEOUT_MINUTES = 30;
 
+/**
+ * Build a grounded result payload for a campaign step. If the step's reaction
+ * SMILES matches a fingerprinted reaction in the registry, pull the top-5 most
+ * similar reactions for the result. The agent / UI can use this as the
+ * "per-round result" the user reads in §3.11. No new infra — uses existing
+ * findSimilarReactions on the existing reactions table.
+ */
+async function buildStepResult(reactionSmiles: string | null): Promise<Record<string, unknown>> {
+  const executedAt = new Date().toISOString();
+  if (!reactionSmiles) return { executedAt, note: 'no reaction_smiles — skipped enrichment' };
+  const [match] = await db
+    .select({ id: reactions.id, drfp: reactions.drfp })
+    .from(reactions)
+    .where(eq(reactions.rxnSmiles, reactionSmiles))
+    .limit(1);
+  if (!match?.drfp) {
+    return { executedAt, reactionSmiles, note: 'reaction not in registry or not yet fingerprinted' };
+  }
+  const neighbors = await findSimilarReactions(match.drfp, 5, 0.4);
+  return {
+    executedAt,
+    reactionSmiles,
+    matchedReactionId: match.id,
+    neighbors: neighbors.map((n) => ({
+      id: n.id,
+      rxnSmiles: n.rxnSmiles,
+      name: n.name,
+      conditions: n.conditions,
+      similarity: n.similarity,
+    })),
+  };
+}
+
 export async function startCampaignWorker(boss: PgBoss): Promise<void> {
   await boss.createQueue('retry-campaign-steps', { policy: PgBoss.policies.standard } as PgBoss.Queue);
   await boss.createQueue('run-campaign-step', { policy: PgBoss.policies.stately } as PgBoss.Queue);
@@ -50,6 +83,7 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
       .innerJoin(synthesisCampaigns, eq(synthesisCampaigns.id, campaignSteps.campaignId))
       .where(and(
         eq(campaignSteps.status, 'pending'),
+        eq(campaignSteps.requiresApproval, false),
         eq(synthesisCampaigns.status, 'running'),
       ))
       .limit(50);
@@ -79,15 +113,28 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
     for (const job of jobs) {
       const { stepId } = job.data;
 
+      // Skip steps that require manual approval — the user must POST to
+      // /api/campaigns/[id]/steps/[idx]/approve to flip requires_approval=false
+      // before the next sweep will execute them.
       const [claimed] = await db
         .update(campaignSteps)
         .set({ status: 'running' })
-        .where(and(eq(campaignSteps.id, stepId), inArray(campaignSteps.status, ['pending', 'failed'])))
-        .returning({ id: campaignSteps.id, campaignId: campaignSteps.campaignId, retryCount: campaignSteps.retryCount });
+        .where(and(
+          eq(campaignSteps.id, stepId),
+          inArray(campaignSteps.status, ['pending', 'failed']),
+          eq(campaignSteps.requiresApproval, false),
+        ))
+        .returning({
+          id: campaignSteps.id,
+          campaignId: campaignSteps.campaignId,
+          retryCount: campaignSteps.retryCount,
+          reactionSmiles: campaignSteps.reactionSmiles,
+        });
       if (!claimed) continue;
 
       try {
-        await markStepComplete(stepId, { note: 'step executed' });
+        const result = await buildStepResult(claimed.reactionSmiles);
+        await markStepComplete(stepId, result);
 
         const [campaign] = await db.select().from(synthesisCampaigns).where(eq(synthesisCampaigns.id, claimed.campaignId));
         if (campaign) {

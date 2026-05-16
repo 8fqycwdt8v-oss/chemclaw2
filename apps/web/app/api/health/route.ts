@@ -1,4 +1,5 @@
 import { db, sql } from '@chemclaw2/db';
+import { auth } from '@clerk/nextjs/server';
 
 const BACKLOG_WARN_THRESHOLD = 500;
 
@@ -6,8 +7,16 @@ const BACKLOG_WARN_THRESHOLD = 500;
  * /api/health returns 200 even on partial degradation — Fly's health check
  * only watches HTTP status. Component-level state is in the JSON body so
  * dashboards/alerting can distinguish "web up, worker behind" from "all green".
+ *
+ * Backlog counts are signed-in-only to avoid leaking compound/reaction
+ * registry size to unauthenticated probes. Unauth probes (Fly health check)
+ * still get a stable 200.
  */
 export async function GET() {
+  const { userId } = await auth();
+  if (!userId) {
+    return Response.json({ ok: true });
+  }
   let dbOk = false;
   let pendingCompounds = 0;
   let pendingReactions = 0;

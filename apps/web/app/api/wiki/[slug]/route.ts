@@ -1,6 +1,6 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { getWikiPage, getWikiPageCitations, upsertWikiPage } from '@chemclaw2/db';
+import { getWikiPage, getWikiPageCitations, upsertWikiPage, updateWikiMetadata } from '@chemclaw2/db';
 import { embedTexts } from '../../../../lib/embeddings';
 import { rateLimit } from '@/lib/rate-limit';
 
@@ -103,4 +103,59 @@ export async function PUT(
   );
 
   return NextResponse.json({ id });
+}
+
+const VALID_MATURITIES = new Set(['exploratory', 'validated', 'authoritative']);
+
+export async function PATCH(
+  req: Request,
+  { params }: { params: Promise<{ slug: string }> },
+) {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const { limited } = await rateLimit(`wiki:${userId}`, 20, 60_000);
+  if (limited) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
+  }
+
+  const { slug } = await params;
+  if (!SLUG_RE.test(slug) || slug.length > 200) {
+    return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
+  }
+
+  let body: {
+    needsReview?: unknown;
+    archived?: unknown;
+    maturity?: unknown;
+    project?: unknown;
+  };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+
+  const patch: { needsReview?: boolean; archived?: boolean; maturity?: string; project?: string | null } = {};
+  if (typeof body.needsReview === 'boolean') patch.needsReview = body.needsReview;
+  if (typeof body.archived === 'boolean') patch.archived = body.archived;
+  if (typeof body.maturity === 'string') {
+    if (!VALID_MATURITIES.has(body.maturity)) {
+      return NextResponse.json({ error: 'invalid maturity' }, { status: 400 });
+    }
+    patch.maturity = body.maturity;
+  }
+  if (body.project === null) {
+    patch.project = null;
+  } else if (typeof body.project === 'string') {
+    if (body.project.length > 100) return NextResponse.json({ error: 'project too long' }, { status: 400 });
+    patch.project = body.project;
+  }
+  if (Object.keys(patch).length === 0) {
+    return NextResponse.json({ error: 'no metadata fields provided' }, { status: 400 });
+  }
+
+  const { found } = await updateWikiMetadata(slug, userId, patch);
+  if (!found) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  return NextResponse.json({ ok: true });
 }

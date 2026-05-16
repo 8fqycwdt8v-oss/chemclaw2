@@ -10,8 +10,9 @@ import {
   createSynthesisCampaignTools,
   substructureCandidatesTool,
   interpretAnalyticalResultTool,
+  createWikiUpsertTool,
 } from '@chemclaw2/agent-tools';
-import { embedText } from './embeddings';
+import { embedText, embedTexts } from './embeddings';
 
 function toMcpText(result: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
@@ -123,8 +124,30 @@ export function buildInProcessMcpServer(userId: string) {
   const kickoffCampaign = tool(
     campaign.kickoffCampaignTool.name,
     campaign.kickoffCampaignTool.description,
-    { campaign_id: z.string() },
+    {
+      campaign_id: z.string(),
+      approval: z.enum(['per_step', 'all_at_once']).optional()
+        .describe('per_step: only step 0 runs automatically, the rest wait for /approve. Default: all_at_once.'),
+    },
     async (args) => toMcpText(await campaign.kickoffCampaignTool.execute(args)),
+  );
+  const wikiUpsertTool = createWikiUpsertTool(userId, embedTexts);
+  const wikiUpsert = tool(
+    wikiUpsertTool.name,
+    wikiUpsertTool.description,
+    {
+      slug: z.string(),
+      title: z.string(),
+      content_text: z.string(),
+      project: z.string().optional(),
+      citations: z.array(z.object({
+        citationId: z.string(),
+        sourceType: z.string(),
+        sourceId: z.string().optional(),
+        label: z.string(),
+      })).optional(),
+    },
+    async (args) => toMcpText(await wikiUpsertTool.execute(args)),
   );
 
   return createSdkMcpServer({
@@ -133,6 +156,7 @@ export function buildInProcessMcpServer(userId: string) {
       compoundSearch,
       reactionSearch,
       wikiLookup,
+      wikiUpsert,
       webSearch,
       docFetch,
       elnFetch,

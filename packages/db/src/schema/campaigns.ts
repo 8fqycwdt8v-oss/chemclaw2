@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, jsonb, timestamp, integer } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, jsonb, timestamp, integer, boolean } from 'drizzle-orm/pg-core';
 import { wikiPages } from './wiki';
 
 export const synthesisCampaigns = pgTable('synthesis_campaigns', {
@@ -23,5 +23,6 @@ export const campaignSteps = pgTable('campaign_steps', {
   result: jsonb('result'),
   retryCount: integer('retry_count').notNull().default(0),
   nextRetryAt: timestamp('next_retry_at', { withTimezone: true }),
+  requiresApproval: boolean('requires_approval').notNull().default(false),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

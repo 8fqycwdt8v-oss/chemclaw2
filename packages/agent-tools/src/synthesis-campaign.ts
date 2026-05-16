@@ -79,24 +79,42 @@ export function createSynthesisCampaignTools(userId: string) {
       'After the user has reviewed and approved the synthesis plan, flip the campaign from ' +
       'awaiting_input to running so the worker begins executing steps. Ask the user for ' +
       'explicit confirmation BEFORE calling this tool (it kicks off real (or simulated) ' +
-      'experiment dispatch). Idempotent — re-calling on a running campaign is a no-op.',
+      'experiment dispatch). Idempotent — re-calling on a running campaign is a no-op. ' +
+      'approval=per_step: only step 0 runs automatically; subsequent steps wait for ' +
+      'POST /api/campaigns/[id]/steps/[idx]/approve.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         campaign_id: { type: 'string', description: 'Campaign ID' },
+        approval: {
+          type: 'string',
+          enum: ['per_step', 'all_at_once'],
+          description: 'per_step gates each non-first step on user approval. Default all_at_once.',
+        },
       },
       required: ['campaign_id'],
     },
-    async execute(input: { campaign_id: string }) {
+    async execute(input: { campaign_id: string; approval?: 'per_step' | 'all_at_once' }) {
       const { found } = await updateCampaignStatusForUser(input.campaign_id, userId, 'running');
       if (!found) return { error: 'Campaign not found, not owned by you, or already terminal' };
       // Reset next_retry_at so the worker poll picks pending steps up immediately.
-      // The schema default for status is 'pending' (see migration 0004), so newly
-      // inserted steps from confirm_synthesis_plan are already in the right state.
       await db.execute(
         sql`UPDATE campaign_steps SET next_retry_at = NOW() WHERE campaign_id = ${input.campaign_id}::uuid AND status = 'pending'`,
       );
-      return { status: 'running', message: 'Campaign kicked off — worker will execute steps.' };
+      if (input.approval === 'per_step') {
+        // Gate all steps except step 0. The user (or the agent on their behalf)
+        // calls /api/campaigns/[id]/steps/[idx]/approve to release each one.
+        await db.execute(
+          sql`UPDATE campaign_steps SET requires_approval = true
+              WHERE campaign_id = ${input.campaign_id}::uuid AND step_idx > 0`,
+        );
+        return {
+          status: 'running',
+          approval_mode: 'per_step',
+          message: 'Step 0 will execute; subsequent steps await /approve calls.',
+        };
+      }
+      return { status: 'running', approval_mode: 'all_at_once', message: 'Worker will execute all steps.' };
     },
   };
 

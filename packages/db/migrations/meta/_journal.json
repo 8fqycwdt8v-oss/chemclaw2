@@ -25,6 +25,8 @@
     { "idx": 8, "version": "7", "when": 1748011200000, "tag": "0009_wiki_citations_idx", "breakpoints": true },
     { "idx": 9, "version": "7", "when": 1748097600000, "tag": "0010_campaign_dead_letter_idx", "breakpoints": true },
     { "idx": 10, "version": "7", "when": 1748184000000, "tag": "0011_campaign_queue_policy", "breakpoints": true },
-    { "idx": 11, "version": "7", "when": 1748270400000, "tag": "0012_wiki_revisions", "breakpoints": true }
+    { "idx": 11, "version": "7", "when": 1748270400000, "tag": "0012_wiki_revisions", "breakpoints": true },
+    { "idx": 12, "version": "7", "when": 1748356800000, "tag": "0013_wiki_lifecycle_and_temporal", "breakpoints": true },
+    { "idx": 13, "version": "7", "when": 1748443200000, "tag": "0014_campaign_approval_and_subscriptions", "breakpoints": true }
   ]
 }
