@@ -9,7 +9,7 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
    Mandatory flow at the end of *every* task that touched code:
    1. Commit on the task branch and push (`git push -u origin <branch>`).
    2. Open a PR (`gh pr create`, or `mcp__github__create_pull_request` when `gh` is unavailable). Do not stop and ask.
-   3. Poll CI until green (`gh pr checks --watch`, or `mcp__github__pull_request_read` with `method: "status"`). Fix failures and push again — repeat until green.
+   3. Poll CI until green (`gh pr checks --watch`, or `mcp__github__pull_request_read` with `method: "get_check_runs"` / `"get_status"`). Fix failures and push again — repeat until green.
    4. Run `/review` and fix until clean.
    5. Merge (`gh pr merge <N> --merge`, or `mcp__github__merge_pull_request`).
    6. Delete remote branch (`git push origin --delete <branch>`) + local (`git branch -D <branch>`) + worktree if used.
