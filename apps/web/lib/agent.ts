@@ -1,7 +1,7 @@
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@anthropic-ai/claude-agent-sdk';
 import { scopedSessionStore } from '@chemclaw2/db/session-store';
-import { checkToolInput, checkToolOutput } from '@chemclaw2/agent-tools';
+import { checkToolInput, checkToolOutput, checkUserPrompt } from '@chemclaw2/agent-tools';
 import {
   resolveToolMode,
   getBudgetWithSpend,
@@ -97,6 +97,70 @@ export function buildQueryOptions(
       },
     },
     hooks: {
+      // Wave-3a A4: structured lifecycle logs for ops + tracing. SessionStart
+      // fires once per fresh-start or resume; SessionEnd fires when the SDK
+      // tears down the session. Persistence of per-session aggregates lives
+      // in project_budget_spend already; these logs anchor the bookends for
+      // log-search and OpenTelemetry correlation.
+      SessionStart: [
+        {
+          hooks: [
+            async (input) => {
+              if (input.hook_event_name !== 'SessionStart') return {};
+              console.log('[agent] session start', {
+                session_id: input.session_id,
+                source: input.source,
+                model: input.model,
+                user_id: userId,
+              });
+              return {};
+            },
+          ],
+        },
+      ],
+      SessionEnd: [
+        {
+          hooks: [
+            async (input) => {
+              if (input.hook_event_name !== 'SessionEnd') return {};
+              console.log('[agent] session end', {
+                session_id: input.session_id,
+                reason: input.reason,
+                user_id: userId,
+              });
+              return {};
+            },
+          ],
+        },
+      ],
+      // Wave-3a A5: redaction on the user's free-text prompt before the model
+      // sees it. The tool-input path (`checkToolInput`) only covered prompts
+      // the agent CONSTRUCTED — a user typing "my SSN is 123-45-6789" went
+      // straight to the LLM. SSN-like patterns now block with a clear
+      // resubmit message. Controlled-substance terms are still gated upstream
+      // in the chat route by scheduledSubstanceGate to keep that decision
+      // override-able with justification.
+      UserPromptSubmit: [
+        {
+          hooks: [
+            async (input) => {
+              if (input.hook_event_name !== 'UserPromptSubmit') return {};
+              const verdict = checkUserPrompt(input.prompt);
+              if (verdict.action === 'block') {
+                return {
+                  decision: 'block',
+                  reason: verdict.reason,
+                  hookSpecificOutput: {
+                    hookEventName: 'UserPromptSubmit',
+                    suppressOriginalPrompt: true,
+                  },
+                };
+              }
+              return {};
+            },
+          ],
+        },
+      ],
       PreToolUse: [
         {
           hooks: [

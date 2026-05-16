@@ -12,6 +12,12 @@ type Message =
 
 type Citation = { slug: string; label: string };
 type Todo = { id: string; text: string; status: 'pending' | 'done'; position: number };
+type Toast = {
+  key: string;
+  text: string;
+  priority: 'low' | 'medium' | 'high' | 'immediate';
+  expiresAt: number;
+};
 
 // Citation slugs must contain a hyphen (e.g. "aspirin-synthesis") to avoid
 // false-positive links on plain words. Single-word wiki slugs are skipped
@@ -41,6 +47,7 @@ export function ChatClient() {
   const [knownSlugs, setKnownSlugs] = useState<Set<string>>(new Set());
   const [todos, setTodos] = useState<Todo[]>([]);
   const [todosOpen, setTodosOpen] = useState(true);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -225,8 +232,34 @@ export function ChatClient() {
   // older session that already has a checklist on file).
   useEffect(() => { void refreshTodos(); }, [refreshTodos]);
 
+  // Toast garbage-collection: drop expired notifications every second. Cheap;
+  // upper-bounded by SDK Notification frequency (rare).
+  useEffect(() => {
+    if (toasts.length === 0) return;
+    const handle = setInterval(() => {
+      setToasts((ts) => ts.filter((t) => t.expiresAt > Date.now()));
+    }, 1000);
+    return () => clearInterval(handle);
+  }, [toasts.length]);
+
+  const dismissToast = (key: string) => setToasts((ts) => ts.filter((t) => t.key !== key));
+
   function applyEvent(evt: Record<string, unknown>) {
     const type = evt.type as string | undefined;
+    // Wave-3a opportunity #7: surface SDK Notification messages as toasts.
+    // Shape: { type:'system', subtype:'notification', key, text, priority,
+    // timeout_ms? } — see SDKNotificationMessage in the SDK types.
+    if (type === 'system' && evt.subtype === 'notification' && typeof evt.text === 'string') {
+      const timeoutMs = typeof evt.timeout_ms === 'number' ? evt.timeout_ms : 8000;
+      const toast: Toast = {
+        key: String(evt.key ?? `${evt.uuid ?? Date.now()}`),
+        text: evt.text,
+        priority: (evt.priority as Toast['priority']) ?? 'medium',
+        expiresAt: Date.now() + timeoutMs,
+      };
+      setToasts((ts) => [...ts.filter((t) => t.key !== toast.key && t.expiresAt > Date.now()), toast]);
+      return;
+    }
     if (type === 'system' && typeof evt.session_id === 'string') {
       sessionIdRef.current = evt.session_id;
       router.replace(`/chat?session=${evt.session_id}`);
@@ -394,6 +427,32 @@ export function ChatClient() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-7rem)]">
+      {toasts.length > 0 && (
+        <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-md">
+          {toasts.map((t) => (
+            <div
+              key={t.key}
+              className={
+                'rounded shadow-lg px-3 py-2 text-sm flex justify-between gap-3 ' +
+                (t.priority === 'immediate' || t.priority === 'high'
+                  ? 'bg-red-50 border border-red-300 text-red-900'
+                  : 'bg-amber-50 border border-amber-300 text-amber-900')
+              }
+              role="alert"
+            >
+              <span>{t.text}</span>
+              <button
+                type="button"
+                onClick={() => dismissToast(t.key)}
+                className="text-xs text-slate-500 hover:text-slate-700"
+                aria-label="Dismiss notification"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {todos.length > 0 && (
         <div className="border rounded mb-2 text-xs">
           <button

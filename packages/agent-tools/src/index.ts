@@ -4,7 +4,7 @@ export { wikiFetchTool, createWikiFetchTool } from './wiki-fetch';
 export { webSearchTool, createWebSearchTool } from './web-search';
 export { docFetchTool, createDocFetchTool } from './doc-fetch';
 export { scheduledSubstanceGate } from './hooks/scheduled-substance-gate';
-export { checkToolInput } from './hooks/redaction';
+export { checkToolInput, checkUserPrompt } from './hooks/redaction';
 export { checkToolOutput } from './hooks/fact-id-check';
 export { createSynthesisCampaignTools } from './synthesis-campaign';
 export { elnFetchTool, createElnFetchTool } from './eln-fetch';

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { checkToolInput } from '../redaction';
+import { checkToolInput, checkUserPrompt } from '../redaction';
 import { scheduledSubstanceGate } from '../scheduled-substance-gate';
 
 describe('scheduledSubstanceGate', () => {
@@ -118,5 +118,40 @@ describe('checkToolInput (redaction)', () => {
       expect(JSON.stringify(result.input)).toContain('[REDACTED-SSN]');
       expect(JSON.stringify(result.input)).not.toContain('987-65-4321');
     }
+  });
+});
+
+describe('checkUserPrompt', () => {
+  it('allows ordinary prompts', () => {
+    expect(checkUserPrompt('What is the LD50 of caffeine?')).toEqual({ action: 'allow' });
+  });
+
+  it('blocks a prompt containing an SSN-shaped pattern', () => {
+    const result = checkUserPrompt('My SSN is 123-45-6789, can you help?');
+    expect(result.action).toBe('block');
+    if (result.action === 'block') {
+      expect(result.reason).toMatch(/Social Security Number/);
+    }
+  });
+
+  it('does not match CAS numbers (which end NN-N, not NNNN)', () => {
+    // 67-64-1 is acetone. NN-NN-N shape; must not block.
+    expect(checkUserPrompt('What is CAS 67-64-1?')).toEqual({ action: 'allow' });
+  });
+
+  it('resets regex state between calls so repeated SSN inputs all block', () => {
+    // SSN_RE is a /g regex; without lastIndex reset the second call could
+    // miss a match starting before the previous lastIndex position.
+    const first = checkUserPrompt('123-45-6789');
+    const second = checkUserPrompt('123-45-6789');
+    expect(first.action).toBe('block');
+    expect(second.action).toBe('block');
+  });
+
+  it('blocks even when SSN is embedded mid-paragraph', () => {
+    const result = checkUserPrompt(
+      'Long discussion of synthesis. Note: contact person 123-45-6789 for details. End.',
+    );
+    expect(result.action).toBe('block');
   });
 });
