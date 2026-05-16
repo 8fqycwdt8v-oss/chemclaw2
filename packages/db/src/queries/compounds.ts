@@ -1,7 +1,7 @@
 import { sql, SQL } from 'drizzle-orm';
 import { db } from '../client';
 import { compounds } from '../schema/compounds';
-import { bitStringToBytes, tanimoto } from './fp-utils';
+import { rerankByTanimoto, validateFpBits } from './fp-utils';
 
 export type SimilarCompound = {
   id: string;
@@ -49,11 +49,9 @@ export async function findSimilarCompounds(
   minTanimoto = 0.4,
   filters?: CompoundFilters,
 ): Promise<SimilarCompound[]> {
+  validateFpBits(queryFpBits);
   const safeLimit = Math.max(1, Math.min(limit, 100));
-  const safeMinTanimoto = Math.max(0, Math.min(minTanimoto, 1));
-  if (!/^[01]{2048}$/.test(queryFpBits)) {
-    throw new Error('queryFpBits must be exactly 2048 binary characters (0/1)');
-  }
+  const safeMin = Math.max(0, Math.min(minTanimoto, 1));
   const filterSql = buildFilterClause(filters);
   const where = filterSql ? sql`morgan_fp IS NOT NULL AND ${filterSql}` : sql`morgan_fp IS NOT NULL`;
   const rows = await db
@@ -63,28 +61,14 @@ export async function findSimilarCompounds(
       canonSmiles: compounds.canonSmiles,
       name: compounds.name,
       casNumber: compounds.casNumber,
-      morganFp: compounds.morganFp,
+      fp: compounds.morganFp,
     })
     .from(compounds)
     .where(where)
-    // Postgres accepts a binary string ('010101...') cast to bit(2048)
     .orderBy(sql`morgan_fp <~> ${queryFpBits}::bit(2048)`)
     .limit(100);
-
-  const queryBytes = bitStringToBytes(queryFpBits);
-  return rows
-    .map((row) => ({
-      id: row.id,
-      smiles: row.smiles,
-      canonSmiles: row.canonSmiles,
-      name: row.name,
-      casNumber: row.casNumber,
-      // Postgres returns BIT columns as binary strings ('010101...')
-      tanimoto: tanimoto(queryBytes, bitStringToBytes(row.morganFp!)),
-    }))
-    .filter((r) => r.tanimoto >= safeMinTanimoto)
-    .sort((a, b) => b.tanimoto - a.tanimoto)
-    .slice(0, safeLimit);
+  return rerankByTanimoto(rows, queryFpBits, safeMin, safeLimit)
+    .map(({ fp: _fp, similarity, ...rest }) => ({ ...rest, tanimoto: similarity }));
 }
 
 /**

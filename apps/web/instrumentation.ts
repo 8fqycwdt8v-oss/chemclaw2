@@ -3,6 +3,9 @@ export async function register() {
     const publicKey = process.env.LANGFUSE_PUBLIC_KEY;
     const secretKey = process.env.LANGFUSE_SECRET_KEY;
     if (!publicKey || !secretKey) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are required in production');
+      }
       console.warn('Langfuse keys missing — OTel tracing disabled');
       return;
     }

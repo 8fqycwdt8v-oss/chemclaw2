@@ -2,8 +2,7 @@ import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { getWikiPage, subscribeToWikiPage, unsubscribeFromWikiPage } from '@chemclaw2/db';
 import { rateLimit } from '@/lib/rate-limit';
-
-const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+import { isValidSlug } from '@/lib/validation';
 
 export async function POST(_req: Request, { params }: { params: Promise<{ slug: string }> }) {
   const { userId } = await auth();
@@ -12,7 +11,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ slug: 
   if (limited) return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
 
   const { slug } = await params;
-  if (!SLUG_RE.test(slug)) return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
+  if (!isValidSlug(slug)) return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
   const page = await getWikiPage(slug);
   if (!page) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
@@ -27,7 +26,7 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ slug
   if (limited) return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
 
   const { slug } = await params;
-  if (!SLUG_RE.test(slug)) return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
+  if (!isValidSlug(slug)) return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
   const page = await getWikiPage(slug);
   if (!page) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 

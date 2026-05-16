@@ -4,8 +4,8 @@ import { upsertWikiPage, listWikiPages, listWikiProjects, searchWikiByFTS } from
 import type { WikiPageCursor } from '@chemclaw2/db';
 import { embedTexts } from '../../../lib/embeddings';
 import { rateLimit } from '@/lib/rate-limit';
+import { isValidSlug } from '@/lib/validation';
 
-const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_TITLE_LEN = 500;
 const MAX_CONTENT_TEXT_LEN = 500_000;
 const MAX_CITATIONS = 200;
@@ -83,7 +83,7 @@ export async function POST(req: Request) {
   if (typeof body.slug !== 'string' || typeof body.title !== 'string' || !body.slug || !body.title) {
     return NextResponse.json({ error: 'slug and title are required strings' }, { status: 400 });
   }
-  if (!SLUG_RE.test(body.slug) || body.slug.length > 200) {
+  if (!isValidSlug(body.slug)) {
     return NextResponse.json({ error: 'Invalid slug: use lowercase letters, numbers, and hyphens only' }, { status: 400 });
   }
   if (body.title.length > MAX_TITLE_LEN) {

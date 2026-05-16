@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@chemclaw2/agent-tools": "workspace:*",
     "@chemclaw2/db": "workspace:*",
     "drizzle-orm": "^0.38.0",
     "openai": "^6.37.0",

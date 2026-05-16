@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { db } from '../client';
 import { reactions } from '../schema/reactions';
-import { bitStringToBytes, tanimoto } from './fp-utils';
+import { rerankByTanimoto, validateFpBits } from './fp-utils';
 
 export type SimilarReaction = {
   id: string;
@@ -11,45 +11,28 @@ export type SimilarReaction = {
   similarity: number;
 };
 
-/**
- * queryFpBits: binary string of '0'/'1' chars (2048 chars), as returned by
- * the mcp-rxnfp compute_drfp tool's `fingerprint_bits` field.
- */
 export async function findSimilarReactions(
   queryFpBits: string,
   limit = 20,
   minSimilarity = 0.4,
 ): Promise<SimilarReaction[]> {
+  validateFpBits(queryFpBits);
   const safeLimit = Math.max(1, Math.min(limit, 100));
-  const safeMinSimilarity = Math.max(0, Math.min(minSimilarity, 1));
-  if (!/^[01]{2048}$/.test(queryFpBits)) {
-    throw new Error('queryFpBits must be exactly 2048 binary characters (0/1)');
-  }
+  const safeMin = Math.max(0, Math.min(minSimilarity, 1));
   const rows = await db
     .select({
       id: reactions.id,
       rxnSmiles: reactions.rxnSmiles,
       name: reactions.name,
       conditions: reactions.conditions,
-      drfp: reactions.drfp,
+      fp: reactions.drfp,
     })
     .from(reactions)
     .where(sql`drfp IS NOT NULL`)
     .orderBy(sql`drfp <~> ${queryFpBits}::bit(2048)`)
     .limit(100);
-
-  const queryBytes = bitStringToBytes(queryFpBits);
-  return rows
-    .map((row) => ({
-      id: row.id,
-      rxnSmiles: row.rxnSmiles,
-      name: row.name,
-      conditions: row.conditions,
-      similarity: tanimoto(queryBytes, bitStringToBytes(row.drfp!)),
-    }))
-    .filter((r) => r.similarity >= safeMinSimilarity)
-    .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, safeLimit);
+  return rerankByTanimoto(rows, queryFpBits, safeMin, safeLimit)
+    .map(({ fp: _fp, ...rest }) => rest);
 }
 
 export async function insertReaction(

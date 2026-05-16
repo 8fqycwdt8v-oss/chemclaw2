@@ -2,8 +2,7 @@ import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { getWikiPage, setCitationDisputed } from '@chemclaw2/db';
 import { rateLimit } from '@/lib/rate-limit';
-
-const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+import { isValidSlug } from '@/lib/validation';
 
 export async function POST(
   req: Request,
@@ -15,7 +14,7 @@ export async function POST(
   if (limited) return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
 
   const { slug, cid } = await params;
-  if (!SLUG_RE.test(slug) || cid.length === 0 || cid.length > 200) {
+  if (!isValidSlug(slug) || cid.length === 0 || cid.length > 200) {
     return NextResponse.json({ error: 'Invalid slug or citation id' }, { status: 400 });
   }
   const page = await getWikiPage(slug);

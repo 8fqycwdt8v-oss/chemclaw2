@@ -3,8 +3,8 @@ import { NextResponse } from 'next/server';
 import { getWikiPage, getWikiPageCitations, upsertWikiPage, updateWikiMetadata } from '@chemclaw2/db';
 import { embedTexts } from '../../../../lib/embeddings';
 import { rateLimit } from '@/lib/rate-limit';
+import { isValidSlug } from '@/lib/validation';
 
-const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_TITLE_LEN = 500;
 const MAX_CONTENT_TEXT_LEN = 500_000;
 const MAX_CITATIONS = 200;
@@ -23,7 +23,7 @@ export async function GET(
   }
 
   const { slug } = await params;
-  if (!SLUG_RE.test(slug) || slug.length > 200) {
+  if (!isValidSlug(slug)) {
     return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
   }
   const page = await getWikiPage(slug);
@@ -44,7 +44,7 @@ export async function PUT(
   }
 
   const { slug } = await params;
-  if (!SLUG_RE.test(slug) || slug.length > 200) {
+  if (!isValidSlug(slug)) {
     return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
   }
 
@@ -120,7 +120,7 @@ export async function PATCH(
   }
 
   const { slug } = await params;
-  if (!SLUG_RE.test(slug) || slug.length > 200) {
+  if (!isValidSlug(slug)) {
     return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
   }
 

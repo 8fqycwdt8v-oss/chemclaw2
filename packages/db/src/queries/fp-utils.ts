@@ -26,3 +26,32 @@ function popcount(n: number): number {
   n = (n & 0x33) + ((n >> 2) & 0x33);
   return (((n + (n >> 4)) & 0x0f) * 0x01010101) >>> 24;
 }
+
+/**
+ * Two-stage similarity over a BIT(2048) HNSW-indexed column.
+ * Stage 1: HNSW Hamming pre-filter (~100 candidates via `<~>` operator).
+ * Stage 2: exact Tanimoto re-rank in JS, filter ≥ minScore, sort, truncate.
+ *
+ * Caller provides a select function that returns rows with an `fp` field
+ * (the BIT column value as a binary string) plus whatever projection they want.
+ */
+export function validateFpBits(queryFpBits: string): void {
+  if (!/^[01]{2048}$/.test(queryFpBits)) {
+    throw new Error('queryFpBits must be exactly 2048 binary characters (0/1)');
+  }
+}
+
+export function rerankByTanimoto<T extends { fp: string | null }>(
+  rows: T[],
+  queryFpBits: string,
+  minScore: number,
+  limit: number,
+): Array<T & { similarity: number }> {
+  const queryBytes = bitStringToBytes(queryFpBits);
+  return rows
+    .filter((r): r is T & { fp: string } => r.fp !== null)
+    .map((r) => ({ ...r, similarity: tanimoto(queryBytes, bitStringToBytes(r.fp)) }))
+    .filter((r) => r.similarity >= minScore)
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, limit);
+}

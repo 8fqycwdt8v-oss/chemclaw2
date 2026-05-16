@@ -11,14 +11,9 @@ import {
   TERMINAL_STATUSES,
 } from '@chemclaw2/db';
 
-// Wiki auto-creation uses OpenAI text-embedding-3-small, same model as the web app
 let openaiClient: OpenAI | undefined;
 function getOpenAI(): OpenAI {
-  if (!openaiClient) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error('OPENAI_API_KEY required for campaign wiki page creation');
-    openaiClient = new OpenAI({ apiKey });
-  }
+  if (!openaiClient) openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
   return openaiClient;
 }
 
@@ -30,16 +25,9 @@ async function embedTextsForWorker(texts: string[]): Promise<number[][]> {
   return res.data.map((d) => d.embedding);
 }
 
-// Campaigns that stay 'running' for > 30 minutes are assumed crashed and reset
+// Steps stuck in 'running' past this are assumed crashed and reset by the sweep.
 const DEAD_LETTER_TIMEOUT_MINUTES = 30;
 
-/**
- * Build a grounded result payload for a campaign step. If the step's reaction
- * SMILES matches a fingerprinted reaction in the registry, pull the top-5 most
- * similar reactions for the result. The agent / UI can use this as the
- * "per-round result" the user reads in §3.11. No new infra — uses existing
- * findSimilarReactions on the existing reactions table.
- */
 async function buildStepResult(reactionSmiles: string | null): Promise<Record<string, unknown>> {
   const executedAt = new Date().toISOString();
   if (!reactionSmiles) return { executedAt, note: 'no reaction_smiles — skipped enrichment' };
@@ -67,16 +55,17 @@ async function buildStepResult(reactionSmiles: string | null): Promise<Record<st
 }
 
 export async function startCampaignWorker(boss: PgBoss): Promise<void> {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is required for campaign wiki creation');
+  }
   await boss.createQueue('retry-campaign-steps', { policy: PgBoss.policies.standard } as PgBoss.Queue);
   await boss.createQueue('run-campaign-step', { policy: PgBoss.policies.stately } as PgBoss.Queue);
   await boss.createQueue('create-campaign-wiki', { policy: PgBoss.policies.stately } as PgBoss.Queue);
 
-  // Cron every 5 minutes: retry failed steps + sweep dead 'running' steps + pick up pending steps
   await boss.schedule('retry-campaign-steps', '*/5 * * * *');
   await boss.work('retry-campaign-steps', async () => {
-    // Enqueue pending steps belonging to campaigns the user has kicked off (status='running').
-    // These have status='pending' from confirm_synthesis_plan, but the worker only
-    // sweeps failed steps via getStepsForRetry — so without this, kickoff has no effect.
+    // Pending steps in a kicked-off campaign — getStepsForRetry only covers failed,
+    // so without this the steps confirm_synthesis_plan inserted would sit forever.
     const pending = await db
       .select({ id: campaignSteps.id })
       .from(campaignSteps)
@@ -91,12 +80,12 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
       await boss.send('run-campaign-step', { stepId: id }, { singletonKey: id }).catch(() => {});
     }
 
-    // Dead-letter sweep: reset steps stuck in 'running' for > DEAD_LETTER_TIMEOUT_MINUTES.
-    // Sets next_retry_at = NOW() so getStepsForRetry() picks them up immediately.
-    // Guards retry_count < 3 to avoid pushing exhausted steps past the retry cap.
+    // Dead-letter sweep: reset stuck 'running' steps so getStepsForRetry picks them up.
+    // Don't increment retry_count here — markStepFailed owns the retry counter so
+    // we don't double-count a sweep-then-real-failure as two attempts.
     await db
       .update(campaignSteps)
-      .set({ status: 'failed', retryCount: sql`retry_count + 1`, nextRetryAt: sql`NOW()` })
+      .set({ status: 'failed', nextRetryAt: sql`NOW()` })
       .where(and(
         eq(campaignSteps.status, 'running'),
         lt(campaignSteps.retryCount, 3),
@@ -113,9 +102,6 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
     for (const job of jobs) {
       const { stepId } = job.data;
 
-      // Skip steps that require manual approval — the user must POST to
-      // /api/campaigns/[id]/steps/[idx]/approve to flip requires_approval=false
-      // before the next sweep will execute them.
       const [claimed] = await db
         .update(campaignSteps)
         .set({ status: 'running' })
@@ -143,9 +129,7 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
             .from(campaignSteps)
             .where(and(eq(campaignSteps.campaignId, claimed.campaignId), ne(campaignSteps.status, 'complete')));
           if (remaining.length === 0) {
-            // Guard: only complete if not already in a terminal state (failed or complete).
-            // .returning() gives an empty array when the WHERE predicate was false, so the
-            // wiki enqueue only fires on an actual status transition.
+            // Guard against re-entering terminal state — only enqueue wiki on real transition.
             const updated = await db.update(synthesisCampaigns).set({ status: 'complete' }).where(
               and(eq(synthesisCampaigns.id, campaign.id), notInArray(synthesisCampaigns.status, [...TERMINAL_STATUSES])),
             ).returning({ id: synthesisCampaigns.id });

@@ -27,6 +27,7 @@
     { "idx": 10, "version": "7", "when": 1748184000000, "tag": "0011_campaign_queue_policy", "breakpoints": true },
     { "idx": 11, "version": "7", "when": 1748270400000, "tag": "0012_wiki_revisions", "breakpoints": true },
     { "idx": 12, "version": "7", "when": 1748356800000, "tag": "0013_wiki_lifecycle_and_temporal", "breakpoints": true },
-    { "idx": 13, "version": "7", "when": 1748443200000, "tag": "0014_campaign_approval_and_subscriptions", "breakpoints": true }
+    { "idx": 13, "version": "7", "when": 1748443200000, "tag": "0014_campaign_approval_and_subscriptions", "breakpoints": true },
+    { "idx": 14, "version": "7", "when": 1748529600000, "tag": "0015_wiki_citations_unique", "breakpoints": true }
   ]
 }
