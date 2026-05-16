@@ -7,3 +7,5 @@
 - [api/wiki] wiki_pages.version is incremented by wiki_pages_auto_version BEFORE UPDATE trigger (migration 0003); Drizzle onConflictDoUpdate also sets updatedAt: sql`now()` which is redundant but harmless alongside the trigger
 - [api/wiki] upsertWikiPage: embedFn output length not validated against chunks.length; mismatch produces undefined embedded to DB insert
 - [campaigns] updateCampaignStatus terminal-state guard added to both updateCampaignStatus and updateCampaignStatusForUser in packages/db/src/queries/campaigns.ts — both now use inArray(status, NON_TERMINAL_STATUSES)
+- [session-store] pg_advisory_xact_lock uses hashtext() (32-bit) for concurrency guard; hash collisions between different projectKey+sessionId pairs are theoretically possible — low probability but upgrade to bigint hash (hashtext(a) << 32 | hashtext(b)) before high write volumes
+- [web-search] web_search tool empty query (query: "") passes validation and reaches Brave API — add min-length guard (>= 1 char, <= 500 chars) before the fetch

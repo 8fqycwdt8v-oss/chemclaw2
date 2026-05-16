@@ -218,7 +218,10 @@ async function start() {
   }
 
   await pollMissingFingerprints();
-  const pollInterval = setInterval(pollMissingFingerprints, 30_000);
+  const pollInterval = setInterval(
+    () => pollMissingFingerprints().catch((err) => console.error('[fp-worker] pollMissingFingerprints error:', err)),
+    30_000,
+  );
 
   console.log('[fp-worker] ready — processing compute-morgan-fp and compute-drfp jobs');
 
