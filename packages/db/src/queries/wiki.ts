@@ -219,11 +219,15 @@ export async function setCitationDisputed(
 }
 
 /**
- * Reproduce a wiki page as of a given timestamp by walking wiki_revisions.
- * Returns null when no revision exists for the slug at or before asof.
- * Uses the existing 0012 wiki_revisions table — no new infra.
+ * Reproduce a wiki page as of a given timestamp.
+ *
+ * The snapshot trigger only fires on UPDATE (migration 0012), so a page that
+ * was created and never edited has zero revision rows. In that case fall back
+ * to the current wiki_pages row if it predates `asof`. Returns null when the
+ * slug didn't exist at the asof timestamp.
  */
 export async function pointInTimeWiki(slug: string, asof: Date) {
+  const asofIso = asof.toISOString();
   const rows = await db.execute<{
     title: string;
     content: unknown;
@@ -235,11 +239,28 @@ export async function pointInTimeWiki(slug: string, asof: Date) {
     SELECT r.title, r.content, r.content_text, r.version, r.updated_at, r.updated_by
     FROM wiki_revisions r
     JOIN wiki_pages p ON p.id = r.page_id
-    WHERE p.slug = ${slug} AND r.updated_at <= ${asof.toISOString()}::timestamptz
+    WHERE p.slug = ${slug} AND r.updated_at <= ${asofIso}::timestamptz
     ORDER BY r.updated_at DESC
     LIMIT 1
   `);
-  return rows[0] ?? null;
+  if (rows[0]) return rows[0];
+
+  // No revision before asof — fall back to the current row if it was created
+  // before asof and has never been edited (i.e., still matches the original).
+  const current = await db.execute<{
+    title: string;
+    content: unknown;
+    content_text: string | null;
+    version: number;
+    updated_at: string;
+    updated_by: string | null;
+  }>(sql`
+    SELECT title, content, content_text, version, updated_at, updated_by
+    FROM wiki_pages
+    WHERE slug = ${slug} AND created_at <= ${asofIso}::timestamptz
+    LIMIT 1
+  `);
+  return current[0] ?? null;
 }
 
 /**
