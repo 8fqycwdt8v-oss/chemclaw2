@@ -1,4 +1,4 @@
-import { sql, eq, lt, desc, or, and } from 'drizzle-orm';
+import { sql, eq, lt, desc, or, and, type SQL } from 'drizzle-orm';
 import { db } from '../client';
 import { wikiPages, wikiChunks, wikiCitations, wikiSubscriptions } from '../schema/wiki';
 
@@ -307,11 +307,21 @@ export async function countUnreadSubscriptions(userId: string): Promise<number> 
   return rows[0]?.count ?? 0;
 }
 
-export async function searchWikiByFTS(query: string, limit = 20) {
+export async function searchWikiByFTS(query: string, limit = 20, includeArchived = false) {
+  const predicates: SQL[] = [
+    sql`to_tsvector('english', coalesce(content_text, '')) @@ plainto_tsquery('english', ${query})`,
+  ];
+  if (!includeArchived) predicates.push(sql`archived = false`);
   return db
-    .select({ id: wikiPages.id, slug: wikiPages.slug, title: wikiPages.title, contentText: wikiPages.contentText })
+    .select({
+      id: wikiPages.id,
+      slug: wikiPages.slug,
+      title: wikiPages.title,
+      contentText: wikiPages.contentText,
+      maturity: wikiPages.maturity,
+    })
     .from(wikiPages)
-    .where(sql`to_tsvector('english', coalesce(content_text, '')) @@ plainto_tsquery('english', ${query})`)
+    .where(sql.join(predicates, sql` AND `))
     .limit(Math.min(limit, 200));
 }
 
@@ -333,26 +343,83 @@ export async function listWikiRevisions(pageId: string, limit = 10) {
   }
 }
 
-export async function semanticSearchWiki(embedding: number[], limit = 5) {
+export type SemanticSearchOptions = {
+  /** Maximum cosine distance to accept (0 = identical, 2 = opposite). Default 0.5. */
+  maxDistance?: number;
+  /** Maximum chunks returned from any single page. Default 2. */
+  maxChunksPerPage?: number;
+  /** Include archived pages. Default false. */
+  includeArchived?: boolean;
+};
+
+export type SemanticSearchResult = {
+  pageId: string;
+  slug: string;
+  title: string;
+  maturity: string;
+  text: string;
+  distance: number;
+};
+
+/**
+ * Vector-similarity search over wiki_chunks. JOINs wiki_pages so the caller
+ * gets renderable identifiers (slug, title, maturity) without a second round-trip.
+ *
+ * Filters:
+ * - archived pages excluded by default (deprecated content stays out of results)
+ * - distance threshold: chunks beyond maxDistance are dropped (irrelevant matches
+ *   would otherwise surface as "top results" for queries the wiki doesn't cover)
+ * - per-page cap: at most maxChunksPerPage chunks from a single page (a long
+ *   page can otherwise fill all slots, starving the agent of complementary sources)
+ *
+ * Over-fetches by 4x to leave headroom for the per-page cap.
+ */
+export async function semanticSearchWiki(
+  embedding: number[],
+  limit = 5,
+  opts: SemanticSearchOptions = {},
+): Promise<SemanticSearchResult[]> {
   if (embedding.length !== 1536) {
     throw new Error(`embedding must have 1536 dimensions, got ${embedding.length}`);
   }
   if (embedding.some((v) => !Number.isFinite(v))) {
     throw new Error('embedding contains non-finite values');
   }
-  // Use sql.param() to ensure the vector literal is a bound parameter, not raw SQL.
-  // Drizzle already parameterizes template interpolations, but this is explicit.
-  const vecStr = `[${embedding.join(',')}]`;
-  const distExpr = sql<number>`embedding <=> ${sql.param(vecStr)}::vector(1536)`;
+  const safeLimit = Math.min(Math.max(1, limit), 50);
+  const maxDistance = opts.maxDistance ?? 0.5;
+  const maxChunksPerPage = Math.max(1, opts.maxChunksPerPage ?? 2);
+  const includeArchived = opts.includeArchived ?? false;
 
-  return db
+  const vecStr = `[${embedding.join(',')}]`;
+  const distExpr = sql<number>`wiki_chunks.embedding <=> ${sql.param(vecStr)}::vector(1536)`;
+
+  const predicates: SQL[] = [sql`wiki_chunks.embedding IS NOT NULL`];
+  if (!includeArchived) predicates.push(sql`wiki_pages.archived = false`);
+
+  const rows = await db
     .select({
       pageId: wikiChunks.pageId,
+      slug: wikiPages.slug,
+      title: wikiPages.title,
+      maturity: wikiPages.maturity,
       text: wikiChunks.text,
       distance: distExpr,
     })
     .from(wikiChunks)
-    .where(sql`embedding IS NOT NULL`)
+    .innerJoin(wikiPages, eq(wikiPages.id, wikiChunks.pageId))
+    .where(sql.join(predicates, sql` AND `))
     .orderBy(distExpr)
-    .limit(Math.min(limit, 50));
+    .limit(safeLimit * 4);
+
+  const perPage = new Map<string, number>();
+  const out: SemanticSearchResult[] = [];
+  for (const r of rows) {
+    if (r.distance > maxDistance) continue;
+    const seen = perPage.get(r.pageId) ?? 0;
+    if (seen >= maxChunksPerPage) continue;
+    perPage.set(r.pageId, seen + 1);
+    out.push(r);
+    if (out.length >= safeLimit) break;
+  }
+  return out;
 }
