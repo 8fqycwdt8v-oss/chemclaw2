@@ -7,12 +7,20 @@ primary_region = "fra"
   PORT = "3000"
   NEXT_TELEMETRY_DISABLED = "1"
 
+# Two processes share the image: the Next.js web app and the fp-worker
+# (fingerprinting + campaign step queue). Without the worker, compounds and
+# reactions sit with NULL fingerprints and similarity search returns nothing.
+[processes]
+  web = "node apps/web/server.js"
+  worker = "pnpm --filter @chemclaw2/fp-worker start"
+
 [http_service]
   internal_port = 3000
   force_https = true
   auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 1
+  processes = ["web"]
 
   [http_service.concurrency]
     type = "requests"
@@ -30,3 +38,10 @@ primary_region = "fra"
   memory = "1gb"
   cpu_kind = "shared"
   cpus = 1
+  processes = ["web"]
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+  processes = ["worker"]
