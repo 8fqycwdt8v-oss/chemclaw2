@@ -1,4 +1,5 @@
 import { insertProperties } from '@chemclaw2/db';
+import { UUID_RE } from './uuid';
 
 type PropertyInput = {
   compound_id: string;
@@ -10,8 +11,6 @@ type PropertyInput = {
   source_citation_id?: string;
   measured_at?: string;
 };
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Wave-3e B6 write tool: bulk-insert structured property rows (SAR data) for

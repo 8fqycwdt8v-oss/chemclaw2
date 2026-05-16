@@ -41,6 +41,7 @@
     { "idx": 24, "version": "7", "when": 1749393600000, "tag": "0025_schema_cleanup_and_indexes", "breakpoints": true },
     { "idx": 25, "version": "7", "when": 1749480000000, "tag": "0026_knowledge_persistence", "breakpoints": true },
     { "idx": 26, "version": "7", "when": 1749566400000, "tag": "0027_wiki_tables_and_token_budgets", "breakpoints": true },
-    { "idx": 27, "version": "7", "when": 1749652800000, "tag": "0028_wiki_proposed_edits", "breakpoints": true }
+    { "idx": 27, "version": "7", "when": 1749652800000, "tag": "0028_wiki_proposed_edits", "breakpoints": true },
+    { "idx": 28, "version": "7", "when": 1749739200000, "tag": "0029_wiki_tables_cleanup", "breakpoints": true }
   ]
 }

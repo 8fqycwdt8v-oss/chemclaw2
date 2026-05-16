@@ -1,4 +1,3 @@
-import { auth, currentUser } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import {
   getProjectBudget,
@@ -6,6 +5,7 @@ import {
   getCurrentSpend,
   type BudgetPeriod,
 } from '@chemclaw2/db';
+import { requireAdminApi } from '@/lib/auth';
 
 /**
  * Per-project budget caps. Admin-only (Clerk publicMetadata.role='admin').
@@ -21,18 +21,10 @@ import {
  *   experimentsCap?: number|null,
  * }
  */
-async function requireAdmin(): Promise<NextResponse | string> {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const user = await currentUser();
-  const role = (user?.publicMetadata as { role?: string } | undefined)?.role;
-  if (role !== 'admin') return NextResponse.json({ error: 'Forbidden — admin role required' }, { status: 403 });
-  return userId;
-}
 
 export async function GET(_req: Request, { params }: { params: Promise<{ projectKey: string }> }) {
-  const adminOrErr = await requireAdmin();
-  if (adminOrErr instanceof NextResponse) return adminOrErr;
+  const gate = await requireAdminApi();
+  if (gate instanceof NextResponse) return gate;
 
   const { projectKey } = await params;
   const budget = await getProjectBudget(projectKey);
@@ -43,9 +35,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ project
 }
 
 export async function PUT(req: Request, { params }: { params: Promise<{ projectKey: string }> }) {
-  const adminOrErr = await requireAdmin();
-  if (adminOrErr instanceof NextResponse) return adminOrErr;
-  const adminUserId = adminOrErr;
+  const gate = await requireAdminApi();
+  if (gate instanceof NextResponse) return gate;
+  const { userId: adminUserId } = gate;
 
   const { projectKey } = await params;
   if (projectKey.length === 0 || projectKey.length > 200) {

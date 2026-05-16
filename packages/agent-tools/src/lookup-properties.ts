@@ -1,4 +1,5 @@
 import { listPropertiesForCompound } from '@chemclaw2/db';
+import { UUID_RE } from './uuid';
 
 type LookupInput = {
   compound_id: string;
@@ -8,8 +9,6 @@ type LookupInput = {
   unit?: string;
   limit?: number;
 };
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Wave-2b B5 agent tool: structured SAR query over the properties table.

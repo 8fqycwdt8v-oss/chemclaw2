@@ -1,16 +1,13 @@
 import Link from 'next/link';
 import { UserButton } from '@clerk/nextjs';
-import { auth, currentUser } from '@clerk/nextjs/server';
 import { countUnreadSubscriptions, listPendingProposedEdits } from '@chemclaw2/db';
+import { getAdminContext } from '@/lib/auth';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const { userId } = await auth();
+  const { userId, isAdmin } = await getAdminContext();
   const unread = userId ? await countUnreadSubscriptions(userId).catch(() => 0) : 0;
-  // Wave-3d: admin-only review-queue link with a count badge. Skip role +
-  // queue lookups for non-signed-in / non-admin users so the nav stays cheap.
-  const user = userId ? await currentUser() : null;
-  const isAdmin =
-    (user?.publicMetadata as { role?: string } | undefined)?.role === 'admin';
+  // Wave-3d: admin-only review-queue link with a count badge. Skip the
+  // queue lookup for non-admins so the nav stays cheap.
   const queueCount = isAdmin
     ? await listPendingProposedEdits(50).then((p) => p.length).catch(() => 0)
     : 0;

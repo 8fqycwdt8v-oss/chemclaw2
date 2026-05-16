@@ -23,6 +23,7 @@ export { createDeepResearchTools } from './deep-research';
 export { createLookupKnowledgeTool } from './lookup-knowledge';
 export { lookupPropertiesTool } from './lookup-properties';
 export { SLUG_RE, SLUG_MAX_LEN, RESERVED_SLUGS, isValidSlug } from './slug';
+export { UUID_RE, isUuid } from './uuid';
 export {
   EMBED_MODEL,
   EMBED_DIM,

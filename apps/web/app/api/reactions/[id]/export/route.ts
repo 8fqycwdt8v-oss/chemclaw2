@@ -1,9 +1,9 @@
+import { UUID_RE } from '@/lib/validation';
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { exportReactionsAsOrd } from '@chemclaw2/agent-tools';
 import { rateLimit } from '@/lib/rate-limit';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { userId } = await auth();

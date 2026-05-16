@@ -1,4 +1,4 @@
-import { auth, currentUser } from '@clerk/nextjs/server';
+import { UUID_RE } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 import {
   getProposedEdit,
@@ -6,8 +6,7 @@ import {
   upsertWikiPage,
 } from '@chemclaw2/db';
 import { embedTexts } from '@/lib/embeddings';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { requireAdminApi } from '@/lib/auth';
 
 /**
  * Wave-3c admin endpoint — apply a pending proposal. Looks up the proposed
@@ -18,13 +17,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * audit trail.
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const user = await currentUser();
-  const role = (user?.publicMetadata as { role?: string } | undefined)?.role;
-  if (role !== 'admin') {
-    return NextResponse.json({ error: 'Forbidden — admin role required' }, { status: 403 });
-  }
+  const gate = await requireAdminApi();
+  if (gate instanceof NextResponse) return gate;
+  const { userId } = gate;
 
   const { id } = await params;
   if (!UUID_RE.test(id)) return NextResponse.json({ error: 'id must be a UUID' }, { status: 400 });
@@ -69,11 +64,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     typeof body.comment === 'string' ? body.comment : undefined,
   );
   if (!found) {
-    // Pathological race: someone else marked it superseded between our read
-    // and our write. The wiki page write still happened (idempotent upsert
-    // by slug), so the world is consistent — just report.
+    // Wave-3f bug-fix: another admin applied/superseded between our read and
+    // our write. The wiki page write still happened (idempotent upsert by
+    // slug), but the audit trail records only the first reviewer — this
+    // reviewer's click is lost. Surface as 409 so the UI tells the user the
+    // truth instead of "Applied" twice.
     return NextResponse.json(
-      { ok: true, page_id: pageId, note: 'Wiki updated but proposal row was no longer pending.' },
+      {
+        error: 'Conflict: proposal was no longer pending when applied. Another reviewer beat you to it.',
+        page_id: pageId,
+      },
+      { status: 409 },
     );
   }
   return NextResponse.json({ ok: true, page_id: pageId });

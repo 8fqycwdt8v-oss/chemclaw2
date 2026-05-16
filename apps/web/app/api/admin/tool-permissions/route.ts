@@ -1,6 +1,6 @@
-import { auth, currentUser } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { setToolPermission } from '@chemclaw2/db';
+import { requireAdminApi } from '@/lib/auth';
 
 /**
  * Set or update a per-tool permission. Admin-only (Clerk publicMetadata.role
@@ -10,12 +10,9 @@ import { setToolPermission } from '@chemclaw2/db';
  * Body: { scope: 'user'|'project'|'org', scopeId, toolName, mode: 'allow'|'ask'|'deny' }
  */
 export async function POST(req: Request) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const user = await currentUser();
-  const role = (user?.publicMetadata as { role?: string } | undefined)?.role;
-  if (role !== 'admin') return NextResponse.json({ error: 'Forbidden — admin role required' }, { status: 403 });
+  const gate = await requireAdminApi();
+  if (gate instanceof NextResponse) return gate;
+  const { userId } = gate;
 
   let body: { scope?: unknown; scopeId?: unknown; toolName?: unknown; mode?: unknown };
   try {

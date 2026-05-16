@@ -1,3 +1,4 @@
+import { UUID_RE } from '@/lib/validation';
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { db, sql, countUnreadSubscriptions, synthesisCampaigns, and, eq, inArray, isNull } from '@chemclaw2/db';
@@ -49,7 +50,6 @@ export async function GET() {
   });
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function POST(req: Request) {
   const { userId } = await auth();

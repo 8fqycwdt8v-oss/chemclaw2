@@ -1,21 +1,16 @@
-import { auth, currentUser } from '@clerk/nextjs/server';
+import { UUID_RE } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 import { markProposedEditRejected } from '@chemclaw2/db';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { requireAdminApi } from '@/lib/auth';
 
 /**
  * Wave-3c admin endpoint — reject a pending proposal with a required
  * reviewer comment so the audit trail captures why the change was declined.
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const user = await currentUser();
-  const role = (user?.publicMetadata as { role?: string } | undefined)?.role;
-  if (role !== 'admin') {
-    return NextResponse.json({ error: 'Forbidden — admin role required' }, { status: 403 });
-  }
+  const gate = await requireAdminApi();
+  if (gate instanceof NextResponse) return gate;
+  const { userId } = gate;
 
   const { id } = await params;
   if (!UUID_RE.test(id)) return NextResponse.json({ error: 'id must be a UUID' }, { status: 400 });

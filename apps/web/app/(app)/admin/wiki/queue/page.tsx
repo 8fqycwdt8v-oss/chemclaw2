@@ -1,21 +1,19 @@
 import Link from 'next/link';
-import { auth, currentUser } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
 import { listPendingProposedEdits } from '@chemclaw2/db';
+import { getAdminContext } from '@/lib/auth';
 
 /**
  * Wave-3d: reviewer UI for the propose-edit/apply protocol shipped in Wave 3c.
  *
  * Server-component list of pending wiki edit proposals; per-proposal apply /
- * reject UI lives at /admin/wiki/queue/[id]. Admin-only via the same Clerk
- * publicMetadata.role check the admin API routes use.
+ * reject UI lives at /admin/wiki/queue/[id]. Admin-only via the shared
+ * `getAdminContext` helper.
  */
 export default async function WikiReviewQueuePage() {
-  const { userId } = await auth();
+  const { userId, isAdmin } = await getAdminContext();
   if (!userId) redirect('/sign-in');
-  const user = await currentUser();
-  const role = (user?.publicMetadata as { role?: string } | undefined)?.role;
-  if (role !== 'admin') {
+  if (!isAdmin) {
     return (
       <div className="text-sm text-slate-600">
         Admin role required. Ask an admin to grant you the role in Clerk.
