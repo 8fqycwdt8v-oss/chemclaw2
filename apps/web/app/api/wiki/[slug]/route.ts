@@ -66,6 +66,9 @@ export async function PUT(
   if (body.title !== undefined && (typeof body.title !== 'string' || body.title.length > MAX_TITLE_LEN)) {
     return NextResponse.json({ error: 'title must be a string of at most 500 characters' }, { status: 400 });
   }
+  if (body.contentText !== undefined && typeof body.contentText !== 'string') {
+    return NextResponse.json({ error: 'contentText must be a string' }, { status: 400 });
+  }
   if (typeof body.contentText === 'string' && body.contentText.length > MAX_CONTENT_TEXT_LEN) {
     return NextResponse.json({ error: 'contentText too large' }, { status: 413 });
   }
