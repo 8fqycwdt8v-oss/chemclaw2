@@ -108,4 +108,15 @@ describe('checkToolInput (redaction)', () => {
     const result = checkToolInput('compound_similarity_search', { fingerprint_bits: '010101' });
     expect(result.action).toBe('allow');
   });
+
+  it('redacts SSN from deeply nested object value', () => {
+    const result = checkToolInput('eln_fetch', {
+      meta: { patient: { id: '987-65-4321', notes: 'compound data' } },
+    });
+    expect(result.action).toBe('allow');
+    if (result.action === 'allow') {
+      expect(JSON.stringify(result.input)).toContain('[REDACTED-SSN]');
+      expect(JSON.stringify(result.input)).not.toContain('987-65-4321');
+    }
+  });
 });
