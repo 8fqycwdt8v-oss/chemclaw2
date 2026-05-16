@@ -275,8 +275,6 @@ export async function upsertWikiPage(
               anchor: t.anchor ?? null,
               headers: t.headers,
               rows: t.rows,
-              headerText: t.headers.join(' | '),
-              headerEmbedding: null,
             })));
           }
         }

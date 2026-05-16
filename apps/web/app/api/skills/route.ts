@@ -1,3 +1,4 @@
+import { UUID_RE } from '@/lib/validation';
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { writeFile, mkdir } from 'node:fs/promises';
@@ -8,7 +9,6 @@ import { rateLimit } from '@/lib/rate-limit';
 
 const SKILLS_DIR = process.env.SKILLS_DIR ?? join(process.cwd(), '..', '..', 'skills');
 const SKILL_NAME_RE = /^[a-z][a-z0-9-]{1,40}$/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Capture the last successful turn from a session and persist it as a new skill

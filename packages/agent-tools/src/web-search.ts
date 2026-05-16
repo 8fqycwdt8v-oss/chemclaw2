@@ -1,5 +1,5 @@
 import { ALLOWED_DOMAINS } from './doc-fetch';
-import { recordExternalFact } from '@chemclaw2/db';
+import { recordExternalFactSafe } from '@chemclaw2/db';
 
 const BRAVE_API = 'https://api.search.brave.com/res/v1/web/search';
 
@@ -88,9 +88,7 @@ export function createWebSearchTool(userId: string) {
         const contentText = result.results
           .map((r) => `${r.title}\n${r.snippet}`)
           .join('\n\n');
-        await recordExternalFact('web_search', sourceId, result, userId, contentText).catch((err) => {
-          console.error('[web-search] external_facts upsert failed:', err);
-        });
+        await recordExternalFactSafe('web_search', sourceId, result, userId, contentText);
       }
       return result;
     },

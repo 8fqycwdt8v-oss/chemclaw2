@@ -1,10 +1,9 @@
+import { UUID_RE } from '@/lib/validation';
 import Link from 'next/link';
-import { auth, currentUser } from '@clerk/nextjs/server';
 import { notFound, redirect } from 'next/navigation';
 import { getProposedEdit, getWikiPage } from '@chemclaw2/db';
 import { ReviewActions } from '@/components/admin/ReviewActions';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { getAdminContext } from '@/lib/auth';
 
 /**
  * Wave-3d proposed-edit detail page — side-by-side current vs. proposed
@@ -14,11 +13,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export default async function ProposedEditDetailPage(
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { userId } = await auth();
+  const { userId, isAdmin } = await getAdminContext();
   if (!userId) redirect('/sign-in');
-  const user = await currentUser();
-  const role = (user?.publicMetadata as { role?: string } | undefined)?.role;
-  if (role !== 'admin') {
+  if (!isAdmin) {
     return (
       <div className="text-sm text-slate-600">
         Admin role required.

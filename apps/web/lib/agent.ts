@@ -48,18 +48,24 @@ queries via lookup_properties and lookup_knowledge.`;
 // mounted via `mcpServers`. We pass `mcpServers: ['chemclaw2-tools']` so the
 // sub-agent gets every in-process tool by reference; the `tools` list then
 // narrows which of those it may actually call.
+// Wave-3f bug-fix: tool names must match the `name` field on each tool's
+// definition (the SDK namespaces in-process MCP tools as
+// `mcp__<server>__<tool.name>`). Two names were wrong in Wave 3b and the
+// deep-research sub-agent silently lacked those two tools:
+//   - 'substructure_candidates'  → actual name is 'list_substructure_candidates'
+//   - 'green_solvent_score'      → actual name is 'score_solvents'
 const DEEP_RESEARCH_TOOLS: string[] = [
   'mcp__chemclaw2-tools__lookup_knowledge',
   'mcp__chemclaw2-tools__lookup_properties',
   'mcp__chemclaw2-tools__wiki_lookup',
   'mcp__chemclaw2-tools__compound_similarity_search',
   'mcp__chemclaw2-tools__find_similar_reactions',
-  'mcp__chemclaw2-tools__substructure_candidates',
+  'mcp__chemclaw2-tools__list_substructure_candidates',
   'mcp__chemclaw2-tools__web_search',
   'mcp__chemclaw2-tools__fetch_document',
   'mcp__chemclaw2-tools__eln_fetch_experiment',
   'mcp__chemclaw2-tools__lookup_hazard',
-  'mcp__chemclaw2-tools__green_solvent_score',
+  'mcp__chemclaw2-tools__score_solvents',
   'mcp__mcp-molfp__compute_morgan_fp',
   'mcp__mcp-rxnfp__compute_drfp',
 ];

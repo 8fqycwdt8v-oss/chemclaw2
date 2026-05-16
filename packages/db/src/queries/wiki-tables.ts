@@ -1,4 +1,4 @@
-import { eq, asc, sql } from 'drizzle-orm';
+import { eq, asc } from 'drizzle-orm';
 import { db } from '../client';
 import { wikiTables } from '../schema/wiki-tables';
 
@@ -75,37 +75,25 @@ export function extractMarkdownTables(md: string): ExtractedTable[] {
  * transaction. Called inside `upsertWikiPage`'s transaction so table state
  * mirrors page state.
  *
- * `embedHeader` is optional; when provided, the header_text is embedded so
- * the semantic-search path can surface tables. Passing undefined skips the
- * embedding call (cheap fallback).
+ * Wave-3f: header-embedding parameter dropped along with the column
+ * (migration 0029). When semantic table retrieval is genuinely needed, the
+ * right shape is bundling header strings into the wiki_upsert's single
+ * embedFn call alongside chunks — not an extra per-table OpenAI round-trip.
  */
 export async function upsertTablesForPage(
   pageId: string,
   tables: ExtractedTable[],
-  embedHeader?: (text: string) => Promise<number[]>,
 ): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.delete(wikiTables).where(eq(wikiTables.pageId, pageId));
     if (tables.length === 0) return;
-    // Compute embeddings outside the transaction would be cleaner, but the
-    // caller already runs inside one; embed-then-insert here keeps the
-    // table data atomic with the page write. For high-table pages a future
-    // refactor can pre-compute outside.
-    const rows = [];
-    for (const t of tables) {
-      const headerText = t.headers.join(' | ');
-      const embedding = embedHeader ? await embedHeader(headerText) : null;
-      rows.push({
-        pageId,
-        position: t.position,
-        anchor: t.anchor ?? null,
-        headers: t.headers,
-        rows: t.rows,
-        headerText,
-        headerEmbedding: embedding,
-      });
-    }
-    await tx.insert(wikiTables).values(rows);
+    await tx.insert(wikiTables).values(tables.map((t) => ({
+      pageId,
+      position: t.position,
+      anchor: t.anchor ?? null,
+      headers: t.headers,
+      rows: t.rows,
+    })));
   });
 }
 
@@ -136,32 +124,6 @@ export async function listTablesForPage(pageId: string): Promise<Array<{
   }));
 }
 
-/**
- * FTS over wiki_tables.header_text — for "find tables about yields" queries
- * that the future lookup_knowledge orchestrator (or a dedicated tool) may
- * want to surface alongside paragraph chunks.
- */
-export async function searchTablesByHeader(query: string, limit = 10): Promise<Array<{
-  id: string;
-  pageId: string;
-  headers: string[];
-  rows: Array<Record<string, string>>;
-}>> {
-  const rows = await db
-    .select({
-      id: wikiTables.id,
-      pageId: wikiTables.pageId,
-      headers: wikiTables.headers,
-      rows: wikiTables.rows,
-    })
-    .from(wikiTables)
-    .where(sql`to_tsvector('english', ${wikiTables.headerText})
-              @@ plainto_tsquery('english', ${query})`)
-    .limit(Math.min(Math.max(1, limit), 50));
-  return rows.map((r) => ({
-    id: r.id,
-    pageId: r.pageId,
-    headers: r.headers as string[],
-    rows: r.rows as Array<Record<string, string>>,
-  }));
-}
+// searchTablesByHeader removed in Wave-3f: no caller, no tool surface. When
+// "find tables about yields" becomes a real need, the right home for it is
+// inside lookup_knowledge's RRF fan-out, not a separate query helper.

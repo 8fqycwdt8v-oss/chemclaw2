@@ -122,7 +122,14 @@ export async function getBudgetWithSpend(
   // The period is on the budget row, but the spend-row period_start depends on
   // it — chicken-and-egg for a single SQL statement. We evaluate the period
   // in SQL via date_trunc/CASE so the same statement does both lookups.
-  // Mirrors `periodStartFor` exactly; keep in sync if the TS helper changes.
+  //
+  // Wave-3f bug-fix: `date_trunc('week', $)` truncates in the SESSION timezone
+  // by default. `periodStartFor` (TS) always computes in UTC. On a cluster
+  // whose `timezone` GUC is not UTC the JOIN would point at a non-existent
+  // (or wrong) period_start row, silently disagreeing with `incrementSpend`'s
+  // later UPSERT key. Force UTC by truncating an `AT TIME ZONE 'UTC'`
+  // expression — the result is a `timestamp` in UTC, which we re-cast back to
+  // `timestamptz` for the comparison.
   const nowIso = now.toISOString();
   const rows = await db.execute<{
     period: string;
@@ -145,9 +152,9 @@ export async function getBudgetWithSpend(
     LEFT JOIN project_budget_spend pbs
       ON pbs.project_key = pb.project_key
      AND pbs.period_start = CASE pb.period
-       WHEN 'day'   THEN date_trunc('day',   ${nowIso}::timestamptz)
-       WHEN 'week'  THEN date_trunc('week',  ${nowIso}::timestamptz)
-       WHEN 'month' THEN date_trunc('month', ${nowIso}::timestamptz)
+       WHEN 'day'   THEN date_trunc('day',   (${nowIso}::timestamptz) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+       WHEN 'week'  THEN date_trunc('week',  (${nowIso}::timestamptz) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+       WHEN 'month' THEN date_trunc('month', (${nowIso}::timestamptz) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
      END
     WHERE pb.project_key = ${projectKey}
   `);

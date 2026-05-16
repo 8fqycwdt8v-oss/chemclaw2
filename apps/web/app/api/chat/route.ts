@@ -1,3 +1,4 @@
+import { UUID_RE } from '@/lib/validation';
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { buildQueryOptions } from '@/lib/agent';
@@ -7,7 +8,6 @@ import { recordOverride, getProjectBudget, incrementSpend } from '@chemclaw2/db'
 import { randomUUID } from 'crypto';
 import { rateLimit } from '@/lib/rate-limit';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PROMPT_BYTES = 32_768;
 const MAX_JUSTIFICATION_LEN = 2000;
 const RATE_LIMIT_REQUESTS = 20;

@@ -23,6 +23,9 @@ export type ExternalFactRow = {
  *
  * contentText is the lossy text extract used for FTS; the canonical agent
  * view stays in payload.
+ *
+ * Wave-3f: caller-facing variant. Throws on DB error so test paths can
+ * assert. Production tool sites use `recordExternalFactSafe` below.
  */
 export async function recordExternalFact(
   sourceType: ExternalFactSource,
@@ -49,6 +52,26 @@ export async function recordExternalFact(
         fetchedBy,
       },
     });
+}
+
+/**
+ * Wave-3f cut: persistence wrappers in eln-fetch / web-search / doc-fetch
+ * all did `.catch(err => console.error(...))` with three slightly-different
+ * messages. One helper, one message format, one place to change the policy
+ * (e.g. swap to OpenTelemetry event emission later).
+ */
+export async function recordExternalFactSafe(
+  sourceType: ExternalFactSource,
+  sourceId: string,
+  payload: unknown,
+  fetchedBy: string,
+  contentText?: string | null,
+): Promise<void> {
+  try {
+    await recordExternalFact(sourceType, sourceId, payload, fetchedBy, contentText);
+  } catch (err) {
+    console.error(`[external-facts] upsert failed (${sourceType}:${sourceId}):`, err);
+  }
 }
 
 export async function getExternalFact(

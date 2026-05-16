@@ -1,9 +1,9 @@
+import { UUID_RE } from '@/lib/validation';
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { db, sql } from '@chemclaw2/db';
 import { rateLimit } from '@/lib/rate-limit';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Release a single per-step approval gate. Owner-scoped: the user must have
