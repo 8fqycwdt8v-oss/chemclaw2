@@ -124,7 +124,7 @@ async function start() {
   // Process Morgan fingerprint jobs
   await boss.work<{ id: string }>(
     'compute-morgan-fp',
-    { batchSize: 4 },
+    { batchSize: 4, pollingIntervalSeconds: 10 + Math.floor(Math.random() * 5) },
     async (jobs) => {
       for (const job of jobs) {
         const { id } = job.data;
@@ -159,7 +159,7 @@ async function start() {
   // Process DRFP jobs
   await boss.work<{ id: string }>(
     'compute-drfp',
-    { batchSize: 4 },
+    { batchSize: 4, pollingIntervalSeconds: 10 + Math.floor(Math.random() * 5) },
     async (jobs) => {
       for (const job of jobs) {
         const { id } = job.data;
