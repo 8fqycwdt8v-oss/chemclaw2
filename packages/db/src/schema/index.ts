@@ -9,3 +9,6 @@ export * from './feedback';
 export * from './tool-permissions';
 export * from './budgets';
 export * from './todos';
+export * from './external-facts';
+export * from './properties';
+export * from './papers';

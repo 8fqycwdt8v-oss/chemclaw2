@@ -1,4 +1,5 @@
 import { ALLOWED_DOMAINS } from './doc-fetch';
+import { recordExternalFact } from '@chemclaw2/db';
 
 const BRAVE_API = 'https://api.search.brave.com/res/v1/web/search';
 
@@ -66,3 +67,32 @@ export const webSearchTool = {
     return { results };
   },
 };
+
+/**
+ * Wave-2a persistence wrapper. source_id is the normalized search query
+ * (site_filter folded in) so repeated identical searches hit the cache.
+ * contentText concatenates result titles + snippets for FTS retrievability.
+ */
+function normalizedSearchKey(query: string, siteFilter?: string): string {
+  const q = query.trim().toLowerCase();
+  return siteFilter ? `${siteFilter.toLowerCase()}::${q}` : q;
+}
+
+export function createWebSearchTool(userId: string) {
+  return {
+    ...webSearchTool,
+    async execute(input: { query: string; site_filter?: string }) {
+      const result = await webSearchTool.execute(input);
+      if (Array.isArray(result.results) && result.results.length > 0 && !result.error) {
+        const sourceId = normalizedSearchKey(input.query, input.site_filter);
+        const contentText = result.results
+          .map((r) => `${r.title}\n${r.snippet}`)
+          .join('\n\n');
+        await recordExternalFact('web_search', sourceId, result, userId, contentText).catch((err) => {
+          console.error('[web-search] external_facts upsert failed:', err);
+        });
+      }
+      return result;
+    },
+  };
+}

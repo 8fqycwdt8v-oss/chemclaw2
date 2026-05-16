@@ -1,4 +1,5 @@
 import { safeFetch } from './safe-fetch';
+import { recordExternalFact } from '@chemclaw2/db';
 
 export const ALLOWED_DOMAINS = [
   'pubchem.ncbi.nlm.nih.gov',
@@ -74,3 +75,26 @@ export const docFetchTool = {
     return { url: res.url, text };
   },
 };
+
+/**
+ * Wave-2a persistence wrapper. source_id is the canonical URL post-redirect
+ * (res.url) so two paths that resolve to the same canonical page share the
+ * cache. contentText is the plain-text extract (markdown mode); for html/
+ * bytes mode we store payload only — those formats aren't FTS-friendly.
+ */
+export function createDocFetchTool(userId: string) {
+  return {
+    ...docFetchTool,
+    async execute(input: { url: string; format?: 'markdown' | 'html' | 'bytes' }) {
+      const result = await docFetchTool.execute(input);
+      if (typeof result === 'object' && result && 'url' in result && !('error' in result)) {
+        const canonicalUrl = (result as { url: string }).url;
+        const contentText = 'text' in result ? (result as { text: string }).text : null;
+        await recordExternalFact('doc', canonicalUrl, result, userId, contentText).catch((err) => {
+          console.error('[doc-fetch] external_facts upsert failed:', err);
+        });
+      }
+      return result;
+    },
+  };
+}

@@ -12,3 +12,6 @@ export * from './queries/feedback';
 export * from './queries/tool-permissions';
 export * from './queries/budgets';
 export * from './queries/todos';
+export * from './queries/external-facts';
+export * from './queries/properties';
+export * from './queries/papers';

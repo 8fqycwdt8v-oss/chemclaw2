@@ -3,9 +3,9 @@ import { z } from 'zod';
 import {
   compoundSimilaritySearchTool,
   reactionSimilaritySearchTool,
-  webSearchTool,
-  docFetchTool,
-  elnFetchTool,
+  createWebSearchTool,
+  createDocFetchTool,
+  createElnFetchTool,
   createWikiFetchTool,
   createSynthesisCampaignTools,
   substructureCandidatesTool,
@@ -57,26 +57,6 @@ const wikiLookup = tool(
   async (args) => toMcpText(await wikiTool.execute(args)),
 );
 
-const webSearch = tool(
-  webSearchTool.name,
-  webSearchTool.description,
-  {
-    query: z.string().describe('Search query'),
-    site_filter: z.string().optional().describe('Restrict to an approved science domain'),
-  },
-  async (args) => toMcpText(await webSearchTool.execute(args)),
-);
-
-const docFetch = tool(
-  docFetchTool.name,
-  docFetchTool.description,
-  {
-    url: z.string().url().describe('URL from an approved science domain'),
-    format: z.enum(['markdown', 'html', 'bytes']).optional().describe('Output format (default markdown)'),
-  },
-  async (args) => toMcpText(await docFetchTool.execute(args)),
-);
-
 const hazardLookup = tool(
   hazardLookupTool.name,
   hazardLookupTool.description,
@@ -94,15 +74,6 @@ const greenSolvent = tool(
     solvents: z.array(z.string()).describe('SMILES of solvents to score'),
   },
   async (args) => toMcpText(await greenSolventTool.execute(args)),
-);
-
-const elnFetch = tool(
-  elnFetchTool.name,
-  elnFetchTool.description,
-  {
-    experiment_id: z.string().describe('ELN experiment identifier (e.g. EXP-001)'),
-  },
-  async (args) => toMcpText(await elnFetchTool.execute(args)),
 );
 
 const substructureCandidates = tool(
@@ -197,6 +168,39 @@ export function buildInProcessMcpServer(userId: string, sessionId?: string) {
       })).optional(),
     },
     async (args) => toMcpText(await deepResearch.finalize.execute(args)),
+  );
+
+  // Wave-2a: persistence-bound tool factories. Each wraps the static export
+  // and upserts results into external_facts so the next call (this session or
+  // any other) can fast-path from world-state instead of re-fetching.
+  const webSearchExec = createWebSearchTool(userId);
+  const webSearch = tool(
+    webSearchExec.name,
+    webSearchExec.description,
+    {
+      query: z.string().describe('Search query'),
+      site_filter: z.string().optional().describe('Restrict to an approved science domain'),
+    },
+    async (args) => toMcpText(await webSearchExec.execute(args)),
+  );
+  const docFetchExec = createDocFetchTool(userId);
+  const docFetch = tool(
+    docFetchExec.name,
+    docFetchExec.description,
+    {
+      url: z.string().url().describe('URL from an approved science domain'),
+      format: z.enum(['markdown', 'html', 'bytes']).optional().describe('Output format (default markdown)'),
+    },
+    async (args) => toMcpText(await docFetchExec.execute(args)),
+  );
+  const elnFetchExec = createElnFetchTool(userId);
+  const elnFetch = tool(
+    elnFetchExec.name,
+    elnFetchExec.description,
+    {
+      experiment_id: z.string().describe('ELN experiment identifier (e.g. EXP-001)'),
+    },
+    async (args) => toMcpText(await elnFetchExec.execute(args)),
   );
 
   const contradiction = createContradictionTools(userId);

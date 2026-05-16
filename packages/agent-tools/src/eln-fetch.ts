@@ -1,5 +1,6 @@
 import dns from 'dns';
 import ipaddr from 'ipaddr.js';
+import { recordExternalFact } from '@chemclaw2/db';
 
 const ELN_BASE = process.env.ELN_API_BASE_URL ?? '';
 const ELN_KEY = process.env.ELN_API_KEY ?? '';
@@ -79,3 +80,32 @@ export const elnFetchTool = {
     return { experiment_id: input.experiment_id, data };
   },
 };
+
+/**
+ * Wave-2a persistence wrapper: after a successful fetch, upsert the payload
+ * into external_facts keyed by ('eln', experiment_id) so the next call (this
+ * session or any other) can fast-path from world-state instead of re-hitting
+ * the ELN API. Persistence failures are logged but never break the agent —
+ * the in-band response always wins.
+ */
+export function createElnFetchTool(userId: string) {
+  return {
+    ...elnFetchTool,
+    async execute(input: { experiment_id: string }) {
+      const result = await elnFetchTool.execute(input);
+      if (typeof result === 'object' && result && 'data' in result && !('error' in result)) {
+        await recordExternalFact(
+          'eln',
+          input.experiment_id,
+          result,
+          userId,
+          // No obvious text extract; FTS is opt-out by storing null content_text.
+          null,
+        ).catch((err) => {
+          console.error('[eln-fetch] external_facts upsert failed:', err);
+        });
+      }
+      return result;
+    },
+  };
+}
