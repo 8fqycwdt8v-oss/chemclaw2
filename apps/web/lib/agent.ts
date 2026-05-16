@@ -2,11 +2,16 @@ import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import { scopedSessionStore } from '@chemclaw2/db/session-store';
 import { checkToolInput, checkToolOutput } from '@chemclaw2/agent-tools';
 import { buildInProcessMcpServer } from './sdk-tools';
+import { loadSkillsBlock } from './skills';
 
-const SYSTEM_PROMPT = `You are ChemClaw, a pharma R&D knowledge-intelligence assistant.
+const BASE_SYSTEM_PROMPT = `You are ChemClaw, a pharma R&D knowledge-intelligence assistant.
 You have access to an organization knowledge base, compound registry, and reaction database.
 Always cite your sources. Never fabricate CAS numbers, yields, or experimental conditions.
 When uncertain, say so explicitly rather than guessing.`;
+
+// Skills are filesystem markdown packs (one directory per skill under skills/).
+// They are loaded once on first agent build and concatenated onto the system prompt.
+const SYSTEM_PROMPT = BASE_SYSTEM_PROMPT + loadSkillsBlock();
 
 export function buildQueryOptions(sessionId: string, userId: string): Options {
   // scopedSessionStore forces projectKey = chemclaw2:<userId> on every store call,

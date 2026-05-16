@@ -11,6 +11,7 @@ export const synthesisCampaigns = pgTable('synthesis_campaigns', {
   createdBy: text('created_by').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  notifiedAt: timestamp('notified_at', { withTimezone: true }),
 });
 
 export const campaignSteps = pgTable('campaign_steps', {

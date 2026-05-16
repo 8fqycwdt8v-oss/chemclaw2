@@ -41,6 +41,11 @@ COPY --from=builder --chown=nextjs:nodejs /app/workers/fp-worker ./workers/fp-wo
 COPY --from=builder --chown=nextjs:nodejs /app/packages ./packages
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
 
+# Skill packs (filesystem markdown) — loaded by apps/web/lib/skills.ts at agent
+# boot. Without this, the seed skills are missing in production and the agent
+# prompt loses its skills section.
+COPY --from=builder --chown=nextjs:nodejs /app/skills ./skills
+
 # Python venv + MCP servers (spawned per request by /api/fingerprint and by the worker).
 # chown the venv to nextjs:nodejs so the unprivileged USER below can exec python and
 # import RDKit/drfp from site-packages.
