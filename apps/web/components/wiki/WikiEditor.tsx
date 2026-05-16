@@ -7,7 +7,7 @@ import type { JSONContent } from '@tiptap/react';
 
 interface WikiEditorProps {
   initialContent?: JSONContent;
-  onSave: (content: JSONContent, text: string) => void;
+  onSave: (content: JSONContent, text: string) => Promise<void>;
   readOnly?: boolean;
 }
 
@@ -39,10 +39,14 @@ export function WikiEditor({ initialContent, onSave, readOnly = false }: WikiEdi
     return () => window.removeEventListener('beforeunload', handler);
   }, [readOnly]);
 
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async () => {
     if (!editor) return;
-    onSave(editor.getJSON(), editor.getText());
-    isDirtyRef.current = false;
+    try {
+      await onSave(editor.getJSON(), editor.getText());
+      isDirtyRef.current = false;
+    } catch {
+      // dirty flag stays set so the user is warned on navigation after a failed save
+    }
   }, [editor, onSave]);
 
   if (!editor) return null;
