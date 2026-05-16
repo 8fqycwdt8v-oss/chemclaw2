@@ -15,6 +15,8 @@ import {
   greenSolventTool,
   createContradictionTools,
   createDeepResearchTools,
+  createLookupKnowledgeTool,
+  lookupPropertiesTool,
 } from '@chemclaw2/agent-tools';
 import { embedText, embedTexts } from './embeddings';
 
@@ -95,6 +97,38 @@ const interpretAnalyticalResult = tool(
     proposed_fingerprint_bits: z.string().optional(),
   },
   async (args) => toMcpText(await interpretAnalyticalResultTool.execute(args)),
+);
+
+// Wave-2b B5: structured SAR rows for a specific compound. Stateless;
+// no userId needed.
+const lookupProperties = tool(
+  lookupPropertiesTool.name,
+  lookupPropertiesTool.description,
+  {
+    compound_id: z.string(),
+    name: z.string().optional(),
+    value_num_gte: z.number().optional(),
+    value_num_lte: z.number().optional(),
+    unit: z.string().optional(),
+    limit: z.number().int().min(1).max(500).optional(),
+  },
+  async (args) => toMcpText(await lookupPropertiesTool.execute(args)),
+);
+
+// Wave-2b C3: unified retrieval across wiki + papers + properties + cached
+// tool fetches (external_facts). Embedding is shared via the same embedText
+// closure the wiki tool uses.
+const lookupKnowledgeExec = createLookupKnowledgeTool(embedText);
+const lookupKnowledge = tool(
+  lookupKnowledgeExec.name,
+  lookupKnowledgeExec.description,
+  {
+    query: z.string(),
+    limit: z.number().int().min(1).max(50).optional(),
+    types: z.array(z.enum(['wiki', 'paper', 'property', 'external'])).optional(),
+    semantic: z.boolean().optional(),
+  },
+  async (args) => toMcpText(await lookupKnowledgeExec.execute(args)),
 );
 
 export function buildInProcessMcpServer(userId: string, sessionId?: string) {
@@ -245,6 +279,8 @@ export function buildInProcessMcpServer(userId: string, sessionId?: string) {
       finalizeDeepResearch,
       substructureCandidates,
       interpretAnalyticalResult,
+      lookupKnowledge,
+      lookupProperties,
       startCampaign,
       confirmCampaign,
       kickoffCampaign,

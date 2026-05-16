@@ -15,3 +15,4 @@ export * from './queries/todos';
 export * from './queries/external-facts';
 export * from './queries/properties';
 export * from './queries/papers';
+export * from './queries/lookup-knowledge';

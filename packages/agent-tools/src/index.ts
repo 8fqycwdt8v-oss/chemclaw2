@@ -17,6 +17,8 @@ export { greenSolventTool } from './green-solvent';
 export { exportReactionsAsOrd } from './ord-export';
 export { createContradictionTools } from './resolve-contradiction';
 export { createDeepResearchTools } from './deep-research';
+export { createLookupKnowledgeTool } from './lookup-knowledge';
+export { lookupPropertiesTool } from './lookup-properties';
 export { SLUG_RE, SLUG_MAX_LEN, RESERVED_SLUGS, isValidSlug } from './slug';
 export {
   EMBED_MODEL,
