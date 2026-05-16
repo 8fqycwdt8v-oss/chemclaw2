@@ -11,6 +11,7 @@ import {
   substructureCandidatesTool,
   interpretAnalyticalResultTool,
   createWikiUpsertTool,
+  createWikiProposeTool,
   hazardLookupTool,
   greenSolventTool,
   createContradictionTools,
@@ -180,6 +181,28 @@ export function buildInProcessMcpServer(userId: string, sessionId?: string) {
     async (args) => toMcpText(await wikiUpsertTool.execute(args)),
   );
 
+  // Wave-3c opportunity #1: stage-for-review variant. Same shape as wiki_upsert
+  // minus the project tag; result lands in wiki_proposed_edits.pending for an
+  // admin to apply or reject.
+  const wikiProposeToolExec = createWikiProposeTool(userId);
+  const wikiPropose = tool(
+    wikiProposeToolExec.name,
+    wikiProposeToolExec.description,
+    {
+      slug: z.string(),
+      title: z.string(),
+      content_text: z.string(),
+      rationale: z.string().optional(),
+      citations: z.array(z.object({
+        citationId: z.string(),
+        sourceType: z.string(),
+        sourceId: z.string().optional(),
+        label: z.string(),
+      })).optional(),
+    },
+    async (args) => toMcpText(await wikiProposeToolExec.execute(args)),
+  );
+
   const deepResearch = createDeepResearchTools(userId, embedTexts, sessionId);
   const beginDeepResearch = tool(
     deepResearch.begin.name,
@@ -268,6 +291,7 @@ export function buildInProcessMcpServer(userId: string, sessionId?: string) {
       reactionSearch,
       wikiLookup,
       wikiUpsert,
+      wikiPropose,
       webSearch,
       docFetch,
       elnFetch,

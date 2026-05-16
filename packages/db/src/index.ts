@@ -17,3 +17,4 @@ export * from './queries/properties';
 export * from './queries/papers';
 export * from './queries/lookup-knowledge';
 export * from './queries/wiki-tables';
+export * from './queries/wiki-proposed-edits';

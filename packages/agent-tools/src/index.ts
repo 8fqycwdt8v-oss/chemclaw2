@@ -11,6 +11,7 @@ export { elnFetchTool, createElnFetchTool } from './eln-fetch';
 export { substructureCandidatesTool } from './substructure-search';
 export { interpretAnalyticalResultTool } from './analytical-interpret';
 export { createWikiUpsertTool } from './wiki-upsert';
+export { createWikiProposeTool } from './wiki-propose';
 export { callMcpTool } from './mcp-client';
 export { hazardLookupTool } from './hazard-lookup';
 export { greenSolventTool } from './green-solvent';
