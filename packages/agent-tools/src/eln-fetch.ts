@@ -8,7 +8,9 @@ async function assertElnHostNotPrivate(hostname: string): Promise<string | null>
   try {
     const addresses = await dns.promises.lookup(hostname, { all: true });
     for (const { address } of addresses) {
-      if (!ipaddr.isValid(address)) continue;
+      if (!ipaddr.isValid(address)) {
+        return `SSRF blocked: ELN host ${hostname} resolved to an unrecognised address format`;
+      }
       if (ipaddr.parse(address).range() !== 'unicast') {
         return `SSRF blocked: ELN host ${hostname} resolves to a non-public address`;
       }

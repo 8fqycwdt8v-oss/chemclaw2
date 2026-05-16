@@ -14,8 +14,8 @@ export async function createCampaign(
   return row.id;
 }
 
-const TERMINAL_STATUSES = ['complete', 'failed'] as const;
-const NON_TERMINAL_STATUSES = ['planning', 'awaiting_input', 'running'] as const;
+export const TERMINAL_STATUSES = ['complete', 'failed'] as const;
+export const NON_TERMINAL_STATUSES = ['planning', 'awaiting_input', 'running'] as const;
 
 export async function updateCampaignStatus(
   id: string,
@@ -53,7 +53,7 @@ export async function getCampaignBySession(sessionId: string) {
     .from(synthesisCampaigns)
     .where(and(
       eq(synthesisCampaigns.sessionId, sessionId),
-      notInArray(synthesisCampaigns.status, ['complete', 'failed']),
+      notInArray(synthesisCampaigns.status, [...TERMINAL_STATUSES]),
     ))
     .orderBy(desc(synthesisCampaigns.createdAt))
     .limit(1);

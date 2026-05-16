@@ -44,6 +44,13 @@ export function createSynthesisCampaignTools(userId: string) {
       required: ['campaign_id', 'plan'],
     },
     async execute(input: { campaign_id: string; plan: Record<string, unknown> }) {
+      // Validate step count before writing to DB — avoids leaving campaign stuck in awaiting_input
+      const MAX_STEPS = 20;
+      const allSteps = Array.isArray(input.plan.steps) ? input.plan.steps as Array<Record<string, unknown>> : [];
+      if (allSteps.length > MAX_STEPS) {
+        return { error: `Plan exceeds maximum of ${MAX_STEPS} synthesis steps` };
+      }
+
       const { found } = await updateCampaignStatusForUser(
         input.campaign_id,
         userId,
@@ -53,12 +60,7 @@ export function createSynthesisCampaignTools(userId: string) {
       if (!found) return { error: 'Campaign not found or access denied' };
 
       // Create individual step rows from the plan's steps array so the worker
-      // can track and retry each step independently. Cap at 20 steps to prevent DoS.
-      const MAX_STEPS = 20;
-      const allSteps = Array.isArray(input.plan.steps) ? input.plan.steps as Array<Record<string, unknown>> : [];
-      if (allSteps.length > MAX_STEPS) {
-        return { error: `Plan exceeds maximum of ${MAX_STEPS} synthesis steps` };
-      }
+      // can track and retry each step independently.
       for (let i = 0; i < allSteps.length; i++) {
         const s = allSteps[i];
         await addCampaignStep(input.campaign_id, i, {
