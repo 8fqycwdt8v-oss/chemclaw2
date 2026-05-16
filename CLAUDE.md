@@ -5,9 +5,15 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 ## Hard rules — non-negotiable, every session
 
 1. **Commit before the session ends.** Uncommitted edits don't survive parallel sessions or branch switches.
-2. **All merges to `main` via reviewed PR. No direct commits.**
-   Flow: `gh pr create` → CI green (poll `gh pr checks`) → run `/review` and fix until clean → `gh pr merge <N> --merge` → delete remote branch (`git push origin --delete <branch>`) + local (`git branch -D`) + worktree if used.
-   The user does NOT review PRs or trigger `/review`. An open PR is unfinished work.
+2. **After every task: PR → CI → merge, automatically. No direct commits to `main`, no waiting for user approval to ship.**
+   Mandatory flow at the end of *every* task that touched code:
+   1. Commit on the task branch and push (`git push -u origin <branch>`).
+   2. Open a PR (`gh pr create`, or `mcp__github__create_pull_request` when `gh` is unavailable). Do not stop and ask.
+   3. Poll CI until green (`gh pr checks --watch`, or `mcp__github__pull_request_read` with `method: "get_check_runs"` / `"get_status"`). Fix failures and push again — repeat until green.
+   4. Run `/review` and fix until clean.
+   5. Merge (`gh pr merge <N> --merge`, or `mcp__github__merge_pull_request`).
+   6. Delete remote branch (`git push origin --delete <branch>`) + local (`git branch -D <branch>`) + worktree if used.
+   The user does NOT review PRs, trigger `/review`, or click merge. An open PR or unmerged branch is unfinished work — keep going until step 6 is done. Only stop early if CI surfaces a failure you genuinely can't resolve, and report what's blocking.
 3. **Define success criteria before starting; verify before claiming done.** Run the verification yourself.
    CI flakes: skip-list/xfail and note in `BACKLOG.md`. Stacked PRs: merge each as CI goes green, then `gh pr edit --base main`.
 
