@@ -36,6 +36,42 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'mode must be allow|ask|deny' }, { status: 400 });
   }
 
+  // v2.1-B3: validate that scopeId matches the expected shape for its scope.
+  // Misconfigured rows (e.g. scope='project' paired with a Clerk user id) would
+  // silently never resolve. The cheapest mitigation is rejecting them here.
+  //   - 'user'    → Clerk user IDs start with `user_` (long-standing convention).
+  //   - 'project' → caller-defined project key. Reject obvious mismatches with
+  //                 the user prefix; otherwise allow free-form (no project table
+  //                 exists today; promoting to a UUID-only check happens once
+  //                 projects are first-class).
+  //   - 'org'     → must be the literal 'org' (the resolver hardcodes that lookup
+  //                 in resolveToolMode; any other value will never match).
+  const shapeError = validateScopeShape(body.scope, body.scopeId);
+  if (shapeError) return NextResponse.json({ error: shapeError }, { status: 400 });
+
   await setToolPermission(body.scope, body.scopeId, body.toolName, body.mode, userId);
   return NextResponse.json({ ok: true });
+}
+
+function validateScopeShape(scope: 'user' | 'project' | 'org', scopeId: string): string | null {
+  if (scope === 'user') {
+    if (!/^user_[A-Za-z0-9]+$/.test(scopeId)) {
+      return "scopeId for scope='user' must be a Clerk user id (user_...)";
+    }
+    return null;
+  }
+  if (scope === 'project') {
+    if (/^user_[A-Za-z0-9]+$/.test(scopeId)) {
+      return "scopeId for scope='project' must not be a Clerk user id";
+    }
+    if (scopeId === 'org') {
+      return "scopeId for scope='project' must not be the literal 'org'";
+    }
+    return null;
+  }
+  // scope === 'org'
+  if (scopeId !== 'org') {
+    return "scopeId for scope='org' must be the literal string 'org'";
+  }
+  return null;
 }

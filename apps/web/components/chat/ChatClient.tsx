@@ -11,6 +11,7 @@ type Message =
   | { role: 'error'; text: string };
 
 type Citation = { slug: string; label: string };
+type Todo = { id: string; text: string; status: 'pending' | 'done'; position: number };
 
 // Citation slugs must contain a hyphen (e.g. "aspirin-synthesis") to avoid
 // false-positive links on plain words. Single-word wiki slugs are skipped
@@ -38,8 +39,43 @@ export function ChatClient() {
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [knownSlugs, setKnownSlugs] = useState<Set<string>>(new Set());
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [todosOpen, setTodosOpen] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
+
+  // v2.1-B2: refresh the agent todo list. Called after every assistant turn
+  // completes (begin_deep_research seeds them; finalize_deep_research marks
+  // them done) and once on session-resume.
+  const refreshTodos = useCallback(async () => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      const res = await fetch(`/api/session/${sid}/todos`);
+      if (!res.ok) return;
+      const data = (await res.json()) as { todos?: Todo[] };
+      setTodos(data.todos ?? []);
+    } catch {
+      // Pure UX nicety — silent on network blip.
+    }
+  }, []);
+
+  const toggleTodo = useCallback(async (todo: Todo) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    const next = todo.status === 'done' ? 'pending' : 'done';
+    setTodos((ts) => ts.map((t) => (t.id === todo.id ? { ...t, status: next } : t)));
+    try {
+      await fetch(`/api/session/${sid}/todos`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: todo.id, status: next }),
+      });
+    } catch {
+      // Revert the optimistic update on failure.
+      setTodos((ts) => ts.map((t) => (t.id === todo.id ? { ...t, status: todo.status } : t)));
+    }
+  }, []);
 
   // Pull all wiki slugs once so we can render inline citations in assistant text.
   useEffect(() => {
@@ -170,10 +206,15 @@ export function ChatClient() {
       } finally {
         setStreaming(false);
         abortRef.current = null;
+        void refreshTodos();
       }
     },
-    [streaming],
+    [streaming, refreshTodos],
   );
+
+  // Pull todos once on mount for the session-resume case (the user reopens an
+  // older session that already has a checklist on file).
+  useEffect(() => { void refreshTodos(); }, [refreshTodos]);
 
   function applyEvent(evt: Record<string, unknown>) {
     const type = evt.type as string | undefined;
@@ -343,6 +384,39 @@ export function ChatClient() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-7rem)]">
+      {todos.length > 0 && (
+        <div className="border rounded mb-2 text-xs">
+          <button
+            type="button"
+            onClick={() => setTodosOpen((v) => !v)}
+            className="w-full text-left px-2 py-1 bg-slate-50 text-slate-700 flex justify-between"
+            aria-expanded={todosOpen}
+          >
+            <span>
+              Research checklist · {todos.filter((t) => t.status === 'done').length}/{todos.length} done
+            </span>
+            <span>{todosOpen ? '▾' : '▸'}</span>
+          </button>
+          {todosOpen && (
+            <ul className="px-2 py-1 space-y-1">
+              {todos.map((t) => (
+                <li key={t.id} className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={t.status === 'done'}
+                    onChange={() => void toggleTodo(t)}
+                    className="mt-0.5"
+                    aria-label={`Mark "${t.text}" as ${t.status === 'done' ? 'pending' : 'done'}`}
+                  />
+                  <span className={t.status === 'done' ? 'line-through text-slate-400' : ''}>
+                    {t.text}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto space-y-4 pb-4">
         {messages.length === 0 && (
           <div className="text-slate-500 text-sm">

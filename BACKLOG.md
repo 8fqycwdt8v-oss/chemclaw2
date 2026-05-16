@@ -32,3 +32,14 @@
 - [wiki/deep-research] no durable record of in-flight research (review M10); abandoned research can't be surfaced in UI. Defer until a measured complaint
 - [wiki/temporal] valid_from/valid_to columns on compounds/reactions/wiki_pages (migration 0013) remain dead code — wire them on row replacement or drop, but don't keep two parallel temporal mechanisms
 - [wiki/safety] wiki_upsert content_text length capped at 500k chars; deep-research finalize body capped at 500k; no per-user / per-day write quota beyond rate-limit middleware. Consider a daily quota once agent-authored pages become numerous
+- [wiki/editor] citation pills as Tiptap inline marks (PR #39 deferred #16); footer-list rendering ships in v2.1, ?cid= anchor scrolls to footer entry. Inline marks need a small Tiptap mark extension + a content migration to wrap citation_id occurrences
+- [campaigns] per-step approval as a proper modal UI (PR #39 deferred #17); current chat preset chip "Approve next step" is the v2.1 affordance — upgrade once a campaign dashboard exists
+- [admin/eval] scheduled regression eval against a golden chemistry set (§3.9). Tractable as a pg-boss cron that runs the agent against fixtures and writes week-over-week scores into an `eval_runs` table; deferred from v2.1 to keep scope tight
+- [db/temporal] v2.1-B1 wires `?asOf=` for the wiki side via `pointInTimeWiki`. valid_from/valid_to on compounds/reactions remain unwired — drop or adopt once the data-quality story demands as-of queries on entities, not pages
+- [tool-permissions] v2.1-B3 enforces scope/scope_id shape at the admin API. A db-level CHECK or per-row trigger is the durable mitigation once the column shapes are stable
+- [multi-tenant] every RLS policy still `USING(true)`; replace with per-tenant predicates once tenants > 1. v2.1 adds two more permissive policies (project_budgets, project_budget_spend, agent_todos) — they need the same treatment
+- [wiki/audit] read-audit table for compliance §3.8 — defer until a regulated customer asks. Bi-temporal `?asOf=` (v2.1-B1) covers the "what did the page say at time T" question without per-read logging
+- [budgets] v2.1-D tracks tool_calls and experiments only. LLM token/cost accounting needs a wrap of the SDK stream in apps/web/lib/streaming.ts; add once token cost becomes a measured concern
+- [skills] promote skills catalog from filesystem to DB with scope (personal/project/org) + maturity tier (§3.13). Filesystem-on-disk is the v2 affordance; DB is the v3 path once skill counts grow
+- [agent] NL tool synthesis with sandboxed execution (§3.13); requires a new agent loop + execution sandbox. Defer to v3
+- [agent/todos] v2.1-B2 wires todos for `begin_deep_research`/`finalize_deep_research`. Other long-running tools (kickoff_campaign) don't yet emit todos — add as a tool-specific hook when those workflows want progress surfacing

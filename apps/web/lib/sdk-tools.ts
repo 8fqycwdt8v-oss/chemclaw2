@@ -126,7 +126,7 @@ const interpretAnalyticalResult = tool(
   async (args) => toMcpText(await interpretAnalyticalResultTool.execute(args)),
 );
 
-export function buildInProcessMcpServer(userId: string) {
+export function buildInProcessMcpServer(userId: string, sessionId?: string) {
   const campaign = createSynthesisCampaignTools(userId);
   const startCampaign = tool(
     campaign.synthesisCampaignTool.name,
@@ -175,7 +175,7 @@ export function buildInProcessMcpServer(userId: string) {
     async (args) => toMcpText(await wikiUpsertTool.execute(args)),
   );
 
-  const deepResearch = createDeepResearchTools(userId, embedTexts);
+  const deepResearch = createDeepResearchTools(userId, embedTexts, sessionId);
   const beginDeepResearch = tool(
     deepResearch.begin.name,
     deepResearch.begin.description,

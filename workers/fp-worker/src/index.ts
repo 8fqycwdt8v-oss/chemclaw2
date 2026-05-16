@@ -94,6 +94,17 @@ async function start() {
     await db.execute(sql`DELETE FROM rate_limits WHERE window_start < ${cutoff}`);
   });
 
+  // v2.1-A2: prune feedback older than the 1-year retention window. The trigger
+  // from migration 0022 handles per-session cascades; this catches feedback that
+  // outlives its session for any reason (manual session prune, restore, etc.).
+  // agent_overrides is intentionally left alone — gate-override records are
+  // compliance evidence and stay until the session they reference is deleted.
+  await boss.createQueue('sweep-feedback', { policy: PgBoss.policies.stately } as PgBoss.Queue);
+  await boss.schedule('sweep-feedback', '23 3 * * *');
+  await boss.work('sweep-feedback', async () => {
+    await db.execute(sql`DELETE FROM agent_feedback WHERE created_at < NOW() - INTERVAL '1 year'`);
+  });
+
   // Catches rows inserted before the worker started or that lost a job to a crash.
   async function pollMissingFingerprints() {
     const pendingCompounds = await db

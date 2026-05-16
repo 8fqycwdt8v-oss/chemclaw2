@@ -1,4 +1,4 @@
-import { upsertWikiPage } from '@chemclaw2/db';
+import { upsertWikiPage, replaceSessionTodos, markAllTodosDone } from '@chemclaw2/db';
 import { isValidSlug } from './slug';
 import { markdownToTiptap } from './markdown-to-tiptap';
 import { validateCitations } from './citation-validation';
@@ -14,12 +14,17 @@ import { validateCitations } from './citation-validation';
  *      composed report as a wiki page via the same upsertWikiPage path the
  *      campaign worker uses.
  *
+ * v2.1-B2: the checklist is also persisted as session todos so the chat UI can
+ * surface a running progress list. sessionId is optional — when absent (e.g.
+ * isolated tests) the persistence path is skipped.
+ *
  * Designed to be small: the SDK's normal multi-turn loop drives the research;
  * these two tools just shape the start and finish.
  */
 export function createDeepResearchTools(
   userId: string,
   embedFn: (texts: string[]) => Promise<number[][]>,
+  sessionId?: string,
 ) {
   const begin = {
     name: 'begin_deep_research',
@@ -38,6 +43,20 @@ export function createDeepResearchTools(
     async execute(input: { question: string }) {
       const q = input.question.trim();
       if (q.length === 0 || q.length > 2000) return { error: 'question must be 1-2000 chars' };
+      const checklist = [
+        'Search the wiki for the topic via wiki_lookup (try slug + FTS query + semantic).',
+        'If a SMILES is involved, run compound_similarity_search to ground in registered compounds.',
+        'If a reaction/transformation is involved, run find_similar_reactions for prior precedent.',
+        'Pull at least 2 external sources via web_search → fetch_document for context.',
+        'Compose the report as 3-6 sections with inline [N] citations.',
+        'Finally, call finalize_deep_research with the slug, title, body, and citation entries.',
+      ];
+      if (sessionId) {
+        await replaceSessionTodos(sessionId, userId, checklist).catch((err) => {
+          // Persistence failure must not block the research workflow itself.
+          console.error('[deep-research] replaceSessionTodos failed:', err);
+        });
+      }
       return {
         question: q,
         directive: [
@@ -48,14 +67,7 @@ export function createDeepResearchTools(
           '- Never invent CAS numbers, yields, or experimental conditions.',
           '- When evidence is thin, say "weak support" and propose follow-up tools to run.',
         ].join('\n'),
-        checklist: [
-          'Search the wiki for the topic via wiki_lookup (try slug + FTS query + semantic).',
-          'If a SMILES is involved, run compound_similarity_search to ground in registered compounds.',
-          'If a reaction/transformation is involved, run find_similar_reactions for prior precedent.',
-          'Pull at least 2 external sources via web_search → fetch_document for context.',
-          'Compose the report as 3-6 sections with inline [N] citations.',
-          'Finally, call finalize_deep_research with the slug, title, body, and citation entries.',
-        ],
+        checklist,
       };
     },
   };
@@ -115,6 +127,11 @@ export function createDeepResearchTools(
         embedFn,
         { needsReview: true },
       );
+      if (sessionId) {
+        await markAllTodosDone(sessionId).catch((err) => {
+          console.error('[deep-research] markAllTodosDone failed:', err);
+        });
+      }
       return { wiki_page_id: id, slug: input.slug, url: `/wiki/${input.slug}`, needs_review: true };
     },
   };
