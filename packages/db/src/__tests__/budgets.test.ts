@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   budgetRow: null as null | Record<string, unknown>,
   spendRow: null as null | { toolCalls: number; experiments: number },
   executeCalls: [] as string[],
+  executeRows: [] as unknown[][],
 }));
 
 vi.mock('../client', () => ({
@@ -20,7 +21,7 @@ vi.mock('../client', () => ({
     }),
     execute: (sqlObj: { queryChunks?: unknown[] } | string) => {
       mocks.executeCalls.push(typeof sqlObj === 'string' ? sqlObj : 'sql-tagged');
-      return Promise.resolve([]);
+      return Promise.resolve(mocks.executeRows.shift() ?? []);
     },
   },
 }));
@@ -29,7 +30,7 @@ import {
   periodStartFor,
   getProjectBudget,
   getCurrentSpend,
-  checkBudgetWouldExceed,
+  getBudgetWithSpend,
   incrementSpend,
 } from '../queries/budgets';
 
@@ -37,6 +38,7 @@ beforeEach(() => {
   mocks.budgetRow = null;
   mocks.spendRow = null;
   mocks.executeCalls.length = 0;
+  mocks.executeRows.length = 0;
 });
 
 describe('periodStartFor', () => {
@@ -93,57 +95,58 @@ describe('getCurrentSpend', () => {
   });
 });
 
-describe('checkBudgetWouldExceed', () => {
-  it('returns null when no budget is configured (unlimited)', async () => {
-    mocks.budgetRow = null;
-    const result = await checkBudgetWouldExceed('chemclaw2:user_x', { toolCalls: 1 });
-    expect(result).toBeNull();
+describe('getBudgetWithSpend', () => {
+  it('returns null when no budget row is configured', async () => {
+    // execute returns [] from the empty queue → helper sees no row → null
+    expect(await getBudgetWithSpend('chemclaw2:user_x')).toBeNull();
   });
 
-  it('returns null when the cap is set but the increment fits', async () => {
-    // Two consecutive select() calls: first returns budget, second returns spend (also empty here)
-    mocks.budgetRow = {
-      projectKey: 'chemclaw2:user_x',
+  it('returns budget + zero spend when no spend row exists yet', async () => {
+    mocks.executeRows.push([{
       period: 'day',
-      toolCallsCap: 100,
-      experimentsCap: null,
-    };
-    const result = await checkBudgetWouldExceed('chemclaw2:user_x', { toolCalls: 1 });
-    // First call returns budget; second call (for spend) also returns the budget
-    // row shape since the mock select is global. But getCurrentSpend reads
-    // { toolCalls, experiments } only, and the budget row doesn't have those
-    // properties → undefined, which the helper coerces to zero behavior.
-    expect(result).toBeNull();
+      tool_calls_cap: 100,
+      experiments_cap: null,
+      tool_calls: null,
+      experiments: null,
+    }]);
+    const result = await getBudgetWithSpend('chemclaw2:user_x');
+    expect(result).toEqual({
+      budget: {
+        projectKey: 'chemclaw2:user_x',
+        period: 'day',
+        toolCallsCap: 100,
+        experimentsCap: null,
+      },
+      spend: { toolCalls: 0, experiments: 0 },
+    });
   });
 
-  it('reports exceeded when planned increment pushes over the cap', async () => {
-    // Track a richer mock for this case: first call returns budget, second
-    // returns spend at cap.
-    let selectIdx = 0;
-    const selectMock = vi.fn(() => ({
-      from: () => ({
-        where: () => {
-          selectIdx += 1;
-          if (selectIdx === 1) {
-            return Promise.resolve([{
-              projectKey: 'chemclaw2:user_x',
-              period: 'day' as const,
-              toolCallsCap: 100,
-              experimentsCap: null,
-            }]);
-          }
-          return Promise.resolve([{ toolCalls: 100, experiments: 0 }]);
-        },
-      }),
-    }));
-    const dbModule = await import('../client');
-    (dbModule.db as unknown as { select: typeof selectMock }).select = selectMock;
+  it('returns the running spend when both rows are present', async () => {
+    mocks.executeRows.push([{
+      period: 'week',
+      tool_calls_cap: 500,
+      experiments_cap: 10,
+      tool_calls: 42,
+      experiments: 3,
+    }]);
+    const result = await getBudgetWithSpend('chemclaw2:user_x');
+    expect(result?.budget.period).toBe('week');
+    expect(result?.spend).toEqual({ toolCalls: 42, experiments: 3 });
+  });
 
-    const result = await checkBudgetWouldExceed('chemclaw2:user_x', { toolCalls: 1 });
-    expect(result).not.toBeNull();
-    expect(result!.exceeded).toBe('tool_calls');
-    expect(result!.cap).toBe(100);
-    expect(result!.current).toBe(100);
+  it('coerces bigint-shaped numeric strings (Postgres BIGINT) to Number', async () => {
+    // pg returns BIGINT as a string when above the JS safe range. The helper
+    // must coerce to a Number for comparisons in the hook code to work.
+    mocks.executeRows.push([{
+      period: 'month',
+      tool_calls_cap: '1000',
+      experiments_cap: 50,
+      tool_calls: '999',
+      experiments: 49,
+    }]);
+    const result = await getBudgetWithSpend('chemclaw2:user_x');
+    expect(result?.budget.toolCallsCap).toBe(1000);
+    expect(result?.spend.toolCalls).toBe(999);
   });
 });
 

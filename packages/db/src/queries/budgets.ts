@@ -97,6 +97,67 @@ export async function getCurrentSpend(
 }
 
 /**
+ * Wave-1 D1: single round-trip variant. The agent's per-turn budget hook used
+ * to issue three selects (`getProjectBudget` + `getCurrentSpend` from
+ * `checkBudgetWouldExceed`, then `getProjectBudget` again from PostToolUse).
+ * One LEFT JOIN returns both rows; the caller caches the result for the
+ * lifetime of the query and PostToolUse re-uses the budget config to know
+ * which period bucket to increment.
+ */
+export type BudgetWithSpend = {
+  budget: ProjectBudget;
+  spend: SpendRow;
+};
+
+export async function getBudgetWithSpend(
+  projectKey: string,
+  now: Date = new Date(),
+): Promise<BudgetWithSpend | null> {
+  // The period is on the budget row, but the spend-row period_start depends on
+  // it — chicken-and-egg for a single SQL statement. We evaluate the period
+  // in SQL via date_trunc/CASE so the same statement does both lookups.
+  // Mirrors `periodStartFor` exactly; keep in sync if the TS helper changes.
+  const nowIso = now.toISOString();
+  const rows = await db.execute<{
+    period: string;
+    tool_calls_cap: string | number | null;
+    experiments_cap: number | null;
+    tool_calls: string | number | null;
+    experiments: number | null;
+  }>(sql`
+    SELECT
+      pb.period,
+      pb.tool_calls_cap,
+      pb.experiments_cap,
+      pbs.tool_calls,
+      pbs.experiments
+    FROM project_budgets pb
+    LEFT JOIN project_budget_spend pbs
+      ON pbs.project_key = pb.project_key
+     AND pbs.period_start = CASE pb.period
+       WHEN 'day'   THEN date_trunc('day',   ${nowIso}::timestamptz)
+       WHEN 'week'  THEN date_trunc('week',  ${nowIso}::timestamptz)
+       WHEN 'month' THEN date_trunc('month', ${nowIso}::timestamptz)
+     END
+    WHERE pb.project_key = ${projectKey}
+  `);
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    budget: {
+      projectKey,
+      period: row.period as BudgetPeriod,
+      toolCallsCap: row.tool_calls_cap == null ? null : Number(row.tool_calls_cap),
+      experimentsCap: row.experiments_cap,
+    },
+    spend: {
+      toolCalls: row.tool_calls == null ? 0 : Number(row.tool_calls),
+      experiments: row.experiments ?? 0,
+    },
+  };
+}
+
+/**
  * Atomic increment via INSERT … ON CONFLICT DO UPDATE. Race-safe under
  * concurrent tool calls — Postgres serializes the conflicting writes.
  */
@@ -120,28 +181,7 @@ export async function incrementSpend(
   `);
 }
 
-/**
- * Returns the first cap that the next planned increment would breach, or null
- * if the increment is within all caps. Callers use this in the PreToolUse hook
- * to short-circuit a tool that would push spend over the line.
- */
-export async function checkBudgetWouldExceed(
-  projectKey: string,
-  plan: { toolCalls?: number; experiments?: number },
-  now: Date = new Date(),
-): Promise<{ exceeded: 'tool_calls' | 'experiments'; cap: number; current: number } | null> {
-  const budget = await getProjectBudget(projectKey);
-  if (!budget) return null; // no cap configured → unlimited
-
-  const spend = await getCurrentSpend(projectKey, budget.period, now);
-  const nextToolCalls = spend.toolCalls + (plan.toolCalls ?? 0);
-  const nextExperiments = spend.experiments + (plan.experiments ?? 0);
-
-  if (budget.toolCallsCap != null && nextToolCalls > budget.toolCallsCap) {
-    return { exceeded: 'tool_calls', cap: budget.toolCallsCap, current: spend.toolCalls };
-  }
-  if (budget.experimentsCap != null && nextExperiments > budget.experimentsCap) {
-    return { exceeded: 'experiments', cap: budget.experimentsCap, current: spend.experiments };
-  }
-  return null;
-}
+// `checkBudgetWouldExceed` was removed in v2.2 Wave 1 D1. The check is now
+// inlined in apps/web/lib/agent.ts's PreToolUse hook against a per-request
+// cached `getBudgetWithSpend` result + an in-process localSpend counter, which
+// cuts 3 round-trips per tool call down to 1 per request.

@@ -132,7 +132,7 @@ export function ChatClient() {
   }, [messages]);
 
   const send = useCallback(
-    async (text: string, overrideJustification?: string) => {
+    async (text: string, overrideJustification?: string, planMode?: boolean) => {
       const trimmed = text.trim();
       if (!trimmed || streaming) return;
       setInput('');
@@ -153,6 +153,7 @@ export function ChatClient() {
             prompt: trimmed,
             sessionId: sessionIdRef.current ?? undefined,
             ...(overrideJustification ? { override_justification: overrideJustification } : {}),
+            ...(planMode ? { plan_mode: true } : {}),
           }),
           signal: controller.signal,
         });
@@ -206,10 +207,18 @@ export function ChatClient() {
       } finally {
         setStreaming(false);
         abortRef.current = null;
+        setMessages((m) => {
+          const last = m[m.length - 1];
+          if (!last || last.role !== 'assistant') return m;
+          return [
+            ...m.slice(0, -1),
+            { ...last, citations: extractWikiSlugs(last.text, knownSlugs) },
+          ];
+        });
         void refreshTodos();
       }
     },
-    [streaming, refreshTodos],
+    [streaming, refreshTodos, knownSlugs],
   );
 
   // Pull todos once on mount for the session-resume case (the user reopens an
@@ -265,16 +274,20 @@ export function ChatClient() {
   }
 
   function appendAssistantText(chunk: string) {
+    // Wave-1 A7: do NOT re-scan the full text for wiki slugs on every SSE
+    // chunk. The same regex was running ~50 × per assistant turn. Citations
+    // are populated once when the stream finishes (see send()'s finally
+    // block via finalizeCitations), so per-chunk we only need to append.
     setMessages((m) => {
       const last = m[m.length - 1];
       if (!last || last.role !== 'assistant') return m;
-      const text = last.text + chunk;
       return [
         ...m.slice(0, -1),
-        { ...last, text, citations: extractWikiSlugs(text, knownSlugs) },
+        { ...last, text: last.text + chunk },
       ];
     });
   }
+
 
   function appendToolUse(use: ToolUse) {
     setMessages((m) => {
@@ -299,16 +312,13 @@ export function ChatClient() {
   };
 
   const presetPlan = () => {
+    // Wave-1 A1: native SDK plan mode. The previous prompt-engineered
+    // `[PLAN MODE]` prefix instructed the model to plan; the SDK now enforces
+    // it (permissionMode='plan', no tool execution). The agent presents the
+    // plan; the user re-sends the same question without plan mode to run it.
     const question = window.prompt('What question or task should be planned step-by-step?');
     if (!question) return;
-    const text =
-      `[PLAN MODE]\n\n` +
-      `Before invoking any tool, list the planned steps as a numbered markdown list ` +
-      `(tool name + input summary for each), then end with: "Approve to proceed?"\n` +
-      `Wait for my reply. If I write "approve", run the plan tool-by-tool. ` +
-      `If I write anything else, treat it as plan-edit feedback and revise.\n\n` +
-      `Task: ${question}`;
-    void send(text);
+    void send(question, undefined, true);
   };
 
   const presetSaveSkill = async () => {
