@@ -193,6 +193,15 @@ async function start() {
 
   await startCampaignWorker(boss);
 
+  // Sweep stale rate-limit rows so the table doesn't grow unbounded.
+  // Windows older than 2h are guaranteed-expired and safe to discard.
+  await boss.createQueue('sweep-rate-limits', { policy: PgBoss.policies.stately } as PgBoss.Queue);
+  await boss.schedule('sweep-rate-limits', '17 * * * *'); // hourly, off-aligned
+  await boss.work('sweep-rate-limits', async () => {
+    const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+    await db.execute(sql`DELETE FROM rate_limits WHERE window_start < ${cutoff}`);
+  });
+
   // Poll every 30s for rows without fingerprints (catches inserts that happened
   // before this worker started). singletonKey + stately policy prevents duplicates.
   async function pollMissingFingerprints() {

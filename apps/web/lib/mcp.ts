@@ -1,0 +1,82 @@
+import { spawn } from 'child_process';
+
+const MCP_TIMEOUT_MS = 15_000;
+
+/**
+ * Call an MCP stdio tool via a single-shot Python process.
+ * Same JSON-RPC 2.0 handshake as workers/fp-worker — duplicated rather than
+ * shared because the call sites have different lifecycle expectations
+ * (per-request here vs. long-running worker there).
+ */
+export async function callMcpTool(
+  pythonModule: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('python', ['-m', pythonModule], { stdio: ['pipe', 'pipe', 'inherit'] });
+    let buf = '';
+    let initDone = false;
+    let settled = false;
+    const TOOL_CALL_ID = 2;
+
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const timer = setTimeout(() => {
+      proc.kill();
+      settle(() => reject(new Error(`MCP tool ${toolName} timed out`)));
+    }, MCP_TIMEOUT_MS);
+    const send = (msg: object) => proc.stdin.write(JSON.stringify(msg) + '\n');
+
+    send({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'web', version: '1.0' } },
+    });
+
+    proc.stdout.on('data', (chunk: Buffer) => {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let msg: Record<string, unknown>;
+        try {
+          msg = JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        if (!initDone && (msg as { id?: number }).id === 1) {
+          initDone = true;
+          send({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
+          send({ jsonrpc: '2.0', id: TOOL_CALL_ID, method: 'tools/call', params: { name: toolName, arguments: args } });
+        } else if ((msg as { id?: number }).id === TOOL_CALL_ID) {
+          proc.stdin.end();
+          const err = (msg as { error?: { message?: string } }).error;
+          if (err) {
+            settle(() => reject(new Error(err.message ?? 'MCP tool error')));
+            return;
+          }
+          const result = msg as { result?: { content?: Array<{ text?: string }> } };
+          const text = result.result?.content?.[0]?.text;
+          try {
+            const parsed = text ? (JSON.parse(text) as Record<string, unknown>) : ((msg.result as Record<string, unknown>) ?? {});
+            settle(() => resolve(parsed));
+          } catch {
+            settle(() => reject(new Error('Failed to parse MCP response')));
+          }
+        }
+      }
+    });
+    proc.on('error', (e) => settle(() => reject(e)));
+    proc.on('close', (code) => {
+      if (code !== 0) settle(() => reject(new Error(`MCP process exited with code ${code}`)));
+      else settle(() => reject(new Error('MCP process closed before tool response')));
+    });
+  });
+}

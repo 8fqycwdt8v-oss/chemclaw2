@@ -1,4 +1,4 @@
-import { createCampaign, updateCampaignStatusForUser, getCampaignBySession, addCampaignStep } from '@chemclaw2/db';
+import { createCampaign, updateCampaignStatusForUser, getCampaignBySession, addCampaignStep, db, sql } from '@chemclaw2/db';
 
 /**
  * Factory: captures userId from the authenticated request so the LLM cannot
@@ -73,5 +73,32 @@ export function createSynthesisCampaignTools(userId: string) {
     },
   };
 
-  return { synthesisCampaignTool, confirmSynthesisPlanTool };
+  const kickoffCampaignTool = {
+    name: 'kickoff_campaign',
+    description:
+      'After the user has reviewed and approved the synthesis plan, flip the campaign from ' +
+      'awaiting_input to running so the worker begins executing steps. Ask the user for ' +
+      'explicit confirmation BEFORE calling this tool (it kicks off real (or simulated) ' +
+      'experiment dispatch). Idempotent — re-calling on a running campaign is a no-op.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        campaign_id: { type: 'string', description: 'Campaign ID' },
+      },
+      required: ['campaign_id'],
+    },
+    async execute(input: { campaign_id: string }) {
+      const { found } = await updateCampaignStatusForUser(input.campaign_id, userId, 'running');
+      if (!found) return { error: 'Campaign not found, not owned by you, or already terminal' };
+      // Reset next_retry_at so the worker poll picks pending steps up immediately.
+      // The schema default for status is 'pending' (see migration 0004), so newly
+      // inserted steps from confirm_synthesis_plan are already in the right state.
+      await db.execute(
+        sql`UPDATE campaign_steps SET next_retry_at = NOW() WHERE campaign_id = ${input.campaign_id}::uuid AND status = 'pending'`,
+      );
+      return { status: 'running', message: 'Campaign kicked off — worker will execute steps.' };
+    },
+  };
+
+  return { synthesisCampaignTool, confirmSynthesisPlanTool, kickoffCampaignTool };
 }

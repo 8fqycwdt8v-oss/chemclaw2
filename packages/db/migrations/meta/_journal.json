@@ -24,6 +24,7 @@
     { "idx": 7, "version": "7", "when": 1747924800000, "tag": "0008_rate_limits", "breakpoints": true },
     { "idx": 8, "version": "7", "when": 1748011200000, "tag": "0009_wiki_citations_idx", "breakpoints": true },
     { "idx": 9, "version": "7", "when": 1748097600000, "tag": "0010_campaign_dead_letter_idx", "breakpoints": true },
-    { "idx": 10, "version": "7", "when": 1748184000000, "tag": "0011_campaign_queue_policy", "breakpoints": true }
+    { "idx": 10, "version": "7", "when": 1748184000000, "tag": "0011_campaign_queue_policy", "breakpoints": true },
+    { "idx": 11, "version": "7", "when": 1748270400000, "tag": "0012_wiki_revisions", "breakpoints": true }
   ]
 }

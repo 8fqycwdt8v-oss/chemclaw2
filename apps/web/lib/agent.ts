@@ -1,6 +1,7 @@
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import { scopedSessionStore } from '@chemclaw2/db/session-store';
-import { inProcessMcpServer } from './sdk-tools';
+import { checkToolInput, checkToolOutput } from '@chemclaw2/agent-tools';
+import { buildInProcessMcpServer } from './sdk-tools';
 
 const SYSTEM_PROMPT = `You are ChemClaw, a pharma R&D knowledge-intelligence assistant.
 You have access to an organization knowledge base, compound registry, and reaction database.
@@ -15,7 +16,7 @@ export function buildQueryOptions(sessionId: string, userId: string): Options {
     sessionStore: scopedSessionStore(`chemclaw2:${userId}`),
     resume: sessionId,
     mcpServers: {
-      'chemclaw2-tools': inProcessMcpServer,
+      'chemclaw2-tools': buildInProcessMcpServer(userId),
       'mcp-molfp': {
         type: 'stdio',
         command: 'python',
@@ -26,6 +27,62 @@ export function buildQueryOptions(sessionId: string, userId: string): Options {
         command: 'python',
         args: ['-m', 'mcp_rxnfp.server'],
       },
+    },
+    hooks: {
+      PreToolUse: [
+        {
+          hooks: [
+            async (input) => {
+              if (input.hook_event_name !== 'PreToolUse') return {};
+              const res = checkToolInput(
+                input.tool_name,
+                (input.tool_input ?? {}) as Record<string, unknown>,
+              );
+              if (res.action === 'block') {
+                return {
+                  decision: 'block',
+                  reason: res.reason,
+                  hookSpecificOutput: {
+                    hookEventName: 'PreToolUse',
+                    permissionDecision: 'deny',
+                    permissionDecisionReason: res.reason,
+                  },
+                };
+              }
+              if (res.input) {
+                return {
+                  hookSpecificOutput: {
+                    hookEventName: 'PreToolUse',
+                    updatedInput: res.input,
+                  },
+                };
+              }
+              return {};
+            },
+          ],
+        },
+      ],
+      PostToolUse: [
+        {
+          hooks: [
+            async (input) => {
+              if (input.hook_event_name !== 'PostToolUse') return {};
+              const text =
+                typeof input.tool_response === 'string'
+                  ? input.tool_response
+                  : JSON.stringify(input.tool_response ?? '');
+              const { warnings } = await checkToolOutput(input.tool_name, text);
+              if (warnings.length === 0) return {};
+              return {
+                hookSpecificOutput: {
+                  hookEventName: 'PostToolUse',
+                  additionalContext: 'Verification warnings: ' + warnings.join('; '),
+                },
+              };
+            },
+          ],
+        },
+      ],
     },
   };
 }

@@ -1,5 +1,12 @@
-- [agent-tools] Phase 4: redaction, fact-id-check, scheduled-substance-gate hooks — implemented; checkToolInput/checkToolOutput not wired as SDK hooks (claude-agent-sdk 0.3.x Options type has no hooks field); wire when SDK exposes pre/post-tool-use hook API
 - [fly.toml] auto_stop_machines="stop" with min_machines_running=1 is safe for SSE: the always-on machine handles all long-lived connections; "suspend" would only matter for scaled-out machines beyond the minimum
+- [rate-limits] sweep cron added in v1.5 (workers/fp-worker/src/index.ts hourly sweep-rate-limits job); supersedes earlier note
+- [agent-tools] redaction + fact-id-check hooks wired as SDK PreToolUse/PostToolUse hooks in apps/web/lib/agent.ts (SDK 0.3.142 supports Options.hooks)
+- [campaigns] step execution is a stub: workers/fp-worker/src/campaign-worker.ts:74 calls markStepComplete with {note:'step executed'} without invoking RDKit/experiment dispatch; real step execution is post-v1.5
+- [campaigns] per-step approval gate not yet a thing: kickoff_campaign approves the whole campaign at once; if real experiments are dispatched, add awaiting_approval per step
+- [search/substructure] /api/search smarts mode spawns one Python MCP process per candidate sequentially — fine up to ~1k compounds; switch to RDKit Postgres cartridge past that (deferred per §5.2)
+- [search/filters] findSimilarCompounds applies createdAfter/hasCas as WHERE predicates before the HNSW order; multi-tenant project filter will need RLS bodies once tenants > 1
+- [wiki/revisions] migration 0010 captures OLD row on UPDATE; revisions UI lists last 10 but does not diff yet — diffing pending real revision-comparison need
+- [observability] /api/health backlog metrics are public (no auth); acceptable for v1.5 since the values are pending counts only, but consider gating before the registry has commercially sensitive volumes
 - [safety/gate] Multi-turn bypass: gate fires on each turn independently but an attacker can front-load controlled substance context then issue synthesis instruction in a later turn without triggering the gate; mitigation requires session-level context scanning (deferred — architectural change)
 - [rate-limits] Old window rows are never swept; add a pg_cron job or periodic DELETE WHERE window_start < (now_epoch_ms - 7200000) before table size becomes measurable
 - [api/wiki] wiki_pages has no composite index on (updated_at DESC, id DESC); add before list endpoint becomes high-traffic to avoid sequential scans on keyset pagination

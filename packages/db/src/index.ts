@@ -1,4 +1,5 @@
 export { db, pgClient, withUserContext } from './client';
+export { sql } from 'drizzle-orm';
 export { postgresSessionStore, scopedSessionStore } from './session-store';
 export * from './schema/index';
 export * from './queries/compounds';
