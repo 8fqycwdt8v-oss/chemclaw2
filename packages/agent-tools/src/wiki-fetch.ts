@@ -72,7 +72,7 @@ export const wikiFetchTool: ToolDef<typeof wikiFetchSchema> = {
     'Look up or search the organization wiki. Provide slug for direct lookup, query for full-text ' +
     'search, or query+semantic=true for vector similarity search. Archived pages are excluded; ' +
     'maturity is surfaced so you can disclaim exploratory content.',
-  subagents: ['deep-research', 'contradiction-resolver', 'entity-extractor'],
+  subagents: ['deep-research', 'contradiction-resolver'],
   schema: wikiFetchSchema,
   execute: (input) => executeWikiLookup(input),
 };

@@ -23,7 +23,7 @@ export type ToolInput<S extends ZodRawShape> = z.infer<z.ZodObject<S>>;
 /** Tags driving which sub-agent definitions inherit which tools. The agent
  * builder reads each ToolDef's `subagents` tag set and derives the SDK
  * sub-agent `tools` arrays from it — no hand-rolled allowlists in agent.ts. */
-export type SubagentTag = 'deep-research' | 'contradiction-resolver' | 'entity-extractor';
+export type SubagentTag = 'deep-research' | 'contradiction-resolver';
 
 export interface ToolDef<S extends ZodRawShape, R = unknown> {
   /** MCP-namespaced tool name. Must match the registered MCP tool name on

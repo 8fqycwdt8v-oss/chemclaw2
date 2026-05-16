@@ -25,7 +25,7 @@ export const lookupPropertiesTool: ToolDef<typeof schema> = {
     'Query the structured properties (SAR) table for a single compound. ' +
     'Supports filters on property name, unit, and a numeric value range. ' +
     'Returns rows sorted by measured_at then created_at (most recent first).',
-  subagents: ['deep-research', 'entity-extractor'],
+  subagents: ['deep-research'],
   schema,
   async execute(input) {
     if (!UUID_RE.test(input.compound_id)) {

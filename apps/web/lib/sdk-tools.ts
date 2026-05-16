@@ -8,11 +8,8 @@ import {
   createWikiFetchTool,
   createSynthesisCampaignTools,
   substructureCandidatesTool,
-  interpretAnalyticalResultTool,
   createWikiUpsertTool,
   createWikiProposeTool,
-  createRegisterPropertyTool,
-  createRegisterPaperTool,
   hazardLookupTool,
   greenSolventTool,
   createContradictionTools,
@@ -34,7 +31,6 @@ const mcpName = (toolName: string) => `mcp__${MCP_SERVER_NAME}__${toolName}`;
 const EXTERNAL_MCP_TOOLS_BY_SUBAGENT: Record<SubagentTag, string[]> = {
   'deep-research': ['mcp__mcp-molfp__compute_morgan_fp', 'mcp__mcp-rxnfp__compute_drfp'],
   'contradiction-resolver': [],
-  'entity-extractor': [],
 };
 
 function toMcpText(result: unknown) {
@@ -78,7 +74,6 @@ function allToolDefs(userId: string, sessionId?: string) {
     hazardLookupTool,
     greenSolventTool,
     substructureCandidatesTool,
-    interpretAnalyticalResultTool,
     lookupPropertiesTool,
     lookupKnowledge: createLookupKnowledgeTool(embedText),
     webSearch: createWebSearchTool(userId),
@@ -86,11 +81,8 @@ function allToolDefs(userId: string, sessionId?: string) {
     elnFetch: createElnFetchTool(userId),
     wikiUpsert: createWikiUpsertTool(userId, embedTexts),
     wikiPropose: createWikiProposeTool(userId),
-    registerProperty: createRegisterPropertyTool(userId),
-    registerPaper: createRegisterPaperTool(userId),
     contradictionReadTwo: contradiction.readTwo,
     contradictionRecord: contradiction.record,
-    deepResearchBegin: deepResearch.begin,
     deepResearchFinalize: deepResearch.finalize,
     campaignStart: campaign.synthesisCampaignTool,
     campaignConfirm: campaign.confirmSynthesisPlanTool,

@@ -1,6 +1,6 @@
 from mcp.server.fastmcp import FastMCP
 from rdkit import Chem
-from rdkit.Chem import AllChem, DataStructs
+from rdkit.Chem import AllChem
 
 mcp = FastMCP("mcp-molfp")
 
@@ -64,22 +64,6 @@ def substructure_match(smiles: str, smarts: str) -> dict:
     if mol is None:
         return {"match": False}
     return {"match": mol.HasSubstructMatch(pattern)}
-
-
-@mcp.tool()
-def tanimoto_similarity(smiles_a: str, smiles_b: str) -> dict:
-    """Compute exact Tanimoto similarity between two SMILES strings (Morgan ECFP4)."""
-    _check_smiles_len("smiles_a", smiles_a)
-    _check_smiles_len("smiles_b", smiles_b)
-    mol_a = Chem.MolFromSmiles(smiles_a)
-    mol_b = Chem.MolFromSmiles(smiles_b)
-    if mol_a is None:
-        raise ValueError(f"Invalid SMILES: {smiles_a}")
-    if mol_b is None:
-        raise ValueError(f"Invalid SMILES: {smiles_b}")
-    fp_a = AllChem.GetMorganFingerprintAsBitVect(mol_a, radius=2, nBits=2048)
-    fp_b = AllChem.GetMorganFingerprintAsBitVect(mol_b, radius=2, nBits=2048)
-    return {"tanimoto": DataStructs.TanimotoSimilarity(fp_a, fp_b)}
 
 
 def main():

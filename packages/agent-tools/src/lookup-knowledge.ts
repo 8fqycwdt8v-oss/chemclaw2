@@ -35,7 +35,7 @@ export function createLookupKnowledgeTool(embedFn: EmbedFn): ToolDef<typeof look
       'list with each hit labelled by type. Prefer this for "what do we know ' +
       'about X" questions; use the dedicated wiki_lookup / similarity tools ' +
       'when you already know the entity you need.',
-    subagents: ['deep-research', 'contradiction-resolver', 'entity-extractor'],
+    subagents: ['deep-research', 'contradiction-resolver'],
     schema: lookupKnowledgeSchema,
     async execute(input) {
       const q = input.query.trim();

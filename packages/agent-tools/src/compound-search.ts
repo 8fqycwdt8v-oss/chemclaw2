@@ -9,6 +9,6 @@ export const compoundSimilaritySearchTool = similaritySearchTool({
   fingerprintBitsDescription:
     'Morgan fingerprint as a 2048-char binary string (0/1), from compute_morgan_fp.fingerprint_bits',
   scoreDescription: 'Minimum Tanimoto score (0–1)',
-  subagents: ['deep-research', 'entity-extractor'],
+  subagents: ['deep-research'],
   search: (bits, limit, min) => findSimilarCompounds(bits, limit, min),
 });

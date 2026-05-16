@@ -10,11 +10,7 @@ import {
 } from '@chemclaw2/db';
 import { buildInProcessMcpServer, subagentToolNames } from './sdk-tools';
 import { loadSkillsBlock } from './skills';
-import {
-  DEEP_RESEARCH_PROMPT,
-  CONTRADICTION_RESOLVER_PROMPT,
-  ENTITY_EXTRACTOR_PROMPT,
-} from './subagent-prompts';
+import { DEEP_RESEARCH_PROMPT, CONTRADICTION_RESOLVER_PROMPT } from './subagent-prompts';
 
 // v2.1-D: tools that count against the experiments_cap. Everything else only
 // counts against tool_calls_cap.
@@ -33,15 +29,7 @@ markdown report — you then persist it via finalize_deep_research.
 For citation-conflict resolution on a wiki page, dispatch
 subagent_type='contradiction-resolver'. The sub-agent reads both citations
 and the chunks that reference them, weighs the evidence, and returns a
-proposed winner + reason that you persist via record_contradiction.
-
-After finalize_deep_research or wiki_upsert on a chemistry page that
-contains measurements, SAR data, or literature references, consider
-dispatching subagent_type='entity-extractor' with the new page's slug.
-The extractor parses the body for property rows (yield, logP, IC50, etc.)
-and paper citations (DOI / PubMed) and registers them as structured
-entities — populating the properties / papers tables for downstream SAR
-queries via lookup_properties and lookup_knowledge.`;
+proposed winner + reason that you persist via record_contradiction.`;
 
 // Sub-agent definitions. Each runs in isolated context with a restricted tool
 // surface, derived from ToolDef.subagents tagging in agent-tools — no
@@ -69,18 +57,6 @@ function buildSubagentDefinitions(userId: string, sessionId?: string): NonNullab
       tools: subagentToolNames('contradiction-resolver', userId, sessionId),
       mcpServers: ['chemclaw2-tools'],
       maxTurns: 10,
-    },
-    'entity-extractor': {
-      description:
-        'Parse a wiki page body and populate the structured properties + papers tables. ' +
-        'Dispatch with the page slug after finalize_deep_research / wiki_upsert on chemistry ' +
-        'content containing measurements (yield, logP, IC50, …) or literature citations ' +
-        '(DOI / PubMed). The sub-agent runs in isolated context with retrieval tools + the two ' +
-        'register_* write tools only.',
-      prompt: ENTITY_EXTRACTOR_PROMPT,
-      tools: subagentToolNames('entity-extractor', userId, sessionId),
-      mcpServers: ['chemclaw2-tools'],
-      maxTurns: 20,
     },
   };
 }
