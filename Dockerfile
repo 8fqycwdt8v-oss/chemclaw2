@@ -41,7 +41,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/workers/fp-worker ./workers/fp-wo
 COPY --from=builder --chown=nextjs:nodejs /app/packages ./packages
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
 
-# Python venv + MCP servers (spawned per request by /api/fingerprint and by the worker)
+# Python venv + MCP servers (spawned per request by /api/fingerprint and by the worker).
+# chown the venv to nextjs:nodejs so the unprivileged USER below can exec python and
+# import RDKit/drfp from site-packages.
 RUN python3 -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir rdkit drfp mcp && \
     /opt/venv/bin/pip install --no-cache-dir -e ./packages/mcp-servers/mcp_molfp \
