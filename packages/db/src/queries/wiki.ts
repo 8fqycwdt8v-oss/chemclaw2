@@ -7,34 +7,56 @@ import { wikiPages, wikiChunks, wikiCitations, wikiSubscriptions } from '../sche
 //   1. Paragraph boundaries (\n\n) — best context for chemistry prose
 //   2. Sentence boundaries (. ! ? followed by whitespace) — for long paragraphs
 //   3. Word boundaries — final fallback for run-on sentences that exceed maxSize
+//
+// 1200/200 is sized so chunks carry enough surrounding context for retrieval
+// (chemistry text is dense; 400-char chunks under-utilize the embedding model).
+// Adjacent chunks share an `overlap`-char prefix taken from the previous chunk
+// so queries that straddle a paragraph boundary still hit at least one chunk.
+//
 // Note: the sentence splitter fires on abbreviations like "Dr." and "Fig." —
 // short resulting fragments are discarded by the length > 10 guard.
-function chunkText(text: string, maxSize = 400, overlap = 80): string[] {
+export function chunkText(text: string, maxSize = 1200, overlap = 200): string[] {
   const paragraphs = text.split(/\n{2,}/).map((p) => p.trim()).filter((p) => p.length > 0);
   const result: string[] = [];
 
+  const pushWithOverlap = (chunk: string, prependPrevTail: boolean) => {
+    const t = chunk.trim();
+    if (t.length <= 10) return;
+    if (prependPrevTail && result.length > 0) {
+      const prev = result[result.length - 1];
+      const tail = prev.length > overlap ? prev.slice(-overlap) : prev;
+      result.push(`${tail} ${t}`);
+    } else {
+      result.push(t);
+    }
+  };
+
   for (const para of paragraphs) {
     if (para.length <= maxSize) {
-      if (para.length > 10) result.push(para);
+      pushWithOverlap(para, true);
       continue;
     }
     // Paragraph too long — split on sentence boundaries
     const sentences = para.split(/(?<=[.!?])\s+/).filter((s) => s.length > 0);
     let current = '';
+    let firstInPara = true;
     for (const sentence of sentences) {
       if ((current + ' ' + sentence).trim().length <= maxSize) {
         current = current ? current + ' ' + sentence : sentence;
       } else {
-        if (current.length > 10) result.push(current.trim());
+        if (current.length > 10) {
+          // First sub-chunk of a long paragraph inherits the previous paragraph's
+          // tail; subsequent sub-chunks already include intra-paragraph overlap
+          // via the `current = overlapText + sentence` reassignment below.
+          pushWithOverlap(current.trim(), firstInPara);
+          firstInPara = false;
+        }
         const overlapText = current.length > overlap ? current.slice(-overlap) : current;
-        // The reassigned current may itself exceed maxSize when sentence is very long.
-        // The word-boundary fallback below handles this via flushed.length > maxSize.
         current = overlapText + ' ' + sentence;
       }
     }
     // Word-boundary fallback: if a single sentence exceeds maxSize (e.g. run-on
     // chemistry text with no sentence-ending punctuation), split on words.
-    // A single token longer than maxSize is emitted as-is — not possible in natural text.
     const flushed = current.trim();
     if (flushed.length > maxSize) {
       const words = flushed.split(/\s+/);
@@ -43,13 +65,18 @@ function chunkText(text: string, maxSize = 400, overlap = 80): string[] {
         if ((sub + ' ' + word).trim().length <= maxSize) {
           sub = sub ? sub + ' ' + word : word;
         } else {
-          if (sub.length > 10) result.push(sub.trim());
+          if (sub.length > 10) {
+            pushWithOverlap(sub.trim(), firstInPara);
+            firstInPara = false;
+          }
           sub = word;
         }
       }
-      if (sub.trim().length > 10) result.push(sub.trim());
+      if (sub.trim().length > 10) {
+        pushWithOverlap(sub.trim(), firstInPara);
+      }
     } else if (flushed.length > 10) {
-      result.push(flushed);
+      pushWithOverlap(flushed, firstInPara);
     }
   }
 
@@ -63,6 +90,17 @@ function chunkText(text: string, maxSize = 400, overlap = 80): string[] {
  * round-trip does not hold a Postgres connection open. The transaction
  * covers only the fast DB writes (upsert page, replace chunks, replace citations).
  *
+ * The pre-flight read of existing `content_text` lets us skip the chunk
+ * delete-insert + embedding API call when the body hasn't changed. Title-only
+ * edits, metadata-only writes, and idempotent retries all become near-free.
+ * Citations are always replaced — they can change independently of body text.
+ *
+ * Concurrency note: the pre-flight read is outside the transaction. If a
+ * concurrent writer commits between our read and our transaction, we may
+ * either re-embed unnecessarily (benign) or skip re-embed while writing the
+ * same content back (also benign — both writers agree on content). This is
+ * the same race tolerated by every prior version of this function.
+ *
  * embedFn receives all chunks in one call so callers can batch the API request.
  */
 export async function upsertWikiPage(
@@ -74,12 +112,21 @@ export async function upsertWikiPage(
   citations: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>,
   embedFn: (texts: string[]) => Promise<number[][]>,
 ): Promise<string> {
-  // Compute embeddings outside the transaction to avoid holding a connection
-  // during the network round-trip to the embedding API.
-  const chunks = chunkText(contentText);
-  const embeddings = chunks.length > 0 ? await embedFn(chunks) : [];
-  if (embeddings.length !== chunks.length) {
-    throw new Error(`embedFn returned ${embeddings.length} vectors for ${chunks.length} chunks`);
+  const [existing] = await db
+    .select({ contentText: wikiPages.contentText })
+    .from(wikiPages)
+    .where(eq(wikiPages.slug, slug))
+    .limit(1);
+  const contentChanged = !existing || existing.contentText !== contentText;
+
+  let chunks: string[] = [];
+  let embeddings: number[][] = [];
+  if (contentChanged) {
+    chunks = chunkText(contentText);
+    embeddings = chunks.length > 0 ? await embedFn(chunks) : [];
+    if (embeddings.length !== chunks.length) {
+      throw new Error(`embedFn returned ${embeddings.length} vectors for ${chunks.length} chunks`);
+    }
   }
 
   return db.transaction(async (tx) => {
@@ -92,11 +139,13 @@ export async function upsertWikiPage(
       })
       .returning({ id: wikiPages.id });
 
-    await tx.delete(wikiChunks).where(eq(wikiChunks.pageId, page.id));
-    if (chunks.length > 0) {
-      await tx.insert(wikiChunks).values(
-        chunks.map((text, i) => ({ pageId: page.id, chunkIdx: i, text, embedding: embeddings[i] })),
-      );
+    if (contentChanged) {
+      await tx.delete(wikiChunks).where(eq(wikiChunks.pageId, page.id));
+      if (chunks.length > 0) {
+        await tx.insert(wikiChunks).values(
+          chunks.map((text, i) => ({ pageId: page.id, chunkIdx: i, text, embedding: embeddings[i] })),
+        );
+      }
     }
 
     await tx.delete(wikiCitations).where(eq(wikiCitations.pageId, page.id));

@@ -17,3 +17,10 @@ export { greenSolventTool } from './green-solvent';
 export { exportReactionsAsOrd } from './ord-export';
 export { createContradictionTools } from './resolve-contradiction';
 export { createDeepResearchTools } from './deep-research';
+export {
+  EMBED_MODEL,
+  EMBED_DIM,
+  EMBED_CHAR_LIMIT,
+  stripMarkdownForEmbedding,
+  prepareEmbeddingInputs,
+} from './embeddings';
