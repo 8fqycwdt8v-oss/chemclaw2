@@ -10,6 +10,12 @@ import {
   markStepComplete,
   TERMINAL_STATUSES,
 } from '@chemclaw2/db';
+import {
+  EMBED_MODEL,
+  EMBED_DIM,
+  prepareEmbeddingInputs,
+  stripMarkdownForEmbedding,
+} from '@chemclaw2/agent-tools';
 
 let openaiClient: OpenAI | undefined;
 function getOpenAI(): OpenAI {
@@ -18,11 +24,16 @@ function getOpenAI(): OpenAI {
 }
 
 async function embedTextsForWorker(texts: string[]): Promise<number[][]> {
-  const res = await getOpenAI().embeddings.create({
-    model: 'text-embedding-3-small',
-    input: texts.map((t) => t.slice(0, 6000)),
+  if (texts.length === 0) return [];
+  const stripped = texts.map(stripMarkdownForEmbedding);
+  const inputs = prepareEmbeddingInputs(stripped);
+  const res = await getOpenAI().embeddings.create({ model: EMBED_MODEL, input: inputs });
+  return res.data.map((d) => {
+    if (d.embedding.length !== EMBED_DIM) {
+      throw new Error(`embedTextsForWorker: vector dim ${d.embedding.length} ≠ expected ${EMBED_DIM}`);
+    }
+    return d.embedding;
   });
-  return res.data.map((d) => d.embedding);
 }
 
 // Steps stuck in 'running' past this are assumed crashed and reset by the sweep.

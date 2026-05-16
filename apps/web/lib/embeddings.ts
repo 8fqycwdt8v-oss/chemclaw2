@@ -1,8 +1,10 @@
 import OpenAI from 'openai';
-
-// text-embedding-3-small supports 8191 tokens; use 6000 chars as a conservative
-// character limit (chemistry text is dense, ~1.3 chars/token on average).
-const EMBED_CHAR_LIMIT = 6000;
+import {
+  EMBED_MODEL,
+  EMBED_DIM,
+  prepareEmbeddingInputs,
+  stripMarkdownForEmbedding,
+} from '@chemclaw2/agent-tools';
 
 let client: OpenAI | undefined;
 
@@ -16,27 +18,28 @@ function getClient() {
 }
 
 export async function embedText(text: string): Promise<number[]> {
-  const [embedding] = await embedTexts([text]);
+  const [embedding] = await embedTexts([stripMarkdownForEmbedding(text)]);
   return embedding;
 }
 
-/** Batch embed multiple texts in a single API call. */
+/**
+ * Batch embed multiple texts in a single API call. Markdown markup is stripped
+ * before the call so the model doesn't waste tokens on `**`/`#`/backticks etc.
+ * Returns vectors in the same order and length as the input — empty/whitespace
+ * inputs throw rather than silently desync the index alignment.
+ */
 export async function embedTexts(texts: string[]): Promise<number[][]> {
-  const nonEmpty = texts.filter((t) => t.trim().length > 0);
-  if (nonEmpty.length === 0) return [];
-  if (nonEmpty.length !== texts.length) {
-    console.warn(`[embeddings] ${texts.length - nonEmpty.length} empty/whitespace texts filtered before embedding`);
+  if (texts.length === 0) return [];
+  const stripped = texts.map(stripMarkdownForEmbedding);
+  const inputs = prepareEmbeddingInputs(stripped);
+  const res = await getClient().embeddings.create({ model: EMBED_MODEL, input: inputs });
+  if (res.data.length !== inputs.length) {
+    throw new Error(`embedTexts: model returned ${res.data.length} vectors for ${inputs.length} inputs`);
   }
-  const truncated = nonEmpty.map((t) => {
-    if (t.length > EMBED_CHAR_LIMIT) {
-      console.warn(`[embeddings] text truncated from ${t.length} to ${EMBED_CHAR_LIMIT} chars for embedding`);
-      return t.slice(0, EMBED_CHAR_LIMIT);
+  return res.data.map((d) => {
+    if (d.embedding.length !== EMBED_DIM) {
+      throw new Error(`embedTexts: vector dim ${d.embedding.length} ≠ expected ${EMBED_DIM}`);
     }
-    return t;
+    return d.embedding;
   });
-  const res = await getClient().embeddings.create({
-    model: 'text-embedding-3-small',
-    input: truncated,
-  });
-  return res.data.map((d) => d.embedding);
 }
