@@ -50,6 +50,17 @@ export const wikiCitations = pgTable('wiki_citations', {
   disputed: boolean('disputed').notNull().default(false),
 });
 
+export const wikiContradictions = pgTable('wiki_contradictions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  pageId: uuid('page_id').notNull().references(() => wikiPages.id, { onDelete: 'cascade' }),
+  citationA: text('citation_a').notNull(),
+  citationB: text('citation_b').notNull(),
+  proposedWinner: text('proposed_winner').notNull(),
+  reason: text('reason').notNull(),
+  resolvedBy: text('resolved_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const wikiSubscriptions = pgTable('wiki_subscriptions', {
   userId: text('user_id').notNull(),
   pageId: uuid('page_id').notNull().references(() => wikiPages.id, { onDelete: 'cascade' }),

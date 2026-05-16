@@ -1,0 +1,33 @@
+{
+  "_schema": "name + smiles + per-guide score (0-10, higher = greener). Hand-curated from public selection guides; intended as a first-pass screen, not a regulatory call.",
+  "_guides": ["chem21", "gsk", "pfizer", "sanofi", "acs"],
+  "solvents": [
+    { "name": "water", "smiles": "O", "chem21": 10, "gsk": 10, "pfizer": 10, "sanofi": 10, "acs": 10 },
+    { "name": "ethanol", "smiles": "CCO", "chem21": 8, "gsk": 9, "pfizer": 8, "sanofi": 8, "acs": 8 },
+    { "name": "2-propanol", "smiles": "CC(C)O", "chem21": 8, "gsk": 8, "pfizer": 8, "sanofi": 8, "acs": 7 },
+    { "name": "1-butanol", "smiles": "CCCCO", "chem21": 7, "gsk": 7, "pfizer": 7, "sanofi": 7, "acs": 7 },
+    { "name": "ethyl acetate", "smiles": "CCOC(C)=O", "chem21": 7, "gsk": 7, "pfizer": 7, "sanofi": 7, "acs": 7 },
+    { "name": "acetone", "smiles": "CC(C)=O", "chem21": 7, "gsk": 7, "pfizer": 7, "sanofi": 7, "acs": 7 },
+    { "name": "methanol", "smiles": "CO", "chem21": 6, "gsk": 7, "pfizer": 6, "sanofi": 6, "acs": 6 },
+    { "name": "toluene", "smiles": "Cc1ccccc1", "chem21": 5, "gsk": 5, "pfizer": 5, "sanofi": 5, "acs": 5 },
+    { "name": "2-methyltetrahydrofuran", "smiles": "CC1CCCO1", "chem21": 7, "gsk": 7, "pfizer": 7, "sanofi": 6, "acs": 7 },
+    { "name": "tetrahydrofuran", "smiles": "C1CCOC1", "chem21": 5, "gsk": 4, "pfizer": 4, "sanofi": 5, "acs": 4 },
+    { "name": "1,4-dioxane", "smiles": "O1CCOCC1", "chem21": 3, "gsk": 2, "pfizer": 2, "sanofi": 2, "acs": 2 },
+    { "name": "acetonitrile", "smiles": "CC#N", "chem21": 5, "gsk": 5, "pfizer": 5, "sanofi": 5, "acs": 5 },
+    { "name": "dimethyl sulfoxide", "smiles": "CS(C)=O", "chem21": 5, "gsk": 5, "pfizer": 5, "sanofi": 5, "acs": 5 },
+    { "name": "n,n-dimethylformamide", "smiles": "CN(C)C=O", "chem21": 3, "gsk": 2, "pfizer": 2, "sanofi": 2, "acs": 2 },
+    { "name": "n,n-dimethylacetamide", "smiles": "CN(C)C(C)=O", "chem21": 3, "gsk": 2, "pfizer": 2, "sanofi": 2, "acs": 2 },
+    { "name": "n-methyl-2-pyrrolidone", "smiles": "CN1CCCC1=O", "chem21": 3, "gsk": 2, "pfizer": 2, "sanofi": 2, "acs": 2 },
+    { "name": "dichloromethane", "smiles": "ClCCl", "chem21": 2, "gsk": 2, "pfizer": 1, "sanofi": 2, "acs": 1 },
+    { "name": "chloroform", "smiles": "ClC(Cl)Cl", "chem21": 1, "gsk": 1, "pfizer": 1, "sanofi": 1, "acs": 1 },
+    { "name": "carbon tetrachloride", "smiles": "ClC(Cl)(Cl)Cl", "chem21": 1, "gsk": 1, "pfizer": 1, "sanofi": 1, "acs": 1 },
+    { "name": "diethyl ether", "smiles": "CCOCC", "chem21": 3, "gsk": 3, "pfizer": 3, "sanofi": 3, "acs": 3 },
+    { "name": "tert-butyl methyl ether", "smiles": "COC(C)(C)C", "chem21": 6, "gsk": 6, "pfizer": 6, "sanofi": 6, "acs": 5 },
+    { "name": "cyclopentyl methyl ether", "smiles": "COC1CCCC1", "chem21": 7, "gsk": 7, "pfizer": 7, "sanofi": 7, "acs": 6 },
+    { "name": "n-hexane", "smiles": "CCCCCC", "chem21": 3, "gsk": 3, "pfizer": 2, "sanofi": 3, "acs": 2 },
+    { "name": "heptane", "smiles": "CCCCCCC", "chem21": 6, "gsk": 6, "pfizer": 6, "sanofi": 6, "acs": 5 },
+    { "name": "benzene", "smiles": "c1ccccc1", "chem21": 1, "gsk": 1, "pfizer": 1, "sanofi": 1, "acs": 1 },
+    { "name": "pyridine", "smiles": "c1ccncc1", "chem21": 2, "gsk": 2, "pfizer": 2, "sanofi": 2, "acs": 2 },
+    { "name": "acetic acid", "smiles": "CC(=O)O", "chem21": 7, "gsk": 7, "pfizer": 7, "sanofi": 7, "acs": 7 }
+  ]
+}

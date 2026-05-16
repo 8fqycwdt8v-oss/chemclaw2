@@ -191,26 +191,55 @@ function ResultsTable({ result }: { result: Result }) {
   }
   if (result.type === 'reaction') {
     return (
-      <table className="w-full text-sm border rounded">
-        <thead className="bg-slate-50 text-left">
-          <tr>
-            <th className="p-2">Similarity</th>
-            <th className="p-2">Name</th>
-            <th className="p-2">Conditions</th>
-            <th className="p-2">Reaction SMILES</th>
-          </tr>
-        </thead>
-        <tbody>
-          {result.rows.map((r) => (
-            <tr key={r.id} className="border-t">
-              <td className="p-2 font-mono">{r.similarity.toFixed(3)}</td>
-              <td className="p-2">{r.name ?? '—'}</td>
-              <td className="p-2 text-xs">{r.conditions ?? '—'}</td>
-              <td className="p-2 font-mono text-xs">{r.rxnSmiles}</td>
+      <div className="space-y-2">
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const res = await fetch('/api/reactions/export-ord', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ ids: result.rows.map((r) => r.id) }),
+                });
+                if (!res.ok) throw new Error(`Export failed (${res.status})`);
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `reactions-ord-${Date.now()}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+              } catch (e) {
+                alert((e as Error).message);
+              }
+            }}
+            className="text-xs border rounded px-2 py-1 hover:bg-slate-50"
+          >
+            Export all to ORD
+          </button>
+        </div>
+        <table className="w-full text-sm border rounded">
+          <thead className="bg-slate-50 text-left">
+            <tr>
+              <th className="p-2">Similarity</th>
+              <th className="p-2">Name</th>
+              <th className="p-2">Conditions</th>
+              <th className="p-2">Reaction SMILES</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {result.rows.map((r) => (
+              <tr key={r.id} className="border-t">
+                <td className="p-2 font-mono">{r.similarity.toFixed(3)}</td>
+                <td className="p-2">{r.name ?? '—'}</td>
+                <td className="p-2 text-xs">{r.conditions ?? '—'}</td>
+                <td className="p-2 font-mono text-xs">{r.rxnSmiles}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     );
   }
   return (

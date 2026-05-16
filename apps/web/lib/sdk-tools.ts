@@ -12,6 +12,8 @@ import {
   interpretAnalyticalResultTool,
   createWikiUpsertTool,
   hazardLookupTool,
+  greenSolventTool,
+  createContradictionTools,
 } from '@chemclaw2/agent-tools';
 import { embedText, embedTexts } from './embeddings';
 
@@ -81,6 +83,15 @@ const hazardLookup = tool(
     kind: z.enum(['cas', 'smiles']),
   },
   async (args) => toMcpText(await hazardLookupTool.execute(args)),
+);
+
+const greenSolvent = tool(
+  greenSolventTool.name,
+  greenSolventTool.description,
+  {
+    solvents: z.array(z.string()).describe('SMILES of solvents to score'),
+  },
+  async (args) => toMcpText(await greenSolventTool.execute(args)),
 );
 
 const elnFetch = tool(
@@ -162,6 +173,30 @@ export function buildInProcessMcpServer(userId: string) {
     async (args) => toMcpText(await wikiUpsertTool.execute(args)),
   );
 
+  const contradiction = createContradictionTools(userId);
+  const readTwoCitations = tool(
+    contradiction.readTwo.name,
+    contradiction.readTwo.description,
+    {
+      slug: z.string(),
+      citation_a: z.string(),
+      citation_b: z.string(),
+    },
+    async (args) => toMcpText(await contradiction.readTwo.execute(args)),
+  );
+  const recordContradiction = tool(
+    contradiction.record.name,
+    contradiction.record.description,
+    {
+      slug: z.string(),
+      citation_a: z.string(),
+      citation_b: z.string(),
+      winner: z.enum(['a', 'b', 'inconclusive']),
+      reason: z.string(),
+    },
+    async (args) => toMcpText(await contradiction.record.execute(args)),
+  );
+
   return createSdkMcpServer({
     name: 'chemclaw2-tools',
     tools: [
@@ -173,6 +208,9 @@ export function buildInProcessMcpServer(userId: string) {
       docFetch,
       elnFetch,
       hazardLookup,
+      greenSolvent,
+      readTwoCitations,
+      recordContradiction,
       substructureCandidates,
       interpretAnalyticalResult,
       startCampaign,

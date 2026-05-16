@@ -52,7 +52,6 @@ Request chromatography conditions for a separation problem.
 Validate a proposed structure against measured spectra with confidence assessment.
 Pull all analytical datasets linked to a sample or batch.
 Ask "what are the impurities in this crude" and get a grounded hypothesis (often informed by similar reactions in the database).
-Predict the expected NMR spectrum of a proposed structure so the predicted peaks can be compared to a measurement.
 3.4 Computational chemist
 Request QM calculations (semi-empirical or DFT) without managing compute infrastructure.
 Cluster a screen of N candidates by structural similarity to see the chemical-space coverage.
