@@ -93,4 +93,17 @@ describe.skipIf(skip)('postgresSessionStore', () => {
     expect(await postgresSessionStore.load(mainKey)).toBeNull();
     expect(await postgresSessionStore.load(subKey2)).toBeNull();
   });
+
+  it('append: rejects pathologically long key components', async () => {
+    const longKey = 'x'.repeat(257);
+    await expect(
+      postgresSessionStore.append({ projectKey: longKey, sessionId: TEST_SESSION }, [entry('user', 'hi')]),
+    ).rejects.toThrow(/projectKey exceeds/);
+  });
+
+  it('append: rejects too many entries in a single call', async () => {
+    const key = { projectKey: TEST_PROJECT, sessionId: `cap-${Date.now()}` };
+    const tooMany = Array.from({ length: 101 }, (_, i) => entry('user', `e${i}`));
+    await expect(postgresSessionStore.append(key, tooMany)).rejects.toThrow(/refusing to append/);
+  });
 });

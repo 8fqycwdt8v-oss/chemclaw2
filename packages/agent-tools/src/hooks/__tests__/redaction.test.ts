@@ -139,9 +139,7 @@ describe('checkUserPrompt', () => {
     expect(checkUserPrompt('What is CAS 67-64-1?')).toEqual({ action: 'allow' });
   });
 
-  it('resets regex state between calls so repeated SSN inputs all block', () => {
-    // SSN_RE is a /g regex; without lastIndex reset the second call could
-    // miss a match starting before the previous lastIndex position.
+  it('repeated SSN inputs all block (stateless regex)', () => {
     const first = checkUserPrompt('123-45-6789');
     const second = checkUserPrompt('123-45-6789');
     expect(first.action).toBe('block');

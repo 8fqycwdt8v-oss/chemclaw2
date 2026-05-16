@@ -3,6 +3,19 @@ import { db } from './client';
 import { agentSessions } from './schema/sessions';
 import { eq, and, sql, max } from 'drizzle-orm';
 
+// Caps protect against (a) advisory-lock keys derived from pathological inputs
+// and (b) OOM when the SDK keeps appending forever. Realistic sessions stay
+// well under both limits.
+const MAX_KEY_PART_LEN = 256;
+const MAX_APPEND_ENTRIES = 100;
+const MAX_ENTRY_SERIALIZED_BYTES = 1_000_000;
+
+function assertKeyComponent(name: string, value: string): void {
+  if (value.length > MAX_KEY_PART_LEN) {
+    throw new Error(`session-store: ${name} exceeds ${MAX_KEY_PART_LEN} chars`);
+  }
+}
+
 /**
  * Returns a session store that forces every key to use the supplied projectKey,
  * preventing one user's sessions from being accessible via another user's context.
@@ -25,14 +38,26 @@ export function scopedSessionStore(projectKey: string) {
 export const postgresSessionStore = {
   async append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void> {
     const subpath = key.subpath ?? '';
+    assertKeyComponent('projectKey', key.projectKey);
+    assertKeyComponent('sessionId', key.sessionId);
+    assertKeyComponent('subpath', subpath);
+    if (entries.length > MAX_APPEND_ENTRIES) {
+      throw new Error(`session-store: refusing to append ${entries.length} entries (max ${MAX_APPEND_ENTRIES})`);
+    }
+    const serializedSize = Buffer.byteLength(JSON.stringify(entries), 'utf8');
+    if (serializedSize > MAX_ENTRY_SERIALIZED_BYTES) {
+      throw new Error(`session-store: entries serialize to ${serializedSize} bytes (max ${MAX_ENTRY_SERIALIZED_BYTES})`);
+    }
     const now = Date.now();
     // Serialize concurrent appends with a transaction-scoped advisory lock.
-    // SELECT FOR UPDATE only locks existing rows — it acquires nothing on first insert.
-    // pg_advisory_xact_lock() always acquires unconditionally, covering the creation race.
+    // The two-arg form composes 64 bits from two 32-bit hashes — collisions
+    // between independent (projectKey, sessionId+subpath) pairs only occur if
+    // BOTH halves hash-collide, vs. ~1e-9 per single-key hashtext alone.
     await db.transaction(async (tx) => {
       await tx.execute(sql`
         SELECT pg_advisory_xact_lock(
-          hashtext(${key.projectKey} || '::' || ${key.sessionId} || '::' || ${subpath})
+          hashtext(${key.projectKey}),
+          hashtext(${key.sessionId} || '::' || ${subpath})
         )
       `);
       await tx

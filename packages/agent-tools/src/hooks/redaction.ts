@@ -2,7 +2,9 @@ import { CONTROLLED_SUBSTANCE_NAMES, normalizeForGate } from './scheduled-substa
 
 // Pattern matches US Social Security Numbers (NNN-NN-NNNN).
 // Not a general PII scanner — only SSNs. CAS numbers (NN...-NN-N) do not match.
-const SSN_RE = /\b\d{3}-\d{2}-\d{4}\b/g;
+// Non-global so .test() is stateless; replacement uses a per-call /g clone.
+const SSN_RE = /\b\d{3}-\d{2}-\d{4}\b/;
+const SSN_RE_GLOBAL = /\b\d{3}-\d{2}-\d{4}\b/g;
 
 /**
  * Check a tool input object for controlled substance names (block) or SSN patterns (redact).
@@ -37,7 +39,7 @@ export function checkToolInput(
 
   // Redact SSN patterns from all string values
   const inputStr = JSON.stringify(toolInput);
-  const sanitized = inputStr.replace(SSN_RE, '[REDACTED-SSN]');
+  const sanitized = inputStr.replace(SSN_RE_GLOBAL, '[REDACTED-SSN]');
   if (sanitized !== inputStr) {
     return {
       action: 'allow',
@@ -85,13 +87,10 @@ export function checkUserPrompt(
   prompt: string,
 ): { action: 'allow' } | { action: 'block'; reason: string } {
   if (SSN_RE.test(prompt)) {
-    // Reset lastIndex; SSN_RE is a /g regex and stateful across .test calls.
-    SSN_RE.lastIndex = 0;
     return {
       action: 'block',
       reason: 'Prompt blocked: contains what looks like a Social Security Number. Remove the SSN and resubmit.',
     };
   }
-  SSN_RE.lastIndex = 0;
   return { action: 'allow' };
 }

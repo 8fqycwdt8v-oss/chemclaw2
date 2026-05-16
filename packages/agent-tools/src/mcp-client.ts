@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process';
+import { trace } from '@opentelemetry/api';
 
 const PYTHON = process.env.MCP_PYTHON_PATH ?? '/opt/venv/bin/python';
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -61,6 +62,10 @@ export function callMcpTool(
         try {
           msg = JSON.parse(line) as Record<string, unknown>;
         } catch {
+          trace.getActiveSpan()?.addEvent('mcp_response_line_unparseable', {
+            tool: toolName,
+            sample: line.slice(0, 200),
+          });
           continue;
         }
         if (!initDone && (msg as { id?: number }).id === INIT_ID) {

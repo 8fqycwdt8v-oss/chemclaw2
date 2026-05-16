@@ -88,4 +88,9 @@ describe('chunkText', () => {
     expect(proseChunks.some((c) => c.includes('Paragraph A'))).toBe(true);
     expect(proseChunks.some((c) => c.includes('Paragraph B'))).toBe(true);
   });
+
+  it('refuses pathologically long inputs to prevent ReDoS/OOM', () => {
+    const oversize = 'a'.repeat(1_000_001);
+    expect(() => chunkText(oversize)).toThrow(/exceeds 1000000 chars/);
+  });
 });

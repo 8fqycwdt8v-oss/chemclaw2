@@ -113,12 +113,15 @@ export async function getStepsForRetry(): Promise<Array<typeof campaignSteps.$in
 }
 
 export async function markStepFailed(id: string, retryCount: number): Promise<void> {
-  const backoffMinutes = Math.pow(2, retryCount); // 1, 2, 4 minutes
+  // Clamp defends against corrupt rows: a retry_count of 30 would yield
+  // 2^30 ≈ 17h backoff and re-trip the schedule check on every sweep.
+  const clamped = Math.min(Math.max(retryCount, 0), 10);
+  const backoffMinutes = Math.pow(2, clamped); // 1, 2, 4 ... 1024 minutes
   await db
     .update(campaignSteps)
     .set({
       status: 'failed',
-      retryCount: retryCount + 1,
+      retryCount: clamped + 1,
       // Parameterized interval — avoids sql.raw() with NaN/Infinity risk
       nextRetryAt: sql`NOW() + (${backoffMinutes} * INTERVAL '1 minute')`,
     })
@@ -126,8 +129,10 @@ export async function markStepFailed(id: string, retryCount: number): Promise<vo
 }
 
 export async function markStepComplete(id: string, result: Record<string, unknown>): Promise<void> {
+  // Refuse to leave a terminal state: a late-arriving success from a re-tried
+  // job must not overwrite a 'failed' step the user already saw.
   await db
     .update(campaignSteps)
     .set({ status: 'complete', result })
-    .where(eq(campaignSteps.id, id));
+    .where(and(eq(campaignSteps.id, id), notInArray(campaignSteps.status, ['complete', 'failed'])));
 }

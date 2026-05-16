@@ -1,6 +1,7 @@
 import PgBoss from 'pg-boss';
 import OpenAI from 'openai';
 import { ne, eq, and, lt, inArray, notInArray, sql } from 'drizzle-orm';
+import { trace } from '@opentelemetry/api';
 import { db } from '@chemclaw2/db';
 import { campaignSteps, synthesisCampaigns, reactions } from '@chemclaw2/db';
 import { upsertWikiPage, findSimilarReactions } from '@chemclaw2/db';
@@ -88,7 +89,11 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
       ))
       .limit(50);
     for (const { id } of pending) {
-      await boss.send('run-campaign-step', { stepId: id }, { singletonKey: id }).catch(() => {});
+      await boss.send('run-campaign-step', { stepId: id }, { singletonKey: id }).catch((err) => {
+        trace.getActiveSpan()?.addEvent('campaign.enqueue_failed', {
+          queue: 'run-campaign-step', step_id: id, error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
 
     // Dead-letter sweep: reset stuck 'running' steps so getStepsForRetry picks them up.
@@ -103,9 +108,30 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
         sql`updated_at < NOW() - (${DEAD_LETTER_TIMEOUT_MINUTES} * INTERVAL '1 minute')`,
       ));
 
+    // Surface permanently-failed steps so a broken MCP doesn't quietly stall
+    // a campaign. getStepsForRetry already excludes retry_count >= 3; this
+    // emits a one-shot OTel event the first time we observe each row so ops
+    // can page on the metric.
+    const permanentlyFailed = await db
+      .select({ id: campaignSteps.id, campaignId: campaignSteps.campaignId, stepIdx: campaignSteps.stepIdx })
+      .from(campaignSteps)
+      .where(and(eq(campaignSteps.status, 'failed'), sql`${campaignSteps.retryCount} >= 3`))
+      .limit(20);
+    for (const row of permanentlyFailed) {
+      trace.getActiveSpan()?.addEvent('campaign.step.permanent_failure', {
+        step_id: row.id,
+        campaign_id: row.campaignId,
+        step_idx: row.stepIdx,
+      });
+    }
+
     const stepsToRetry = await getStepsForRetry();
     for (const { id } of stepsToRetry) {
-      await boss.send('run-campaign-step', { stepId: id }, { singletonKey: id }).catch(() => {});
+      await boss.send('run-campaign-step', { stepId: id }, { singletonKey: id }).catch((err) => {
+        trace.getActiveSpan()?.addEvent('campaign.enqueue_failed', {
+          queue: 'run-campaign-step', step_id: id, error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
   });
 
@@ -145,7 +171,11 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
               and(eq(synthesisCampaigns.id, campaign.id), notInArray(synthesisCampaigns.status, [...TERMINAL_STATUSES])),
             ).returning({ id: synthesisCampaigns.id });
             if (updated.length > 0) {
-              await boss.send('create-campaign-wiki', { campaignId: campaign.id }, { singletonKey: campaign.id }).catch(() => {});
+              await boss.send('create-campaign-wiki', { campaignId: campaign.id }, { singletonKey: campaign.id }).catch((err) => {
+                trace.getActiveSpan()?.addEvent('campaign.enqueue_failed', {
+                  queue: 'create-campaign-wiki', campaign_id: campaign.id, error: err instanceof Error ? err.message : String(err),
+                });
+              });
             }
           }
         }
@@ -165,8 +195,7 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
 
         const plan = campaign.plan as Record<string, unknown> | null;
         const targetSmiles = campaign.targetSmiles ?? 'Unknown';
-        // M8: full campaign UUID in the slug — 8-char prefix collides at ~10^-5
-        // birthday probability per 1000 campaigns.
+        // Slug uses the full campaign UUID — collision-free.
         const slug = `campaign-${campaignId}`;
         const title = `Synthesis Campaign: ${targetSmiles}`;
 
