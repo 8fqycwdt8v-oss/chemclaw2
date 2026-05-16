@@ -6,3 +6,4 @@ export * from './campaigns';
 export * from './audit';
 export * from './rate-limits';
 export * from './feedback';
+export * from './tool-permissions';

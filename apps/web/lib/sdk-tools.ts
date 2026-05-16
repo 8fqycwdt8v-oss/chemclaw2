@@ -14,6 +14,7 @@ import {
   hazardLookupTool,
   greenSolventTool,
   createContradictionTools,
+  createDeepResearchTools,
 } from '@chemclaw2/agent-tools';
 import { embedText, embedTexts } from './embeddings';
 
@@ -173,6 +174,30 @@ export function buildInProcessMcpServer(userId: string) {
     async (args) => toMcpText(await wikiUpsertTool.execute(args)),
   );
 
+  const deepResearch = createDeepResearchTools(userId, embedTexts);
+  const beginDeepResearch = tool(
+    deepResearch.begin.name,
+    deepResearch.begin.description,
+    { question: z.string() },
+    async (args) => toMcpText(await deepResearch.begin.execute(args)),
+  );
+  const finalizeDeepResearch = tool(
+    deepResearch.finalize.name,
+    deepResearch.finalize.description,
+    {
+      slug: z.string(),
+      title: z.string(),
+      body: z.string(),
+      citations: z.array(z.object({
+        citationId: z.string(),
+        sourceType: z.string(),
+        sourceId: z.string().optional(),
+        label: z.string(),
+      })).optional(),
+    },
+    async (args) => toMcpText(await deepResearch.finalize.execute(args)),
+  );
+
   const contradiction = createContradictionTools(userId);
   const readTwoCitations = tool(
     contradiction.readTwo.name,
@@ -211,6 +236,8 @@ export function buildInProcessMcpServer(userId: string) {
       greenSolvent,
       readTwoCitations,
       recordContradiction,
+      beginDeepResearch,
+      finalizeDeepResearch,
       substructureCandidates,
       interpretAnalyticalResult,
       startCampaign,

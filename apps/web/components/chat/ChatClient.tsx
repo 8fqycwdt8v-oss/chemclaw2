@@ -239,6 +239,16 @@ export function ChatClient() {
     abortRef.current?.abort();
   };
 
+  const presetDeepResearch = () => {
+    const question = window.prompt('Deep-research question (multi-section investigation):');
+    if (!question) return;
+    void send(
+      `Call begin_deep_research with this question, follow the returned checklist ` +
+      `to gather evidence over the next several turns, then call finalize_deep_research ` +
+      `to persist the report:\n\n${question}`,
+    );
+  };
+
   const presetPlan = () => {
     const question = window.prompt('What question or task should be planned step-by-step?');
     if (!question) return;
@@ -367,6 +377,15 @@ export function ChatClient() {
           title="Have the agent draft a step-by-step plan you can approve before it runs"
         >
           Plan first
+        </button>
+        <button
+          type="button"
+          onClick={presetDeepResearch}
+          className="text-xs px-2 py-1 border rounded text-slate-700 hover:bg-slate-50"
+          disabled={streaming}
+          title="Have the agent compose a structured research report and save it to the wiki"
+        >
+          Deep research
         </button>
         <button
           type="button"
