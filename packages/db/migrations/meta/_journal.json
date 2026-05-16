@@ -33,6 +33,7 @@
     { "idx": 16, "version": "7", "when": 1748702400000, "tag": "0017_campaign_notified", "breakpoints": true },
     { "idx": 17, "version": "7", "when": 1748788800000, "tag": "0018_wiki_contradictions", "breakpoints": true },
     { "idx": 18, "version": "7", "when": 1748875200000, "tag": "0019_tool_permissions", "breakpoints": true },
-    { "idx": 19, "version": "7", "when": 1748961600000, "tag": "0020_audit_attribution_and_rls", "breakpoints": true }
+    { "idx": 19, "version": "7", "when": 1748961600000, "tag": "0020_wiki_schema_fixes", "breakpoints": true },
+    { "idx": 20, "version": "7", "when": 1749048000000, "tag": "0021_audit_attribution_and_rls", "breakpoints": true }
   ]
 }

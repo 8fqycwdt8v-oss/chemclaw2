@@ -133,6 +133,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: '>=0.3.0'
         version: 0.3.142(zod@4.4.3)
+      '@opentelemetry/api':
+        specifier: ^1.9.1
+        version: 1.9.1
       drizzle-orm:
         specifier: ^0.38.0
         version: 0.38.4(@opentelemetry/api@1.9.1)(@types/pg@8.15.6)(@types/react@19.2.14)(pg@8.20.0)(postgres@3.4.9)(react@19.2.6)

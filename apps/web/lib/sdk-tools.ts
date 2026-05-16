@@ -52,6 +52,7 @@ const wikiLookup = tool(
     slug: z.string().optional().describe('Direct page slug (e.g. "aspirin")'),
     query: z.string().optional().describe('Full-text or semantic search query'),
     semantic: z.boolean().optional().describe('Use vector similarity search (requires query)'),
+    full: z.boolean().optional().describe('Return full content_text instead of a 2000-char preview (slug mode only)'),
   },
   async (args) => toMcpText(await wikiTool.execute(args)),
 );

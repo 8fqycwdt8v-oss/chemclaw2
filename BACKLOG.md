@@ -26,3 +26,9 @@
 - [wiki/v1.6] bi-temporal valid_from/valid_to added to compounds/reactions/wiki_pages (migration 0013) but no app-side reads use them yet; the pointInTimeWiki helper uses wiki_revisions instead — wire valid_to on row replacement when the data-quality story needs as-of queries on compounds/reactions
 - [wiki/metadata] PATCH /api/wiki/[slug] allows any authenticated user to edit lifecycle flags (needs_review, archived, maturity, project); acceptable for single-tenant v1.6 (shared KB) but needs role-based or creator-only ACL before multi-tenant
 - [wiki/subscriptions] countUnreadSubscriptions runs on every (app) layout render — for users with hundreds of subscriptions or scaled traffic, add covering index on wiki_subscriptions(user_id) + wiki_pages(id, version), or cache the count client-side for 30-60s
+- [wiki/retrieval] hybrid FTS+semantic with RRF fusion deferred (review H4) — wiki_lookup is one mode at a time today; recall benefits when SMILES and paraphrase queries both need to hit
+- [wiki/multi-tenant] all wiki RLS policies are USING(true) (review L4); needs per-tenant USING bodies before multi-tenant — project tag is metadata not ACL
+- [wiki/audit] read access to wiki not logged (review L6); regulated pharma context typically needs who-read-what-when — add a read_audit table or rely on OTel spans + log retention
+- [wiki/deep-research] no durable record of in-flight research (review M10); abandoned research can't be surfaced in UI. Defer until a measured complaint
+- [wiki/temporal] valid_from/valid_to columns on compounds/reactions/wiki_pages (migration 0013) remain dead code — wire them on row replacement or drop, but don't keep two parallel temporal mechanisms
+- [wiki/safety] wiki_upsert content_text length capped at 500k chars; deep-research finalize body capped at 500k; no per-user / per-day write quota beyond rate-limit middleware. Consider a daily quota once agent-authored pages become numerous
