@@ -119,11 +119,17 @@ export function buildQueryOptions(
                 const projectedTool = spend.toolCalls + localSpend.toolCalls + 1;
                 const projectedExp =
                   spend.experiments + localSpend.experiments + (isExperiment ? 1 : 0);
-                let exceeded: { kind: 'tool_calls' | 'experiments'; cap: number; current: number } | null = null;
+                // Wave-2c: deny new tool calls when the token cap is already
+                // breached. Per-tool tokens are unknown ahead of time (only
+                // billed at end-of-stream), so we just hard-stop when the
+                // bucket is already over.
+                let exceeded: { kind: 'tool_calls' | 'experiments' | 'tokens'; cap: number; current: number } | null = null;
                 if (budget.toolCallsCap != null && projectedTool > budget.toolCallsCap) {
                   exceeded = { kind: 'tool_calls', cap: budget.toolCallsCap, current: spend.toolCalls + localSpend.toolCalls };
                 } else if (budget.experimentsCap != null && projectedExp > budget.experimentsCap) {
                   exceeded = { kind: 'experiments', cap: budget.experimentsCap, current: spend.experiments + localSpend.experiments };
+                } else if (budget.tokensCap != null && spend.tokens >= budget.tokensCap) {
+                  exceeded = { kind: 'tokens', cap: budget.tokensCap, current: spend.tokens };
                 }
                 if (exceeded) {
                   const reason =

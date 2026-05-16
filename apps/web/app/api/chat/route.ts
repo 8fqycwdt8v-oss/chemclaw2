@@ -3,7 +3,7 @@ import { auth } from '@clerk/nextjs/server';
 import { buildQueryOptions } from '@/lib/agent';
 import { agentToStream } from '@/lib/streaming';
 import { scheduledSubstanceGate } from '@chemclaw2/agent-tools';
-import { recordOverride } from '@chemclaw2/db';
+import { recordOverride, getProjectBudget, incrementSpend } from '@chemclaw2/db';
 import { randomUUID } from 'crypto';
 import { rateLimit } from '@/lib/rate-limit';
 
@@ -73,7 +73,26 @@ export async function POST(req: NextRequest) {
 
   const planMode = body.plan_mode === true;
   const options = buildQueryOptions(sessionId, userId, { planMode });
-  const stream = agentToStream(prompt.trim(), options);
+  // Wave-2c opportunity #6: persist LLM input+output tokens to the period
+  // spend row at end-of-stream. Cache-read/create tokens are reported but
+  // not billed against tokens_cap (they're effectively free and would
+  // punish cache-friendly prompts). Failure is logged but never blocks
+  // the response — same fail-open semantics as the tool-call budget hook.
+  const projectKey = `chemclaw2:${userId}`;
+  const stream = agentToStream(prompt.trim(), options, {
+    async onResult(result) {
+      const tokens = result.inputTokens + result.outputTokens;
+      if (tokens === 0) return;
+      const budget = await getProjectBudget(projectKey).catch((err) => {
+        console.error('[chat] getProjectBudget failed:', err);
+        return null;
+      });
+      if (!budget) return;
+      await incrementSpend(projectKey, budget.period, { tokens }).catch((err) => {
+        console.error('[chat] incrementSpend(tokens) failed:', err);
+      });
+    },
+  });
 
   return new Response(stream, {
     headers: {

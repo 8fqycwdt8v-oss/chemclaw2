@@ -91,7 +91,7 @@ describe('getCurrentSpend', () => {
     // budgetRow is reused as the select target for spend in this mock; null = []
     mocks.budgetRow = null;
     const spend = await getCurrentSpend('chemclaw2:user_x', 'day');
-    expect(spend).toEqual({ toolCalls: 0, experiments: 0 });
+    expect(spend).toEqual({ toolCalls: 0, experiments: 0, tokens: 0 });
   });
 });
 
@@ -106,8 +106,10 @@ describe('getBudgetWithSpend', () => {
       period: 'day',
       tool_calls_cap: 100,
       experiments_cap: null,
+      tokens_cap: null,
       tool_calls: null,
       experiments: null,
+      tokens: null,
     }]);
     const result = await getBudgetWithSpend('chemclaw2:user_x');
     expect(result).toEqual({
@@ -116,8 +118,9 @@ describe('getBudgetWithSpend', () => {
         period: 'day',
         toolCallsCap: 100,
         experimentsCap: null,
+        tokensCap: null,
       },
-      spend: { toolCalls: 0, experiments: 0 },
+      spend: { toolCalls: 0, experiments: 0, tokens: 0 },
     });
   });
 
@@ -126,12 +129,29 @@ describe('getBudgetWithSpend', () => {
       period: 'week',
       tool_calls_cap: 500,
       experiments_cap: 10,
+      tokens_cap: null,
       tool_calls: 42,
       experiments: 3,
+      tokens: 12345,
     }]);
     const result = await getBudgetWithSpend('chemclaw2:user_x');
     expect(result?.budget.period).toBe('week');
-    expect(result?.spend).toEqual({ toolCalls: 42, experiments: 3 });
+    expect(result?.spend).toEqual({ toolCalls: 42, experiments: 3, tokens: 12345 });
+  });
+
+  it('coerces tokens_cap BIGINT string to Number', async () => {
+    mocks.executeRows.push([{
+      period: 'month',
+      tool_calls_cap: null,
+      experiments_cap: null,
+      tokens_cap: '5000000',
+      tool_calls: null,
+      experiments: null,
+      tokens: '4500000',
+    }]);
+    const result = await getBudgetWithSpend('chemclaw2:user_x');
+    expect(result?.budget.tokensCap).toBe(5000000);
+    expect(result?.spend.tokens).toBe(4500000);
   });
 
   it('coerces bigint-shaped numeric strings (Postgres BIGINT) to Number', async () => {
@@ -141,8 +161,10 @@ describe('getBudgetWithSpend', () => {
       period: 'month',
       tool_calls_cap: '1000',
       experiments_cap: 50,
+      tokens_cap: null,
       tool_calls: '999',
       experiments: 49,
+      tokens: null,
     }]);
     const result = await getBudgetWithSpend('chemclaw2:user_x');
     expect(result?.budget.toolCallsCap).toBe(1000);
@@ -151,13 +173,18 @@ describe('getBudgetWithSpend', () => {
 });
 
 describe('incrementSpend', () => {
-  it('skips the DB write when delta is zero', async () => {
-    await incrementSpend('chemclaw2:user_x', 'day', { toolCalls: 0, experiments: 0 });
+  it('skips the DB write when all deltas are zero', async () => {
+    await incrementSpend('chemclaw2:user_x', 'day', { toolCalls: 0, experiments: 0, tokens: 0 });
     expect(mocks.executeCalls).toHaveLength(0);
   });
 
-  it('issues an UPSERT when delta is non-zero', async () => {
+  it('issues an UPSERT when toolCalls delta is non-zero', async () => {
     await incrementSpend('chemclaw2:user_x', 'day', { toolCalls: 1 });
+    expect(mocks.executeCalls).toHaveLength(1);
+  });
+
+  it('issues an UPSERT when only tokens delta is non-zero', async () => {
+    await incrementSpend('chemclaw2:user_x', 'day', { tokens: 1500 });
     expect(mocks.executeCalls).toHaveLength(1);
   });
 });

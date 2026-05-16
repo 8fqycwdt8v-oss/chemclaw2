@@ -12,3 +12,4 @@ export * from './todos';
 export * from './external-facts';
 export * from './properties';
 export * from './papers';
+export * from './wiki-tables';

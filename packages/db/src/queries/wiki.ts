@@ -2,14 +2,20 @@ import { sql, eq, lt, desc, or, and, type SQL } from 'drizzle-orm';
 import { trace } from '@opentelemetry/api';
 import { db } from '../client';
 import { wikiPages, wikiChunks, wikiCitations, wikiSubscriptions } from '../schema/wiki';
+import { wikiTables } from '../schema/wiki-tables';
+import { extractMarkdownTables } from './wiki-tables';
 
 const tracer = trace.getTracer('@chemclaw2/db');
 
 // Split text into semantically coherent chunks for embedding.
 // Strategy (in order of preference):
-//   1. Paragraph boundaries (\n\n) — best context for chemistry prose
-//   2. Sentence boundaries (. ! ? followed by whitespace) — for long paragraphs
-//   3. Word boundaries — final fallback for run-on sentences that exceed maxSize
+//   1. Markdown tables — emit each table as a single chunk so row↔column
+//      semantics survive embedding (Wave-2c B4). Without this, header and
+//      data rows land in different chunks and a query for "yield" loses
+//      the corresponding catalyst/temperature context.
+//   2. Paragraph boundaries (\n\n) — best context for chemistry prose
+//   3. Sentence boundaries (. ! ? followed by whitespace) — for long paragraphs
+//   4. Word boundaries — final fallback for run-on sentences that exceed maxSize
 //
 // 1200/200 is sized so chunks carry enough surrounding context for retrieval
 // (chemistry text is dense; 400-char chunks under-utilize the embedding model).
@@ -18,7 +24,69 @@ const tracer = trace.getTracer('@chemclaw2/db');
 //
 // Note: the sentence splitter fires on abbreviations like "Dr." and "Fig." —
 // short resulting fragments are discarded by the length > 10 guard.
+
+// Recognizes the divider row that proves a `|`-containing line above is a
+// table header rather than a stray pipe in prose. Mirrors the strict matcher
+// used by extractMarkdownTables.
+const CHUNKTEXT_TABLE_DIVIDER_RE = /^\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
+
+/**
+ * Split a markdown body into table blocks and non-table fragments. Each
+ * fragment is either `{ kind: 'table', text }` (preserved verbatim) or
+ * `{ kind: 'prose', text }` (handed to the paragraph/sentence splitter).
+ * The chunker emits tables as single chunks and shards prose fragments
+ * normally.
+ */
+function splitOnTables(md: string): Array<{ kind: 'table' | 'prose'; text: string }> {
+  const lines = md.replace(/\r\n/g, '\n').split('\n');
+  const out: Array<{ kind: 'table' | 'prose'; text: string }> = [];
+  let proseBuf: string[] = [];
+  const flushProse = () => {
+    if (proseBuf.length === 0) return;
+    const joined = proseBuf.join('\n');
+    if (joined.trim().length > 0) out.push({ kind: 'prose', text: joined });
+    proseBuf = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const next = lines[i + 1];
+    if (line.includes('|') && next && CHUNKTEXT_TABLE_DIVIDER_RE.test(next.trim())) {
+      flushProse();
+      const tableLines: string[] = [line, next];
+      let j = i + 2;
+      while (j < lines.length) {
+        const rowLine = lines[j];
+        if (!rowLine.includes('|') || rowLine.trim().length === 0) break;
+        tableLines.push(rowLine);
+        j++;
+      }
+      out.push({ kind: 'table', text: tableLines.join('\n') });
+      i = j - 1;
+      continue;
+    }
+    proseBuf.push(line);
+  }
+  flushProse();
+  return out;
+}
+
 export function chunkText(text: string, maxSize = 1200, overlap = 200): string[] {
+  // Wave-2c B4: table-aware. Tables are emitted whole; only prose between
+  // tables is paragraph/sentence/word-split.
+  const segments = splitOnTables(text);
+  const out: string[] = [];
+  for (const seg of segments) {
+    if (seg.kind === 'table') {
+      const t = seg.text.trim();
+      if (t.length > 10) out.push(t);
+      continue;
+    }
+    out.push(...chunkProse(seg.text, maxSize, overlap));
+  }
+  return out;
+}
+
+function chunkProse(text: string, maxSize: number, overlap: number): string[] {
   const paragraphs = text.split(/\n{2,}/).map((p) => p.trim()).filter((p) => p.length > 0);
   const result: string[] = [];
 
@@ -176,6 +244,13 @@ export async function upsertWikiPage(
         ...(metadata.needsReview !== undefined ? { needsReview: metadata.needsReview } : {}),
       };
 
+      // Wave-2c B2: extract markdown tables from the body. Only re-run on
+      // content change; the rows mirror page state, so a body-unchanged
+      // upsert leaves wiki_tables alone. Header embeddings are deferred to
+      // a future pass (we'd need to bundle table-header strings into the
+      // single embedFn call to avoid an extra OpenAI round-trip per table).
+      const extractedTables = contentChanged ? extractMarkdownTables(contentText) : [];
+
       const pageId = await db.transaction(async (tx) => {
         const [page] = await tx
           .insert(wikiPages)
@@ -189,6 +264,20 @@ export async function upsertWikiPage(
             await tx.insert(wikiChunks).values(
               chunks.map((text, i) => ({ pageId: page.id, chunkIdx: i, text, embedding: embeddings[i] })),
             );
+          }
+          // Tables track page content: replace whenever the body changes,
+          // including the empty-tables case (delete then no-insert).
+          await tx.delete(wikiTables).where(eq(wikiTables.pageId, page.id));
+          if (extractedTables.length > 0) {
+            await tx.insert(wikiTables).values(extractedTables.map((t) => ({
+              pageId: page.id,
+              position: t.position,
+              anchor: t.anchor ?? null,
+              headers: t.headers,
+              rows: t.rows,
+              headerText: t.headers.join(' | '),
+              headerEmbedding: null,
+            })));
           }
         }
 

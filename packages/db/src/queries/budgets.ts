@@ -9,6 +9,8 @@ export type ProjectBudget = {
   period: BudgetPeriod;
   toolCallsCap: number | null;
   experimentsCap: number | null;
+  // Wave-2c: LLM input+output tokens cap per period. Cache tokens excluded.
+  tokensCap: number | null;
 };
 
 /**
@@ -47,13 +49,14 @@ export async function getProjectBudget(projectKey: string): Promise<ProjectBudge
     period: row.period as BudgetPeriod,
     toolCallsCap: row.toolCallsCap,
     experimentsCap: row.experimentsCap,
+    tokensCap: row.tokensCap,
   };
 }
 
 export async function upsertProjectBudget(
   projectKey: string,
   period: BudgetPeriod,
-  caps: { toolCallsCap?: number | null; experimentsCap?: number | null },
+  caps: { toolCallsCap?: number | null; experimentsCap?: number | null; tokensCap?: number | null },
   updatedBy: string,
 ): Promise<void> {
   await db
@@ -63,6 +66,7 @@ export async function upsertProjectBudget(
       period,
       toolCallsCap: caps.toolCallsCap ?? null,
       experimentsCap: caps.experimentsCap ?? null,
+      tokensCap: caps.tokensCap ?? null,
       updatedBy,
     })
     .onConflictDoUpdate({
@@ -71,13 +75,14 @@ export async function upsertProjectBudget(
         period,
         toolCallsCap: caps.toolCallsCap ?? null,
         experimentsCap: caps.experimentsCap ?? null,
+        tokensCap: caps.tokensCap ?? null,
         updatedBy,
         updatedAt: new Date(),
       },
     });
 }
 
-export type SpendRow = { toolCalls: number; experiments: number };
+export type SpendRow = { toolCalls: number; experiments: number; tokens: number };
 
 export async function getCurrentSpend(
   projectKey: string,
@@ -89,11 +94,12 @@ export async function getCurrentSpend(
     .select({
       toolCalls: projectBudgetSpend.toolCalls,
       experiments: projectBudgetSpend.experiments,
+      tokens: projectBudgetSpend.tokens,
     })
     .from(projectBudgetSpend)
     .where(sql`${projectBudgetSpend.projectKey} = ${projectKey}
               AND ${projectBudgetSpend.periodStart} = ${periodStart.toISOString()}::timestamptz`);
-  return row ?? { toolCalls: 0, experiments: 0 };
+  return row ?? { toolCalls: 0, experiments: 0, tokens: 0 };
 }
 
 /**
@@ -122,15 +128,19 @@ export async function getBudgetWithSpend(
     period: string;
     tool_calls_cap: string | number | null;
     experiments_cap: number | null;
+    tokens_cap: string | number | null;
     tool_calls: string | number | null;
     experiments: number | null;
+    tokens: string | number | null;
   }>(sql`
     SELECT
       pb.period,
       pb.tool_calls_cap,
       pb.experiments_cap,
+      pb.tokens_cap,
       pbs.tool_calls,
-      pbs.experiments
+      pbs.experiments,
+      pbs.tokens
     FROM project_budgets pb
     LEFT JOIN project_budget_spend pbs
       ON pbs.project_key = pb.project_key
@@ -149,10 +159,12 @@ export async function getBudgetWithSpend(
       period: row.period as BudgetPeriod,
       toolCallsCap: row.tool_calls_cap == null ? null : Number(row.tool_calls_cap),
       experimentsCap: row.experiments_cap,
+      tokensCap: row.tokens_cap == null ? null : Number(row.tokens_cap),
     },
     spend: {
       toolCalls: row.tool_calls == null ? 0 : Number(row.tool_calls),
       experiments: row.experiments ?? 0,
+      tokens: row.tokens == null ? 0 : Number(row.tokens),
     },
   };
 }
@@ -164,19 +176,21 @@ export async function getBudgetWithSpend(
 export async function incrementSpend(
   projectKey: string,
   period: BudgetPeriod,
-  delta: { toolCalls?: number; experiments?: number },
+  delta: { toolCalls?: number; experiments?: number; tokens?: number },
   now: Date = new Date(),
 ): Promise<void> {
   const toolCalls = delta.toolCalls ?? 0;
   const experiments = delta.experiments ?? 0;
-  if (toolCalls === 0 && experiments === 0) return;
+  const tokens = delta.tokens ?? 0;
+  if (toolCalls === 0 && experiments === 0 && tokens === 0) return;
   const periodStart = periodStartFor(period, now).toISOString();
   await db.execute(sql`
-    INSERT INTO project_budget_spend (project_key, period_start, tool_calls, experiments, updated_at)
-    VALUES (${projectKey}, ${periodStart}::timestamptz, ${toolCalls}, ${experiments}, NOW())
+    INSERT INTO project_budget_spend (project_key, period_start, tool_calls, experiments, tokens, updated_at)
+    VALUES (${projectKey}, ${periodStart}::timestamptz, ${toolCalls}, ${experiments}, ${tokens}, NOW())
     ON CONFLICT (project_key, period_start) DO UPDATE
       SET tool_calls  = project_budget_spend.tool_calls  + EXCLUDED.tool_calls,
           experiments = project_budget_spend.experiments + EXCLUDED.experiments,
+          tokens      = project_budget_spend.tokens      + EXCLUDED.tokens,
           updated_at  = NOW()
   `);
 }
