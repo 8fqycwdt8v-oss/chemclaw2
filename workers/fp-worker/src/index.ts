@@ -4,6 +4,7 @@ import { db, compounds, reactions } from '@chemclaw2/db';
 import { eq, sql } from 'drizzle-orm';
 import { callMcpTool } from '@chemclaw2/agent-tools';
 import { startCampaignWorker } from './campaign-worker';
+import { startEvalWorker } from './eval-worker';
 
 const activeProcs = new Set<ChildProcess>();
 
@@ -85,6 +86,10 @@ async function start() {
   );
 
   await startCampaignWorker(boss);
+
+  // BACKLOG #37: weekly deterministic regression eval against the chemistry
+  // plumbing. Writes one eval_runs row per execution.
+  await startEvalWorker(boss);
 
   // Windows older than 2h are guaranteed-expired and safe to discard.
   await boss.createQueue('sweep-rate-limits', { policy: PgBoss.policies.stately } as PgBoss.Queue);

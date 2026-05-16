@@ -1,5 +1,14 @@
 import { z } from 'zod';
-import { createCampaign, updateCampaignStatusForUser, getCampaignBySession, addCampaignStep, db, sql } from '@chemclaw2/db';
+import {
+  createCampaign,
+  updateCampaignStatusForUser,
+  getCampaignBySession,
+  getCampaignWithStepsForUser,
+  addCampaignStep,
+  replaceSessionTodos,
+  db,
+  sql,
+} from '@chemclaw2/db';
 import { UUID_RE } from './uuid';
 import type { ToolDef } from './tool-def';
 
@@ -118,6 +127,28 @@ export function createSynthesisCampaignTools(userId: string): {
                 AND step_idx > 0
                 AND campaign_id IN (SELECT id FROM synthesis_campaigns WHERE created_by = ${userId})`,
         );
+      }
+
+      // BACKLOG #45: seed agent_todos so the campaign's step list surfaces in
+      // the chat UI todo panel alongside deep-research checklists. One todo
+      // per step, ordered by stepIdx; text mirrors the campaign_step row
+      // (reactionSmiles, then conditions, then a placeholder for empty steps).
+      // Best-effort: a persistence failure here must not block the kickoff
+      // itself, mirroring deep-research's handling.
+      const owned = await getCampaignWithStepsForUser(input.campaign_id, userId).catch(() => null);
+      if (owned) {
+        const items = owned.steps.map((s, i) => {
+          const desc = s.reactionSmiles ?? s.conditions ?? '(step body pending)';
+          return `Campaign step ${i}: ${desc.slice(0, 200)}`;
+        });
+        if (items.length > 0) {
+          await replaceSessionTodos(owned.campaign.sessionId, userId, items).catch((err) => {
+            console.error('[kickoff_campaign] replaceSessionTodos failed:', err);
+          });
+        }
+      }
+
+      if (input.approval === 'per_step') {
         return {
           status: 'running',
           approval_mode: 'per_step',

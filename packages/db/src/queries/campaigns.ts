@@ -1,4 +1,4 @@
-import { eq, sql, and, lt, notInArray, desc, inArray } from 'drizzle-orm';
+import { eq, sql, and, lt, notInArray, desc, asc, inArray } from 'drizzle-orm';
 import { db } from '../client';
 import { synthesisCampaigns, campaignSteps } from '../schema/campaigns';
 
@@ -62,6 +62,29 @@ export async function getCampaignBySession(sessionId: string, userId: string) {
     .orderBy(desc(synthesisCampaigns.createdAt))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * Owner-scoped fetch of one campaign + its steps in stepIdx order. Used by
+ * kickoff_campaign to seed agent_todos with one entry per step so the user
+ * sees the campaign's checklist surface alongside deep-research todos.
+ */
+export async function getCampaignWithStepsForUser(campaignId: string, userId: string) {
+  const [campaign] = await db
+    .select()
+    .from(synthesisCampaigns)
+    .where(and(
+      eq(synthesisCampaigns.id, campaignId),
+      eq(synthesisCampaigns.createdBy, userId),
+    ))
+    .limit(1);
+  if (!campaign) return null;
+  const steps = await db
+    .select()
+    .from(campaignSteps)
+    .where(eq(campaignSteps.campaignId, campaignId))
+    .orderBy(asc(campaignSteps.stepIdx));
+  return { campaign, steps };
 }
 
 export async function addCampaignStep(
