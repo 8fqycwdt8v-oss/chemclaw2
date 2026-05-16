@@ -18,6 +18,12 @@
     },
     { "idx": 2, "version": "7", "when": 1747492800000, "tag": "0003_wiki", "breakpoints": true },
     { "idx": 3, "version": "7", "when": 1747579200000, "tag": "0004_campaigns", "breakpoints": true },
-    { "idx": 4, "version": "7", "when": 1747665600000, "tag": "0005_audit", "breakpoints": true }
+    { "idx": 4, "version": "7", "when": 1747665600000, "tag": "0005_audit", "breakpoints": true },
+    { "idx": 5, "version": "7", "when": 1747752000000, "tag": "0006_schema_hardening", "breakpoints": true },
+    { "idx": 6, "version": "7", "when": 1747838400000, "tag": "0007_campaign_steps_updated_at", "breakpoints": true },
+    { "idx": 7, "version": "7", "when": 1747924800000, "tag": "0008_rate_limits", "breakpoints": true },
+    { "idx": 8, "version": "7", "when": 1748011200000, "tag": "0009_wiki_citations_idx", "breakpoints": true },
+    { "idx": 9, "version": "7", "when": 1748097600000, "tag": "0010_campaign_dead_letter_idx", "breakpoints": true },
+    { "idx": 10, "version": "7", "when": 1748184000000, "tag": "0011_campaign_queue_policy", "breakpoints": true }
   ]
 }

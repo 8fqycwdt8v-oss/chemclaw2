@@ -9,3 +9,7 @@
 - [campaigns] updateCampaignStatus terminal-state guard added to both updateCampaignStatus and updateCampaignStatusForUser in packages/db/src/queries/campaigns.ts — both now use inArray(status, NON_TERMINAL_STATUSES)
 - [session-store] pg_advisory_xact_lock uses hashtext() (32-bit) for concurrency guard; hash collisions between different projectKey+sessionId pairs are theoretically possible — low probability but upgrade to bigint hash (hashtext(a) << 32 | hashtext(b)) before high write volumes
 - [web-search] web_search tool empty query (query: "") passes validation and reaches Brave API — add min-length guard (>= 1 char, <= 500 chars) before the fetch
+- [api/wiki] wiki schema: updatedBy (text, nullable) and updatedAt (timestamp, notNull) are inconsistent — either make updatedBy notNull or allow updatedAt nullable; every update should carry both user + timestamp for audit integrity
+- [api/wiki] wiki_citations has no unique constraint on (page_id, citation_id, source_type, source_id) — duplicate citations in a single upsert call create duplicate rows; add unique constraint before multi-client concurrent writes
+- [api/chat] SSE streaming response missing X-Accel-Buffering: no header — nginx will buffer SSE chunks causing latency in proxied deployments
+- [rate-limits] pgRateLimit has no unit tests; the >= vs > boundary (count == maxRequests) previously went undetected — add a test covering exactly-at-limit and one-over-limit cases
