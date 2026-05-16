@@ -92,11 +92,23 @@ export async function addCampaignStep(
   stepIdx: number,
   opts?: { reactionSmiles?: string; conditions?: string },
 ): Promise<string> {
+  // Idempotent insert: if (campaign_id, step_idx) already exists, return the
+  // existing row id instead of throwing. Matches the UNIQUE constraint added
+  // in migration 0031 — concurrent confirm_synthesis_plan retries are safe.
   const [row] = await db
     .insert(campaignSteps)
     .values({ campaignId, stepIdx, ...opts })
+    .onConflictDoNothing({ target: [campaignSteps.campaignId, campaignSteps.stepIdx] })
     .returning({ id: campaignSteps.id });
-  return row.id;
+  if (row) return row.id;
+  const [existing] = await db
+    .select({ id: campaignSteps.id })
+    .from(campaignSteps)
+    .where(and(eq(campaignSteps.campaignId, campaignId), eq(campaignSteps.stepIdx, stepIdx)));
+  if (!existing) {
+    throw new Error(`addCampaignStep: insert no-op but row not found for (${campaignId}, ${stepIdx})`);
+  }
+  return existing.id;
 }
 
 export async function getStepsForRetry(): Promise<Array<typeof campaignSteps.$inferSelect>> {
