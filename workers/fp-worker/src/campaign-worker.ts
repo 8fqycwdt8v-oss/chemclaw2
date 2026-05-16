@@ -1,6 +1,6 @@
 import PgBoss from 'pg-boss';
 import OpenAI from 'openai';
-import { ne, eq, and, lt, inArray, sql } from 'drizzle-orm';
+import { ne, eq, and, lt, inArray, notInArray, sql } from 'drizzle-orm';
 import { db } from '@chemclaw2/db';
 import { campaignSteps, synthesisCampaigns } from '@chemclaw2/db';
 import { upsertWikiPage } from '@chemclaw2/db';
@@ -79,9 +79,15 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
             .from(campaignSteps)
             .where(and(eq(campaignSteps.campaignId, claimed.campaignId), ne(campaignSteps.status, 'complete')));
           if (remaining.length === 0) {
-            await db.update(synthesisCampaigns).set({ status: 'complete' }).where(eq(synthesisCampaigns.id, campaign.id));
-            // Enqueue wiki page creation; singletonKey prevents duplicate pages per campaign
-            await boss.send('create-campaign-wiki', { campaignId: campaign.id }, { singletonKey: campaign.id }).catch(() => {});
+            // Guard: only complete if not already in a terminal state (failed or complete).
+            // .returning() gives an empty array when the WHERE predicate was false, so the
+            // wiki enqueue only fires on an actual status transition.
+            const updated = await db.update(synthesisCampaigns).set({ status: 'complete' }).where(
+              and(eq(synthesisCampaigns.id, campaign.id), notInArray(synthesisCampaigns.status, ['complete', 'failed'])),
+            ).returning({ id: synthesisCampaigns.id });
+            if (updated.length > 0) {
+              await boss.send('create-campaign-wiki', { campaignId: campaign.id }, { singletonKey: campaign.id }).catch(() => {});
+            }
           }
         }
       } catch (err) {

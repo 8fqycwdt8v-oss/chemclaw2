@@ -20,6 +20,7 @@ export async function findSimilarReactions(
   limit = 20,
   minSimilarity = 0.4,
 ): Promise<SimilarReaction[]> {
+  const safeLimit = Math.min(limit, 100);
   if (!/^[01]{2048}$/.test(queryFpBits)) {
     throw new Error('queryFpBits must be exactly 2048 binary characters (0/1)');
   }
@@ -47,7 +48,7 @@ export async function findSimilarReactions(
     }))
     .filter((r) => r.similarity >= minSimilarity)
     .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, limit);
+    .slice(0, safeLimit);
 }
 
 export async function insertReaction(
