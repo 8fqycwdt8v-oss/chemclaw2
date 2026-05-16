@@ -16,6 +16,12 @@ export async function GET(
 ) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const { limited } = await rateLimit(`wiki-read:${userId}`, 60, 60_000);
+  if (limited) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
+  }
+
   const { slug } = await params;
   if (!SLUG_RE.test(slug) || slug.length > 200) {
     return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });

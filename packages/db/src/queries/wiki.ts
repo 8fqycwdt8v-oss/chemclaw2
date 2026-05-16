@@ -85,7 +85,7 @@ export async function upsertWikiPage(
       .values({ slug, title, content, contentText, createdBy, updatedBy: createdBy })
       .onConflictDoUpdate({
         target: wikiPages.slug,
-        set: { title, content, contentText, updatedBy: createdBy },
+        set: { title, content, contentText, updatedBy: createdBy, updatedAt: sql`now()` },
       })
       .returning({ id: wikiPages.id });
 
@@ -148,6 +148,9 @@ export async function searchWikiByFTS(query: string, limit = 20) {
 export async function semanticSearchWiki(embedding: number[], limit = 5) {
   if (embedding.length !== 1536) {
     throw new Error(`embedding must have 1536 dimensions, got ${embedding.length}`);
+  }
+  if (embedding.some((v) => !Number.isFinite(v))) {
+    throw new Error('embedding contains non-finite values');
   }
   // Use sql.param() to ensure the vector literal is a bound parameter, not raw SQL.
   // Drizzle already parameterizes template interpolations, but this is explicit.
