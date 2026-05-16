@@ -1,12 +1,14 @@
+import { z } from 'zod';
 import { upsertPaper } from '@chemclaw2/db';
+import type { ToolDef } from './tool-def';
 
-type PaperInput = {
-  title: string;
-  doi?: string;
-  pubmed_id?: string;
-  url?: string;
-  abstract?: string;
-  content_text?: string;
+const schema = {
+  title: z.string().describe('Paper title (required, 1-1000 chars)'),
+  doi: z.string().optional().describe('DOI in 10.NNNN/... form'),
+  pubmed_id: z.string().optional().describe('PubMed numeric id'),
+  url: z.string().optional(),
+  abstract: z.string().optional(),
+  content_text: z.string().optional().describe('Optional full-text extract for FTS'),
 };
 
 // Conservative DOI shape — prefix `10.<registrant>/<suffix>`. Won't catch
@@ -24,7 +26,7 @@ const PUBMED_RE = /^\d{1,8}$/;
  * returned id and can store it in wiki_citations.source_id to tighten the
  * citation→paper link.
  */
-export function createRegisterPaperTool(userId: string) {
+export function createRegisterPaperTool(userId: string): ToolDef<typeof schema> {
   return {
     name: 'register_paper',
     description:
@@ -32,19 +34,8 @@ export function createRegisterPaperTool(userId: string) {
       'Use after recognizing a literature citation in a wiki body. Returns ' +
       'the paper id; on upsert against an existing DOI/PubMed match, returns ' +
       'the existing id and refreshes the title/abstract/content_text fields.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        title: { type: 'string', description: 'Paper title (required, 1-1000 chars)' },
-        doi: { type: 'string', description: 'DOI in 10.NNNN/... form' },
-        pubmed_id: { type: 'string', description: 'PubMed numeric id' },
-        url: { type: 'string' },
-        abstract: { type: 'string' },
-        content_text: { type: 'string', description: 'Optional full-text extract for FTS' },
-      },
-      required: ['title'],
-    },
-    async execute(input: PaperInput) {
+    schema,
+    async execute(input) {
       if (input.title.length === 0 || input.title.length > 1000) {
         return { error: 'title must be 1-1000 chars' };
       }

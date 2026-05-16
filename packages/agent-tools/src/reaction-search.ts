@@ -1,23 +1,22 @@
+import { z } from 'zod';
 import { findSimilarReactions } from '@chemclaw2/db';
+import type { ToolDef } from './tool-def';
 
-export const reactionSimilaritySearchTool = {
+const schema = {
+  fingerprint_bits: z.string().describe(
+    'DRFP fingerprint as a 2048-char binary string (0/1), from compute_drfp.fingerprint_bits',
+  ),
+  min_similarity: z.number().min(0).max(1).optional().describe('Minimum similarity score (0–1)'),
+  limit: z.number().int().min(1).max(50).optional().describe('Max results to return'),
+};
+
+export const reactionSimilaritySearchTool: ToolDef<typeof schema> = {
   name: 'find_similar_reactions',
   description:
     'Find reactions in the registry similar to a query reaction using DRFP fingerprint similarity. ' +
     'Call compute_drfp (mcp-rxnfp) first to obtain the fingerprint_bits string, then pass it here.',
-  inputSchema: {
-    type: 'object' as const,
-    properties: {
-      fingerprint_bits: {
-        type: 'string',
-        description: 'DRFP fingerprint as a 2048-char binary string (0/1), from compute_drfp.fingerprint_bits',
-      },
-      min_similarity: { type: 'number', description: 'Minimum similarity score (0–1)', default: 0.4 },
-      limit: { type: 'number', description: 'Max results to return', default: 20 },
-    },
-    required: ['fingerprint_bits'],
-  },
-  async execute(input: { fingerprint_bits: string; min_similarity?: number; limit?: number }) {
+  schema,
+  async execute(input) {
     try {
       const results = await findSimilarReactions(
         input.fingerprint_bits,

@@ -1,4 +1,6 @@
+import { z } from 'zod';
 import data from './data/solvent-greenness.json';
+import type { ToolDef } from './tool-def';
 
 type SolventRow = {
   name: string;
@@ -32,24 +34,20 @@ function meanScore(r: SolventRow): number {
  * The agent should call this with the canonical SMILES of each solvent in a
  * reaction (typically obtained via mcp-molfp.validate_smiles).
  */
-export const greenSolventTool = {
+const schema = {
+  solvents: z.array(z.string()).describe(
+    'Solvent SMILES, ideally canonicalised first via mcp-molfp.validate_smiles',
+  ),
+};
+
+export const greenSolventTool: ToolDef<typeof schema> = {
   name: 'score_solvents',
   description:
     'Score solvent choices against green-chemistry guides (CHEM21, GSK, Pfizer, ' +
     'Sanofi, ACS). Input is an array of solvent SMILES; output is per-guide ' +
     'scores 0-10 plus safer-solvent suggestions when a solvent is red-flagged.',
-  inputSchema: {
-    type: 'object' as const,
-    properties: {
-      solvents: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Solvent SMILES, ideally canonicalised first via mcp-molfp.validate_smiles',
-      },
-    },
-    required: ['solvents'],
-  },
-  async execute(input: { solvents: string[] }) {
+  schema,
+  async execute(input) {
     if (!Array.isArray(input.solvents) || input.solvents.length === 0) {
       return { error: 'solvents must be a non-empty array of SMILES strings' };
     }

@@ -1,5 +1,7 @@
+import { z } from 'zod';
 import { ALLOWED_DOMAINS } from './doc-fetch';
 import { recordExternalFactSafe } from '@chemclaw2/db';
+import type { ToolDef } from './tool-def';
 
 const BRAVE_API = 'https://api.search.brave.com/res/v1/web/search';
 
@@ -8,22 +10,22 @@ function isAllowedSiteFilter(hostname: string): boolean {
   return ALLOWED_DOMAINS.some((d) => h === d || h.endsWith('.' + d));
 }
 
-export const webSearchTool = {
+const webSearchSchema = {
+  query: z.string().describe('Search query'),
+  site_filter: z.string().optional().describe(
+    'Restrict search to an approved domain (e.g. "pubmed.ncbi.nlm.nih.gov")',
+  ),
+};
+
+export const webSearchTool: ToolDef<typeof webSearchSchema> = {
   name: 'web_search',
   description:
     'Search the web for scientific literature, patents, or supplier information. ' +
     'site_filter, if provided, must be a hostname from the approved science domain list ' +
     '(pubchem.ncbi.nlm.nih.gov, pubmed.ncbi.nlm.nih.gov, doi.org, crossref.org, ' +
     'chemrxiv.org, rsc.org, acs.org, nature.com, sciencedirect.com, elsevier.com).',
-  inputSchema: {
-    type: 'object' as const,
-    properties: {
-      query: { type: 'string', description: 'Search query' },
-      site_filter: { type: 'string', description: 'Restrict search to an approved domain (e.g. "pubmed.ncbi.nlm.nih.gov")' },
-    },
-    required: ['query'],
-  },
-  async execute(input: { query: string; site_filter?: string }) {
+  schema: webSearchSchema,
+  async execute(input) {
     const q = input.query.trim();
     if (q.length === 0 || q.length > 500) {
       return { results: [], error: 'query must be 1-500 chars after trimming' };
@@ -78,11 +80,14 @@ function normalizedSearchKey(query: string, siteFilter?: string): string {
   return siteFilter ? `${siteFilter.toLowerCase()}::${q}` : q;
 }
 
-export function createWebSearchTool(userId: string) {
+export function createWebSearchTool(userId: string): ToolDef<typeof webSearchSchema> {
   return {
     ...webSearchTool,
-    async execute(input: { query: string; site_filter?: string }) {
-      const result = await webSearchTool.execute(input);
+    async execute(input) {
+      const result = await webSearchTool.execute(input) as {
+        results: Array<{ title: string; url: string; snippet: string }>;
+        error?: string;
+      };
       if (Array.isArray(result.results) && result.results.length > 0 && !result.error) {
         const sourceId = normalizedSearchKey(input.query, input.site_filter);
         const contentText = result.results

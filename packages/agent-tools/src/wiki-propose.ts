@@ -1,7 +1,24 @@
+import { z } from 'zod';
 import { insertProposedEdit } from '@chemclaw2/db';
 import { isValidSlug } from './slug';
 import { markdownToTiptap } from './markdown-to-tiptap';
 import { validateCitations } from './citation-validation';
+import type { ToolDef } from './tool-def';
+
+const wikiProposeSchema = {
+  slug: z.string().describe('Lowercase kebab-case page slug'),
+  title: z.string().describe('Human-readable title'),
+  content_text: z.string().describe('Markdown body of the proposed page'),
+  rationale: z.string().optional().describe(
+    'Short explanation of WHY this edit is proposed (≤2000 chars)',
+  ),
+  citations: z.array(z.object({
+    citationId: z.string(),
+    sourceType: z.string(),
+    sourceId: z.string().optional(),
+    label: z.string(),
+  })).optional(),
+};
 
 /**
  * Wave-3c opportunity #1: stage a wiki edit for human review instead of
@@ -17,7 +34,7 @@ import { validateCitations } from './citation-validation';
  * is likely to want to see before it lands. wiki_upsert remains the
  * right tool for freshly-authored agent pages flagged needs_review=true.
  */
-export function createWikiProposeTool(userId: string) {
+export function createWikiProposeTool(userId: string): ToolDef<typeof wikiProposeSchema> {
   return {
     name: 'propose_wiki_edit',
     description:
@@ -27,39 +44,8 @@ export function createWikiProposeTool(userId: string) {
       'the user has asked you to "draft" or "propose" rather than "save". ' +
       'A rationale field is recommended so the reviewer can see why the ' +
       'change was suggested.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        slug: { type: 'string', description: 'Lowercase kebab-case page slug' },
-        title: { type: 'string', description: 'Human-readable title' },
-        content_text: { type: 'string', description: 'Markdown body of the proposed page' },
-        rationale: {
-          type: 'string',
-          description: 'Short explanation of WHY this edit is proposed (≤2000 chars)',
-        },
-        citations: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              citationId: { type: 'string' },
-              sourceType: { type: 'string' },
-              sourceId: { type: 'string' },
-              label: { type: 'string' },
-            },
-            required: ['citationId', 'sourceType', 'label'],
-          },
-        },
-      },
-      required: ['slug', 'title', 'content_text'],
-    },
-    async execute(input: {
-      slug: string;
-      title: string;
-      content_text: string;
-      rationale?: string;
-      citations?: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>;
-    }) {
+    schema: wikiProposeSchema,
+    async execute(input) {
       if (!isValidSlug(input.slug)) {
         return { error: 'slug must be lowercase kebab-case, ≤200 chars' };
       }

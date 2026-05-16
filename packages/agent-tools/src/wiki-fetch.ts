@@ -1,5 +1,7 @@
+import { z } from 'zod';
 import { getWikiPage, searchWikiByFTS, semanticSearchWiki } from '@chemclaw2/db';
 import { isValidSlug } from './slug';
+import type { ToolDef } from './tool-def';
 
 const SLUG_PREVIEW_CHARS = 2000;
 
@@ -54,29 +56,30 @@ async function executeWikiLookup(input: LookupInput, embedFn?: EmbedFn) {
   return { error: 'Provide either slug or query' };
 }
 
+const wikiFetchSchema = {
+  slug: z.string().optional().describe('Direct page slug (e.g. "aspirin")'),
+  query: z.string().optional().describe('Full-text or semantic search query'),
+  semantic: z.boolean().optional().describe('Use vector similarity search (requires query)'),
+  full: z.boolean().optional().describe(
+    'When using slug, return full content_text instead of a 2000-char preview',
+  ),
+};
+
 /** Plain execute-only version (no SDK dependency) */
-export const wikiFetchTool = {
+export const wikiFetchTool: ToolDef<typeof wikiFetchSchema> = {
   name: 'wiki_lookup',
   description:
     'Look up or search the organization wiki. Provide slug for direct lookup, query for full-text ' +
     'search, or query+semantic=true for vector similarity search. Archived pages are excluded; ' +
     'maturity is surfaced so you can disclaim exploratory content.',
-  inputSchema: {
-    type: 'object' as const,
-    properties: {
-      slug: { type: 'string', description: 'Direct page slug (e.g. "aspirin")' },
-      query: { type: 'string', description: 'Full-text or semantic search query' },
-      semantic: { type: 'boolean', description: 'Use vector similarity search (requires query)' },
-      full: { type: 'boolean', description: 'When using slug, return full content_text instead of a 2000-char preview' },
-    },
-  },
-  execute: (input: LookupInput) => executeWikiLookup(input),
+  schema: wikiFetchSchema,
+  execute: (input) => executeWikiLookup(input),
 };
 
 /** Factory that returns a wiki tool wired with an embed function for semantic search. */
-export function createWikiFetchTool(embedFn: EmbedFn) {
+export function createWikiFetchTool(embedFn: EmbedFn): ToolDef<typeof wikiFetchSchema> {
   return {
     ...wikiFetchTool,
-    execute: (input: LookupInput) => executeWikiLookup(input, embedFn),
+    execute: (input) => executeWikiLookup(input, embedFn),
   };
 }

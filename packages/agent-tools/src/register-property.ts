@@ -1,15 +1,20 @@
+import { z } from 'zod';
 import { insertProperties } from '@chemclaw2/db';
 import { UUID_RE } from './uuid';
+import type { ToolDef } from './tool-def';
 
-type PropertyInput = {
-  compound_id: string;
-  name: string;
-  value_num?: number;
-  value_text?: string;
-  unit?: string;
-  method?: string;
-  source_citation_id?: string;
-  measured_at?: string;
+const propertyItemSchema = z.object({
+  compound_id: z.string().describe('UUID of the compound'),
+  name: z.string().describe('Property name (e.g. "yield", "logP")'),
+  value_num: z.number().optional(),
+  value_text: z.string().optional(),
+  unit: z.string().optional(),
+  method: z.string().optional(),
+  source_citation_id: z.string().optional().describe('wiki_citations.citation_id this came from'),
+  measured_at: z.string().optional().describe('ISO-8601 timestamp'),
+});
+const schema = {
+  properties: z.array(propertyItemSchema).describe('Up to 100 property rows to insert in one batch'),
 };
 
 /**
@@ -24,7 +29,7 @@ type PropertyInput = {
  * value was sourced from, so the trail back to the source paper / experiment
  * stays intact.
  */
-export function createRegisterPropertyTool(userId: string) {
+export function createRegisterPropertyTool(userId: string): ToolDef<typeof schema> {
   return {
     name: 'register_compound_property',
     description:
@@ -33,31 +38,8 @@ export function createRegisterPropertyTool(userId: string) {
       'row must have either a numeric value (value_num) or a free-text ' +
       'value (value_text). Returns the count inserted; on validation error ' +
       'returns { error } and inserts NOTHING (no partial writes).',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        properties: {
-          type: 'array',
-          description: 'Up to 100 property rows to insert in one batch',
-          items: {
-            type: 'object',
-            properties: {
-              compound_id: { type: 'string', description: 'UUID of the compound' },
-              name: { type: 'string', description: 'Property name (e.g. "yield", "logP")' },
-              value_num: { type: 'number' },
-              value_text: { type: 'string' },
-              unit: { type: 'string' },
-              method: { type: 'string' },
-              source_citation_id: { type: 'string', description: 'wiki_citations.citation_id this came from' },
-              measured_at: { type: 'string', description: 'ISO-8601 timestamp' },
-            },
-            required: ['compound_id', 'name'],
-          },
-        },
-      },
-      required: ['properties'],
-    },
-    async execute(input: { properties: PropertyInput[] }) {
+    schema,
+    async execute(input) {
       if (!Array.isArray(input.properties) || input.properties.length === 0) {
         return { error: 'properties must be a non-empty array' };
       }

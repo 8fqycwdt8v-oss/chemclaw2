@@ -1,7 +1,26 @@
+import { z } from 'zod';
 import { upsertWikiPage } from '@chemclaw2/db';
 import { isValidSlug } from './slug';
 import { markdownToTiptap } from './markdown-to-tiptap';
 import { validateCitations } from './citation-validation';
+import type { ToolDef } from './tool-def';
+
+const wikiUpsertSchema = {
+  slug: z.string().describe('Lowercase kebab-case page slug'),
+  title: z.string().describe('Human-readable title'),
+  content_text: z.string().describe(
+    'Markdown body (gets parsed into Tiptap, then chunked + embedded)',
+  ),
+  project: z.string().optional().describe(
+    'Optional project tag for scoping (e.g. "project-x")',
+  ),
+  citations: z.array(z.object({
+    citationId: z.string(),
+    sourceType: z.string().describe('e.g. "compound", "reaction", "url", "doc"'),
+    sourceId: z.string().optional(),
+    label: z.string(),
+  })).optional().describe('Sources used (compounds, reactions, URLs, doc IDs)'),
+};
 
 /**
  * Factory: lets the agent write or update a wiki page on the user's behalf.
@@ -17,7 +36,7 @@ import { validateCitations } from './citation-validation';
 export function createWikiUpsertTool(
   userId: string,
   embedFn: (texts: string[]) => Promise<number[][]>,
-) {
+): ToolDef<typeof wikiUpsertSchema> {
   return {
     name: 'wiki_upsert',
     description:
@@ -28,43 +47,8 @@ export function createWikiUpsertTool(
       'kebab-case (e.g. "aspirin-synthesis"). Body is parsed as markdown; ' +
       'all [N] markers in the body must have a matching citation entry, and ' +
       'URL citations must point to an allowed science domain.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        slug: { type: 'string', description: 'Lowercase kebab-case page slug' },
-        title: { type: 'string', description: 'Human-readable title' },
-        content_text: {
-          type: 'string',
-          description: 'Markdown body (gets parsed into Tiptap, then chunked + embedded)',
-        },
-        project: {
-          type: 'string',
-          description: 'Optional project tag for scoping (e.g. "project-x")',
-        },
-        citations: {
-          type: 'array',
-          description: 'Sources used (compounds, reactions, URLs, doc IDs)',
-          items: {
-            type: 'object',
-            properties: {
-              citationId: { type: 'string' },
-              sourceType: { type: 'string', description: 'e.g. "compound", "reaction", "url", "doc"' },
-              sourceId: { type: 'string' },
-              label: { type: 'string' },
-            },
-            required: ['citationId', 'sourceType', 'label'],
-          },
-        },
-      },
-      required: ['slug', 'title', 'content_text'],
-    },
-    async execute(input: {
-      slug: string;
-      title: string;
-      content_text: string;
-      project?: string;
-      citations?: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>;
-    }) {
+    schema: wikiUpsertSchema,
+    async execute(input) {
       if (!isValidSlug(input.slug)) {
         return { error: 'slug must be lowercase kebab-case, ≤200 chars' };
       }
