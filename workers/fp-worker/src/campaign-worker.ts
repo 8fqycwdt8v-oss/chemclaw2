@@ -38,9 +38,25 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
   await boss.createQueue('run-campaign-step', { policy: PgBoss.policies.standard } as PgBoss.Queue);
   await boss.createQueue('create-campaign-wiki', { policy: PgBoss.policies.stately } as PgBoss.Queue);
 
-  // Cron every 5 minutes: retry failed steps + sweep dead 'running' steps
+  // Cron every 5 minutes: retry failed steps + sweep dead 'running' steps + pick up pending steps
   await boss.schedule('retry-campaign-steps', '*/5 * * * *');
   await boss.work('retry-campaign-steps', async () => {
+    // Enqueue pending steps belonging to campaigns the user has kicked off (status='running').
+    // These have status='pending' from confirm_synthesis_plan, but the worker only
+    // sweeps failed steps via getStepsForRetry — so without this, kickoff has no effect.
+    const pending = await db
+      .select({ id: campaignSteps.id })
+      .from(campaignSteps)
+      .innerJoin(synthesisCampaigns, eq(synthesisCampaigns.id, campaignSteps.campaignId))
+      .where(and(
+        eq(campaignSteps.status, 'pending'),
+        eq(synthesisCampaigns.status, 'running'),
+      ))
+      .limit(50);
+    for (const { id } of pending) {
+      await boss.send('run-campaign-step', { stepId: id }, { singletonKey: id }).catch(() => {});
+    }
+
     // Dead-letter sweep: reset steps stuck in 'running' for > DEAD_LETTER_TIMEOUT_MINUTES.
     // Sets next_retry_at = NOW() so getStepsForRetry() picks them up immediately.
     // Guards retry_count < 3 to avoid pushing exhausted steps past the retry cap.

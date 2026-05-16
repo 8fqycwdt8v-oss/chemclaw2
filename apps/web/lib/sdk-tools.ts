@@ -7,6 +7,7 @@ import {
   docFetchTool,
   elnFetchTool,
   createWikiFetchTool,
+  createSynthesisCampaignTools,
 } from '@chemclaw2/agent-tools';
 import { embedText } from './embeddings';
 
@@ -76,7 +77,45 @@ const elnFetch = tool(
   async (args) => toMcpText(await elnFetchTool.execute(args)),
 );
 
-export const inProcessMcpServer = createSdkMcpServer({
-  name: 'chemclaw2-tools',
-  tools: [compoundSearch, reactionSearch, wikiLookup, webSearch, docFetch, elnFetch],
-});
+export function buildInProcessMcpServer(userId: string) {
+  const campaign = createSynthesisCampaignTools(userId);
+  const startCampaign = tool(
+    campaign.synthesisCampaignTool.name,
+    campaign.synthesisCampaignTool.description,
+    {
+      session_id: z.string().describe('Current session ID'),
+      target_smiles: z.string().optional().describe('Target molecule SMILES'),
+    },
+    async (args) => toMcpText(await campaign.synthesisCampaignTool.execute(args)),
+  );
+  const confirmCampaign = tool(
+    campaign.confirmSynthesisPlanTool.name,
+    campaign.confirmSynthesisPlanTool.description,
+    {
+      campaign_id: z.string(),
+      plan: z.record(z.string(), z.unknown()),
+    },
+    async (args) => toMcpText(await campaign.confirmSynthesisPlanTool.execute(args)),
+  );
+  const kickoffCampaign = tool(
+    campaign.kickoffCampaignTool.name,
+    campaign.kickoffCampaignTool.description,
+    { campaign_id: z.string() },
+    async (args) => toMcpText(await campaign.kickoffCampaignTool.execute(args)),
+  );
+
+  return createSdkMcpServer({
+    name: 'chemclaw2-tools',
+    tools: [
+      compoundSearch,
+      reactionSearch,
+      wikiLookup,
+      webSearch,
+      docFetch,
+      elnFetch,
+      startCampaign,
+      confirmCampaign,
+      kickoffCampaign,
+    ],
+  });
+}
