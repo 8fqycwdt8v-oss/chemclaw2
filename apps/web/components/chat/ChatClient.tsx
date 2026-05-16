@@ -54,6 +54,35 @@ export function ChatClient() {
   // Abort the in-flight SSE stream if the user navigates away mid-response.
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  // Poll /api/notifications every 30s when the tab is visible. Surfaces
+  // completed-campaign events as toasts and refreshes the nav badge.
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const res = await fetch('/api/notifications');
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as {
+          campaigns: Array<{ id: string; targetSmiles: string | null; status: string; wikiPageId: string | null }>;
+        };
+        for (const c of data.campaigns) {
+          setMessages((m) => [
+            ...m,
+            {
+              role: 'error',
+              text: `Campaign ${c.targetSmiles ?? c.id.slice(0, 8)} ${c.status}${c.wikiPageId ? ' — wiki page ready' : ''}`,
+            },
+          ]);
+        }
+      } catch {
+        // network glitches are fine; the next tick will retry
+      }
+    };
+    const handle = setInterval(poll, 30_000);
+    return () => { cancelled = true; clearInterval(handle); };
+  }, []);
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -210,6 +239,40 @@ export function ChatClient() {
     abortRef.current?.abort();
   };
 
+  const presetPlan = () => {
+    const question = window.prompt('What question or task should be planned step-by-step?');
+    if (!question) return;
+    const text =
+      `[PLAN MODE]\n\n` +
+      `Before invoking any tool, list the planned steps as a numbered markdown list ` +
+      `(tool name + input summary for each), then end with: "Approve to proceed?"\n` +
+      `Wait for my reply. If I write "approve", run the plan tool-by-tool. ` +
+      `If I write anything else, treat it as plan-edit feedback and revise.\n\n` +
+      `Task: ${question}`;
+    void send(text);
+  };
+
+  const presetSaveSkill = async () => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) return;
+    const name = window.prompt('Skill name (lowercase kebab-case, 2-40 chars):');
+    if (!name) return;
+    const description = window.prompt('One-line description:');
+    if (!description) return;
+    try {
+      const res = await fetch('/api/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, name, description }),
+      });
+      const body = (await res.json().catch(() => null)) as { error?: string; path?: string; note?: string } | null;
+      if (!res.ok) throw new Error(body?.error ?? `Save skill failed (${res.status})`);
+      setMessages((m) => [...m, { role: 'error', text: `Skill saved: ${body?.path}. ${body?.note ?? ''}` }]);
+    } catch (err) {
+      setMessages((m) => [...m, { role: 'error', text: (err as Error).message }]);
+    }
+  };
+
   const presetFeedback = async (score: 1 | -1) => {
     const sessionId = sessionIdRef.current;
     if (!sessionId) {
@@ -298,6 +361,15 @@ export function ChatClient() {
         </button>
         <button
           type="button"
+          onClick={presetPlan}
+          className="text-xs px-2 py-1 border rounded text-slate-700 hover:bg-slate-50"
+          disabled={streaming}
+          title="Have the agent draft a step-by-step plan you can approve before it runs"
+        >
+          Plan first
+        </button>
+        <button
+          type="button"
           onClick={() => void presetFeedback(1)}
           className="text-xs px-2 py-1 border rounded text-slate-700 hover:bg-slate-50"
           disabled={streaming || messages.filter((mm) => mm.role === 'assistant').length === 0}
@@ -313,6 +385,15 @@ export function ChatClient() {
           title="Grade the most recent assistant turn 👎"
         >
           👎
+        </button>
+        <button
+          type="button"
+          onClick={() => void presetSaveSkill()}
+          className="text-xs px-2 py-1 border rounded text-slate-700 hover:bg-slate-50"
+          disabled={streaming || messages.filter((mm) => mm.role === 'assistant').length === 0}
+          title="Save the last turn as a reusable skill"
+        >
+          Save as skill
         </button>
         <textarea
           value={input}
