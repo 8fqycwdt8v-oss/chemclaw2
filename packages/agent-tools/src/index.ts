@@ -12,6 +12,8 @@ export { substructureCandidatesTool } from './substructure-search';
 export { interpretAnalyticalResultTool } from './analytical-interpret';
 export { createWikiUpsertTool } from './wiki-upsert';
 export { createWikiProposeTool } from './wiki-propose';
+export { createRegisterPropertyTool } from './register-property';
+export { createRegisterPaperTool } from './register-paper';
 export { callMcpTool } from './mcp-client';
 export { hazardLookupTool } from './hazard-lookup';
 export { greenSolventTool } from './green-solvent';

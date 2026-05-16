@@ -28,7 +28,15 @@ markdown report — you then persist it via finalize_deep_research.
 For citation-conflict resolution on a wiki page, dispatch
 subagent_type='contradiction-resolver'. The sub-agent reads both citations
 and the chunks that reference them, weighs the evidence, and returns a
-proposed winner + reason that you persist via record_contradiction.`;
+proposed winner + reason that you persist via record_contradiction.
+
+After finalize_deep_research or wiki_upsert on a chemistry page that
+contains measurements, SAR data, or literature references, consider
+dispatching subagent_type='entity-extractor' with the new page's slug.
+The extractor parses the body for property rows (yield, logP, IC50, etc.)
+and paper citations (DOI / PubMed) and registers them as structured
+entities — populating the properties / papers tables for downstream SAR
+queries via lookup_properties and lookup_knowledge.`;
 
 // Wave-3b: sub-agent definitions. These are exposed through the SDK's built-in
 // Task tool. Each runs in isolated context with a restricted tool surface so
@@ -61,6 +69,17 @@ const CONTRADICTION_RESOLVER_TOOLS: string[] = [
   'mcp__chemclaw2-tools__wiki_lookup',
   'mcp__chemclaw2-tools__lookup_knowledge',
   'mcp__chemclaw2-tools__fetch_document',
+];
+
+const ENTITY_EXTRACTOR_TOOLS: string[] = [
+  // Reads: needs full wiki body + compound lookups
+  'mcp__chemclaw2-tools__wiki_lookup',
+  'mcp__chemclaw2-tools__lookup_knowledge',
+  'mcp__chemclaw2-tools__compound_similarity_search',
+  'mcp__chemclaw2-tools__lookup_properties',
+  // Writes: the only mutations this sub-agent may perform
+  'mcp__chemclaw2-tools__register_compound_property',
+  'mcp__chemclaw2-tools__register_paper',
 ];
 
 const DEEP_RESEARCH_PROMPT = `You are a focused research sub-agent for ChemClaw.
@@ -110,6 +129,40 @@ Workflow:
 The parent agent will parse your output and persist it via record_contradiction.
 If evidence is genuinely balanced, prefer "inconclusive" over forcing a winner.`;
 
+const ENTITY_EXTRACTOR_PROMPT = `You are an entity-extraction sub-agent for ChemClaw.
+
+Your job: parse a wiki page body and populate the structured properties
+and papers tables. You have read tools + two write tools
+(register_compound_property, register_paper). Nothing else.
+
+Workflow:
+1. Call wiki_lookup with the given slug + full=true to get the body.
+2. Identify measurement rows. Look for patterns like:
+   - "yield 75%" / "yield: 60-80%" / "isolated yield 82 %"
+   - "logP = 2.1" / "logP 2.1 (Crippen)"
+   - "IC50 12 nM" / "Ki = 4.5 \\u03BCM"
+   - "Tm 145-147 \\u00B0C"
+   The compound being measured must be a UUID you can find either as a
+   citation sourceId (sourceType='compound') or via
+   compound_similarity_search on a SMILES in the body. If you cannot tie
+   a value to a known compound UUID, SKIP it — never invent compound ids.
+3. Identify literature citations. Look for citation entries with
+   sourceType in {'doc','paper','url'} that include a DOI
+   (10.NNNN/...) or PubMed url (pubmed.ncbi.nlm.nih.gov/NNNN). For each,
+   call register_paper with the title (from the citation label),
+   DOI / pubmed_id, and url.
+4. Use register_compound_property in batches (up to 100 per call) and
+   register_paper one-at-a-time. Report your final results as a single
+   short summary message: "Extracted N properties for K compounds; M
+   papers registered."
+
+Hard rules:
+- Never invent CAS numbers, yields, or compound IDs.
+- Skip ambiguous values rather than guessing.
+- Numeric units must match the value (don't store "75" without "%").
+- Include source_citation_id on every property row when the wiki body
+  ties the value to a [N] marker.`;
+
 export const SUBAGENT_DEFINITIONS: NonNullable<Options['agents']> = {
   'deep-research': {
     description:
@@ -131,6 +184,18 @@ export const SUBAGENT_DEFINITIONS: NonNullable<Options['agents']> = {
     tools: CONTRADICTION_RESOLVER_TOOLS,
     mcpServers: ['chemclaw2-tools'],
     maxTurns: 10,
+  },
+  'entity-extractor': {
+    description:
+      'Parse a wiki page body and populate the structured properties + papers tables. ' +
+      'Dispatch with the page slug after finalize_deep_research / wiki_upsert on chemistry ' +
+      'content containing measurements (yield, logP, IC50, …) or literature citations ' +
+      '(DOI / PubMed). The sub-agent runs in isolated context with retrieval tools + the two ' +
+      'register_* write tools only.',
+    prompt: ENTITY_EXTRACTOR_PROMPT,
+    tools: ENTITY_EXTRACTOR_TOOLS,
+    mcpServers: ['chemclaw2-tools'],
+    maxTurns: 20,
   },
 };
 

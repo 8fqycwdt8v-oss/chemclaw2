@@ -12,6 +12,8 @@ import {
   interpretAnalyticalResultTool,
   createWikiUpsertTool,
   createWikiProposeTool,
+  createRegisterPropertyTool,
+  createRegisterPaperTool,
   hazardLookupTool,
   greenSolventTool,
   createContradictionTools,
@@ -203,6 +205,42 @@ export function buildInProcessMcpServer(userId: string, sessionId?: string) {
     async (args) => toMcpText(await wikiProposeToolExec.execute(args)),
   );
 
+  // Wave-3e B6: entity-extractor write tools. Sub-agent dispatch (defined in
+  // SUBAGENT_DEFINITIONS) restricts entity-extractor to read tools + these
+  // two; parent agent still has access for direct ingestion if needed.
+  const registerPropertyExec = createRegisterPropertyTool(userId);
+  const registerProperty = tool(
+    registerPropertyExec.name,
+    registerPropertyExec.description,
+    {
+      properties: z.array(z.object({
+        compound_id: z.string(),
+        name: z.string(),
+        value_num: z.number().optional(),
+        value_text: z.string().optional(),
+        unit: z.string().optional(),
+        method: z.string().optional(),
+        source_citation_id: z.string().optional(),
+        measured_at: z.string().optional(),
+      })),
+    },
+    async (args) => toMcpText(await registerPropertyExec.execute(args)),
+  );
+  const registerPaperExec = createRegisterPaperTool(userId);
+  const registerPaper = tool(
+    registerPaperExec.name,
+    registerPaperExec.description,
+    {
+      title: z.string(),
+      doi: z.string().optional(),
+      pubmed_id: z.string().optional(),
+      url: z.string().optional(),
+      abstract: z.string().optional(),
+      content_text: z.string().optional(),
+    },
+    async (args) => toMcpText(await registerPaperExec.execute(args)),
+  );
+
   const deepResearch = createDeepResearchTools(userId, embedTexts, sessionId);
   const beginDeepResearch = tool(
     deepResearch.begin.name,
@@ -292,6 +330,8 @@ export function buildInProcessMcpServer(userId: string, sessionId?: string) {
       wikiLookup,
       wikiUpsert,
       wikiPropose,
+      registerProperty,
+      registerPaper,
       webSearch,
       docFetch,
       elnFetch,
