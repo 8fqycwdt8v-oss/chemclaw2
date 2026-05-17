@@ -85,6 +85,9 @@ def _extract_string_values(obj: Any, depth: int = 0) -> list[str]:
 
 # ── CAS number fact-check ─────────────────────────────────────────────────────
 
+# Prefix 2–7 digits covers all real-world CAS RNs as of 2025 (the largest
+# registered number has a 7-digit prefix). TypeScript used \d{2,10} which
+# over-matches non-CAS numeric strings; Python narrows to \d{2,7}.
 _CAS_RE = re.compile(r'\b\d{2,7}-\d{2}-\d\b')
 
 async def check_tool_output(tool_name: str, tool_output: str, db: Any) -> dict[str, list[str]]:

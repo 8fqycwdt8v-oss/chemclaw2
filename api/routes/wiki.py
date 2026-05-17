@@ -57,6 +57,15 @@ class WikiPostBody(BaseModel):
     needs_review: bool | None = None
 
 
+class WikiPutBody(BaseModel):
+    title: str
+    content: Any = None
+    content_text: str | None = None
+    citations: list[dict[str, Any]] | None = None
+    project: str | None = None
+    needs_review: bool | None = None
+
+
 class WikiPatchBody(BaseModel):
     needs_review: bool | None = None
     archived: bool | None = None
@@ -150,6 +159,35 @@ async def get_wiki(
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
     citations = await get_wiki_page_citations(db, page["id"])
     return {**page, "citations": citations}
+
+
+@router.put("/api/wiki/{slug}")
+async def update_wiki(
+    slug: str,
+    body: WikiPutBody,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    """Replace a wiki page's content, title, and citations. Triggers re-embed."""
+    limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
+    if limited["limited"]:
+        raise HTTPException(status_code=429, detail="Too many requests")
+    existing = await get_wiki_page(db, slug)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
+    page_id = await upsert_wiki_page(
+        db,
+        slug,
+        body.title,
+        body.content or {"type": "doc", "content": []},
+        body.content_text or "",
+        user_id,
+        body.citations or [],
+        embed_texts,
+        body.project,
+        body.needs_review,
+    )
+    return {"id": page_id}
 
 
 @router.patch("/api/wiki/{slug}")

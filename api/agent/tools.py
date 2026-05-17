@@ -136,17 +136,30 @@ def build_chemclaw_mcp_server(
     # ── wiki lookup ───────────────────────────────────────────────────────────
     @mcp.tool()
     async def wiki_lookup(
-        query: str,
+        query: str | None = None,
+        slug: str | None = None,
         mode: str = "fts",
         limit: int = 5,
     ) -> dict[str, Any]:
-        """Search the knowledge wiki. mode=fts (default) or mode=semantic."""
-        from api.db.queries.wiki import search_wiki_by_fts, semantic_search_wiki
-        if not query.strip():
-            return {"error": "query must not be empty"}
-        if len(query) > 500:
-            return {"error": "query too long (max 500 chars)"}
+        """Look up wiki knowledge. Provide slug for a direct page fetch, or
+        query for FTS/semantic search (mode='fts' or mode='semantic')."""
+        from api.db.queries.wiki import (
+            get_wiki_page,
+            get_wiki_page_citations,
+            search_wiki_by_fts,
+            semantic_search_wiki,
+        )
         async with session_factory() as db:
+            if slug:
+                page = await get_wiki_page(db, slug)
+                if not page:
+                    return {"error": f"Wiki page '{slug}' not found"}
+                citations = await get_wiki_page_citations(db, page["id"])
+                return {"mode": "slug", "results": [{**page, "citations": citations}]}
+            if not query or not query.strip():
+                return {"error": "Provide either slug or query"}
+            if len(query) > 500:
+                return {"error": "query too long (max 500 chars)"}
             if mode == "semantic":
                 from api.routes.wiki import embed_texts
                 embeddings = await embed_texts([query])
@@ -186,7 +199,7 @@ def build_chemclaw_mcp_server(
                 return {"results": [], "error": f"Brave API error: {r.status_code}"}
             data = r.json()
             results = [
-                {"title": item["title"], "url": item["url"], "description": item.get("description", "")}
+                {"title": item["title"], "url": item["url"], "snippet": item.get("description", "")}
                 for item in (data.get("web", {}).get("results") or [])
             ]
             return {"results": results}
@@ -255,7 +268,8 @@ def build_chemclaw_mcp_server(
             text = body.decode("utf-8", errors="replace")
             if format == "markdown":
                 text = _html_to_text(text)
-            return {"content": text[:100_000], "truncated": len(r.content) > MAX_BYTES}
+            # 10 K char limit matches TypeScript doc-fetch — keeps context window manageable.
+            return {"content": text[:10_000], "truncated": len(r.content) > MAX_BYTES or len(text) > 10_000}
         return {"error": "Too many redirects"}
 
     # ── ELN experiment fetch ──────────────────────────────────────────────────
@@ -277,6 +291,8 @@ def build_chemclaw_mcp_server(
             return {"error": "Invalid experiment_id format"}
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
+                # Path: TypeScript used /experiments/{id}; Python uses /api/eln/experiments/{id}.
+                # Verify this against the actual ELN API contract before deploying.
                 r = await client.get(
                     f"{eln_base}/api/eln/experiments/{exp_id}",
                     headers={"Authorization": f"Bearer {eln_key}"},
@@ -316,7 +332,7 @@ def build_chemclaw_mcp_server(
         # If any step insert fails the whole operation rolls back.
         async with session_factory() as db:
             async with db.begin():
-                await update_campaign_status(db, campaign_id, user_id, "running", plan)
+                await update_campaign_status(db, campaign_id, "running", user_id=user_id, plan=plan)
                 for step in steps:
                     await add_campaign_step(
                         db,
