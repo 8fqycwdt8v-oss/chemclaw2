@@ -31,54 +31,73 @@ function serializeError(err: unknown): LogFields | undefined {
   return { message: String(err) };
 }
 
+function safeStringify(record: LogFields): string {
+  // JSON.stringify throws on circular refs (e.g. an Error.cause chain that
+  // refers back to its parent). The logger sits in error-handling code, so a
+  // throw here would mask the original failure — fall back to a minimal line.
+  try {
+    return JSON.stringify(record);
+  } catch {
+    return JSON.stringify({ level: record.level, time: record.time, event: record.event, log_serialize_failed: true });
+  }
+}
+
 function emit(level: LogLevel, event: string, fields: LogFields, err?: unknown): void {
   if (LEVEL_PRIORITY[level] < minLevel()) return;
 
-  const ctx = requestContext.get();
-  const span = trace.getActiveSpan();
-  const spanCtx = span?.spanContext();
+  // Belt-and-braces: the logger is called from catch blocks. Any exception
+  // here would replace the original error and confuse the caller. Swallow
+  // everything past this point — losing one log line is preferable to losing
+  // the real error.
+  try {
+    const ctx = requestContext.get();
+    const span = trace.getActiveSpan();
+    const spanCtx = span?.spanContext();
 
-  const record: LogFields = {
-    level,
-    time: new Date().toISOString(),
-    event,
-    ...(ctx?.requestId && { request_id: ctx.requestId }),
-    ...(ctx?.userId && { user_id: ctx.userId }),
-    ...(ctx?.sessionId && { session_id: ctx.sessionId }),
-    ...(spanCtx?.traceId && { trace_id: spanCtx.traceId }),
-    ...(spanCtx?.spanId && { span_id: spanCtx.spanId }),
-    ...fields,
-  };
-  if (err !== undefined) {
-    const serialized = serializeError(err);
-    if (serialized) record.error = serialized;
-  }
-
-  // Mirror the event onto the active OTel span so Langfuse can correlate
-  // log lines with the trace. attributes only accept primitives, so serialize
-  // nested fields.
-  if (span) {
-    const attrs: Record<string, string | number | boolean> = { level };
-    for (const [k, v] of Object.entries(fields)) {
-      if (v == null) continue;
-      if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
-        attrs[k] = v;
-      } else {
-        attrs[k] = JSON.stringify(v).slice(0, 500);
-      }
-    }
+    const record: LogFields = {
+      level,
+      time: new Date().toISOString(),
+      event,
+      ...(ctx?.requestId && { request_id: ctx.requestId }),
+      ...(ctx?.userId && { user_id: ctx.userId }),
+      ...(ctx?.sessionId && { session_id: ctx.sessionId }),
+      ...(spanCtx?.traceId && { trace_id: spanCtx.traceId }),
+      ...(spanCtx?.spanId && { span_id: spanCtx.spanId }),
+      ...fields,
+    };
     if (err !== undefined) {
-      attrs.error_message = err instanceof Error ? err.message : String(err);
+      const serialized = serializeError(err);
+      if (serialized) record.error = serialized;
     }
-    span.addEvent(event, attrs);
-  }
 
-  // JSON line on stdout/stderr — picked up by Fly/Axiom/Better Stack log shippers.
-  const line = JSON.stringify(record);
-  if (level === 'error' || level === 'warn') {
-    process.stderr.write(line + '\n');
-  } else {
-    process.stdout.write(line + '\n');
+    // Mirror the event onto the active OTel span so Langfuse can correlate
+    // log lines with the trace. attributes only accept primitives, so serialize
+    // nested fields.
+    if (span) {
+      const attrs: Record<string, string | number | boolean> = { level };
+      for (const [k, v] of Object.entries(fields)) {
+        if (v == null) continue;
+        if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+          attrs[k] = v;
+        } else {
+          attrs[k] = JSON.stringify(v).slice(0, 500);
+        }
+      }
+      if (err !== undefined) {
+        attrs.error_message = err instanceof Error ? err.message : String(err);
+      }
+      span.addEvent(event, attrs);
+    }
+
+    // JSON line on stdout/stderr — picked up by Fly/Axiom/Better Stack log shippers.
+    const line = safeStringify(record);
+    if (level === 'error' || level === 'warn') {
+      process.stderr.write(line + '\n');
+    } else {
+      process.stdout.write(line + '\n');
+    }
+  } catch {
+    // intentionally empty — never let logging crash a caller
   }
 }
 

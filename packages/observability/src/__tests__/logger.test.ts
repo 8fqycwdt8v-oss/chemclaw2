@@ -72,4 +72,14 @@ describe('logger', () => {
       process.env.LOG_LEVEL = prev;
     }
   });
+
+  it('never throws on circular references', () => {
+    const cyclic: Record<string, unknown> = { name: 'cycle' };
+    cyclic.self = cyclic;
+    // Should not throw; should emit a fallback line.
+    expect(() => logger.error('bad_payload', { cyclic })).not.toThrow();
+    expect(stderrSpy).toHaveBeenCalledOnce();
+    const parsed = JSON.parse((stderrSpy.mock.calls[0][0] as string).trim());
+    expect(parsed.log_serialize_failed).toBe(true);
+  });
 });
