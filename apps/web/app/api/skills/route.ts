@@ -7,13 +7,15 @@ import { join } from 'node:path';
 import { replaySession } from '@chemclaw2/db';
 import { rateLimit } from '@/lib/rate-limit';
 
-const SKILLS_DIR = process.env.SKILLS_DIR ?? join(process.cwd(), '..', '..', 'skills');
+const SKILLS_DIR =
+  process.env.SKILLS_DIR ?? join(process.cwd(), '..', '..', '.claude', 'skills');
 const SKILL_NAME_RE = /^[a-z][a-z0-9-]{1,40}$/;
 
 /**
  * Capture the last successful turn from a session and persist it as a new skill
- * pack on disk. The file lands at skills/<name>/skill.md; an operator commits
- * it to the repo via PR — that's the durability path. This keeps the
+ * pack on disk. The file lands at .claude/skills/<name>/SKILL.md with YAML
+ * frontmatter the Agent SDK uses for skill discovery; an operator commits it
+ * to the repo via PR — that's the durability path. This keeps the
  * implementation tiny (no dynamic skill registry, no DB table).
  */
 export async function POST(req: Request) {
@@ -53,6 +55,11 @@ export async function POST(req: Request) {
   await mkdir(dir, { recursive: true });
 
   const md = [
+    '---',
+    `name: ${body.name}`,
+    `description: ${body.description.replace(/\n+/g, ' ').trim()}`,
+    '---',
+    '',
     `# ${body.name}`,
     '',
     body.description,
@@ -65,11 +72,11 @@ export async function POST(req: Request) {
     JSON.stringify(trimmed, null, 2),
     '```',
   ].join('\n');
-  await writeFile(join(dir, 'skill.md'), md, 'utf8');
+  await writeFile(join(dir, 'SKILL.md'), md, 'utf8');
 
   return NextResponse.json({
     name: body.name,
-    path: join('skills', body.name, 'skill.md'),
+    path: join('.claude', 'skills', body.name, 'SKILL.md'),
     note: 'Skill saved to container filesystem. Commit to the repo via PR to persist.',
   });
 }
