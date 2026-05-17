@@ -13,7 +13,7 @@ const RejectBody = z.object({
  * so the audit trail captures why the change was declined.
  */
 export const POST = withRouteParams<{ id: string }, typeof RejectBody>(
-  { auth: 'admin', body: RejectBody },
+  { auth: 'admin', rateLimit: { key: 'admin-proposed-edits', max: 60, windowMs: 60_000 }, body: RejectBody },
   async ({ userId, params, body }) => {
     if (!UUID_RE.test(params.id)) return errorResponse('id must be a UUID', 400);
     const { found } = await markProposedEditRejected(params.id, userId, body.comment);

@@ -64,9 +64,9 @@ describe('pgRateLimit boundary', () => {
     expect((await pgRateLimit('k', 1, 60_000)).limited).toBe(true);
   });
 
-  it('DB failure fails open (not limited) so an outage does not turn into total block', async () => {
+  it('DB failure fails CLOSED — a stampede that stresses the DB is precisely when rate limiting matters most', async () => {
     mocks.shouldThrow = true;
     const r = await pgRateLimit('k', 5, 60_000);
-    expect(r.limited).toBe(false);
+    expect(r.limited).toBe(true);
   });
 });

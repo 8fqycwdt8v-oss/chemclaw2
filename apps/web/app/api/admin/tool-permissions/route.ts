@@ -18,7 +18,7 @@ const ToolPermBody = z.object({
 });
 
 export const POST = withRoute(
-  { auth: 'admin', body: ToolPermBody },
+  { auth: 'admin', rateLimit: { key: 'admin-tool-permissions', max: 60, windowMs: 60_000 }, body: ToolPermBody },
   async ({ userId, body }) => {
     // Validate scopeId shape against scope. Misconfigured rows (e.g.
     // scope='project' paired with a Clerk user id) would never resolve.

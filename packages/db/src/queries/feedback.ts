@@ -1,6 +1,24 @@
 import { createHash } from 'node:crypto';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../client';
 import { agentFeedback, agentOverrides } from '../schema/feedback';
+import { agentSessions } from '../schema/sessions';
+
+/**
+ * Verify a session belongs to a given user. Sessions are keyed by
+ * (project_key = chemclaw2:<userId>, session_id, subpath). Used to gate
+ * feedback writes — without it any signed-in user could attach feedback
+ * rows to any sessionId.
+ */
+export async function sessionBelongsToUser(sessionId: string, userId: string): Promise<boolean> {
+  const projectKey = `chemclaw2:${userId}`;
+  const rows = await db
+    .select({ sessionId: agentSessions.sessionId })
+    .from(agentSessions)
+    .where(and(eq(agentSessions.projectKey, projectKey), eq(agentSessions.sessionId, sessionId)))
+    .limit(1);
+  return rows.length > 0;
+}
 
 /**
  * Upsert one feedback row per (session, turn, user). Re-submitting overwrites

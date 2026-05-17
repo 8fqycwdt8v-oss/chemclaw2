@@ -35,6 +35,21 @@ export const PUT = withRouteParams<{ slug: string }, typeof WikiPutBodySchema>(
     const existing = await getWikiPage(params.slug);
     if (!existing) return errorResponse('Not found', 404);
 
+    // Direct overwrite requires page creator or admin. Non-owners must go
+    // through the propose/apply review queue so wholesale rewrites are
+    // auditable. PATCH already enforces this for lifecycle fields; PUT was
+    // the wider gap.
+    if (existing.createdBy !== userId) {
+      const user = await currentUser();
+      const role = (user?.publicMetadata as { role?: string } | undefined)?.role;
+      if (role !== 'admin') {
+        return errorResponse(
+          'Forbidden — use propose-edit; direct overwrite requires page ownership or admin role',
+          403,
+        );
+      }
+    }
+
     const citations = body.citations !== undefined
       ? body.citations
       : (await getWikiPageCitations(existing.id)).map((c) => ({

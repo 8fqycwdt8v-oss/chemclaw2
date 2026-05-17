@@ -6,7 +6,7 @@ import { withRoute } from '@/lib/api-gate';
  * Admin endpoint — list the pending review queue. Per-proposal actions live
  * in /[id]/apply and /[id]/reject.
  */
-export const GET = withRoute({ auth: 'admin' }, async () => {
+export const GET = withRoute({ auth: 'admin', rateLimit: { key: 'admin-proposed-edits', max: 60, windowMs: 60_000 } }, async () => {
   const pending = await listPendingProposedEdits();
   return NextResponse.json({
     pending: pending.map((p) => ({

@@ -18,7 +18,7 @@ const ApplyBody = z
  * with compensating rollback on any failure) lives there.
  */
 export const POST = withRouteParams<{ id: string }, typeof ApplyBody>(
-  { auth: 'admin', body: ApplyBody },
+  { auth: 'admin', rateLimit: { key: 'admin-proposed-edits', max: 60, windowMs: 60_000 }, body: ApplyBody },
   async ({ userId, params, body }) => {
     if (!UUID_RE.test(params.id)) return errorResponse('id must be a UUID', 400);
 

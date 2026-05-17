@@ -14,11 +14,10 @@ export const POST = withRouteParams<{ slug: string; cid: string }, typeof Disput
     if (!isValidSlug(params.slug) || params.cid.length === 0 || params.cid.length > 200) {
       return errorResponse('Invalid slug or citation id', 400);
     }
+    // Normalized response: identical shape whether slug+citation exist or
+    // not, so this can't be used to enumerate (slug, cid) pairs.
     const page = await getWikiPage(params.slug);
-    if (!page) return errorResponse('Not found', 404);
-
-    const { found } = await setCitationDisputed(page.id, params.cid, body.disputed);
-    if (!found) return errorResponse('Citation not found', 404);
+    if (page) await setCitationDisputed(page.id, params.cid, body.disputed);
     return NextResponse.json({ disputed: body.disputed });
   },
 );

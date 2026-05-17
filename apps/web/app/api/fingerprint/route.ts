@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { NextResponse } from 'next/server';
 import { callMcpTool } from '@chemclaw2/agent-tools';
 import { withRoute, errorResponse } from '@/lib/api-gate';
+import { logger } from '@chemclaw2/observability';
+import { randomUUID } from 'node:crypto';
 
 const MAX_SMILES_LEN = 2000;
 
@@ -24,7 +26,11 @@ export const POST = withRoute(
       }
       return NextResponse.json({ fingerprint_bits: bits });
     } catch (err) {
-      return errorResponse((err as Error).message, 502);
+      // MCP errors include process paths / Python stack fragments; surface
+      // only a correlation id to the client.
+      const errorId = randomUUID();
+      logger.error('fingerprint_compute_failed', { kind: body.kind, error_id: errorId }, err);
+      return errorResponse('Fingerprint computation failed', 502, { errorId });
     }
   },
 );

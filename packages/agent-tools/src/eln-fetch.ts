@@ -1,6 +1,7 @@
 import dns from 'dns';
 import { z } from 'zod';
 import ipaddr from 'ipaddr.js';
+import { Agent } from 'undici';
 import { recordExternalFactSafe } from '@chemclaw2/db';
 import { logger } from '@chemclaw2/observability';
 import type { ToolDef } from './tool-def';
@@ -24,6 +25,30 @@ async function assertElnHostNotPrivate(hostname: string): Promise<string | null>
     return `DNS resolution failed for ELN host: ${hostname}`;
   }
 }
+
+// Connect-time IP range check — closes the TOCTOU window between
+// assertElnHostNotPrivate and fetch's own internal DNS lookup. The request
+// carries the ELN bearer token, so the IP that connects MUST be the IP
+// that passed the range check.
+function safeLookup(
+  hostname: string,
+  options: dns.LookupOptions,
+  cb: (err: NodeJS.ErrnoException | null, address: string, family: number) => void,
+): void {
+  dns.lookup(hostname, { ...options, all: true }, (err, results) => {
+    if (err) return cb(err, '', 0);
+    const list = Array.isArray(results) ? results : [results as unknown as { address: string; family: number }];
+    for (const r of list) {
+      if (!ipaddr.isValid(r.address) || ipaddr.parse(r.address).range() !== 'unicast') {
+        return cb(new Error(`SSRF blocked: ${hostname} → ${r.address}`), '', 0);
+      }
+    }
+    const first = list[0];
+    cb(null, first.address, first.family);
+  });
+}
+
+const ELN_DISPATCHER = new Agent({ connect: { lookup: safeLookup } });
 
 const elnFetchSchema = {
   experiment_id: z.string().describe('ELN experiment identifier (e.g. EXP-001)'),
@@ -66,6 +91,8 @@ export const elnFetchTool: ToolDef<typeof elnFetchSchema> = {
           Authorization: `Bearer ${ELN_KEY}`,
           Accept: 'application/json',
         },
+        // @ts-expect-error — Node's global fetch accepts undici Dispatcher at runtime; the type isn't surfaced on RequestInit.
+        dispatcher: ELN_DISPATCHER,
       });
     } catch (err) {
       logger.error('eln_fetch_failed', {

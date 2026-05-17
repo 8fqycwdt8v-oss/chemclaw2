@@ -22,9 +22,14 @@ const SkillsBody = z.object({
  * pack on disk. The file lands at .claude/skills/<name>/SKILL.md with YAML
  * frontmatter the Agent SDK uses for skill discovery; an operator commits it
  * to the repo via PR — that's the durability path.
+ *
+ * Admin-only: the Agent SDK auto-loads SKILL.md from the container
+ * filesystem, so a skill written by user A becomes prompt context for every
+ * subsequent session of every user (until the container is reclaimed). That
+ * makes this endpoint a persistent prompt-injection sink unless gated.
  */
 export const POST = withRoute(
-  { rateLimit: { key: 'skills', max: 10, windowMs: 60_000 }, body: SkillsBody },
+  { auth: 'admin', rateLimit: { key: 'skills', max: 10, windowMs: 60_000 }, body: SkillsBody },
   async ({ userId, body }) => {
     const entries = await replaySession(body.sessionId, `chemclaw2:${userId}`);
     if (entries.length === 0) return errorResponse('session has no entries', 404);

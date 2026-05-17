@@ -19,7 +19,7 @@ const BudgetPutBody = z.object({
 });
 
 export const GET = withRouteParams<{ projectKey: string }>(
-  { auth: 'admin' },
+  { auth: 'admin', rateLimit: { key: 'admin-budgets', max: 60, windowMs: 60_000 } },
   async ({ params }) => {
     if (!PROJECT_KEY_RE.test(params.projectKey)) return errorResponse('invalid projectKey', 400);
     const budget = await getProjectBudget(params.projectKey);
@@ -30,7 +30,7 @@ export const GET = withRouteParams<{ projectKey: string }>(
 );
 
 export const PUT = withRouteParams<{ projectKey: string }, typeof BudgetPutBody>(
-  { auth: 'admin', body: BudgetPutBody },
+  { auth: 'admin', rateLimit: { key: 'admin-budgets', max: 60, windowMs: 60_000 }, body: BudgetPutBody },
   async ({ userId, params, body }) => {
     if (!PROJECT_KEY_RE.test(params.projectKey)) {
       return errorResponse('projectKey must match /^[A-Za-z0-9:_-]{1,64}$/', 400);

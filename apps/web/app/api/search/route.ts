@@ -8,6 +8,8 @@ import {
 } from '@chemclaw2/db';
 import { callMcpTool } from '@chemclaw2/agent-tools';
 import { withRoute, errorResponse } from '@/lib/api-gate';
+import { logger } from '@chemclaw2/observability';
+import { randomUUID } from 'node:crypto';
 
 const MAX_QUERY_LEN = 500;
 const MAX_SMARTS_LEN = 500;
@@ -117,7 +119,9 @@ export const POST = withRoute(
         }
         return NextResponse.json({ type: 'substructure', results });
       } catch (err) {
-        return errorResponse((err as Error).message, 502);
+        const errorId = randomUUID();
+        logger.error('substructure_search_failed', { smarts_len: smarts.length, error_id: errorId }, err);
+        return errorResponse('Substructure search failed', 502, { errorId });
       }
     }
 

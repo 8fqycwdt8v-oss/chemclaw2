@@ -6,10 +6,39 @@ import { CONTROLLED_SUBSTANCE_NAMES, normalizeForGate } from './scheduled-substa
 // inside normalizeForGate.
 
 // Pattern matches US Social Security Numbers (NNN-NN-NNNN).
-// Not a general PII scanner — only SSNs. CAS numbers (NN...-NN-N) do not match.
-// Non-global so .test() is stateless; replacement uses a per-call /g clone.
+// CAS numbers (NN...-NN-N) do not match — they end in a single digit.
 const SSN_RE = /\b\d{3}-\d{2}-\d{4}\b/;
 const SSN_RE_GLOBAL = /\b\d{3}-\d{2}-\d{4}\b/g;
+
+// Additional credential patterns for tool inputs. The set is intentionally
+// narrow — false positives are costly because redaction runs on every tool
+// call. SSN stays as the canonical sensitive-PII case; the rest are shapes
+// users sometimes paste into prompts.
+const SECRET_PATTERNS: Array<[RegExp, string, string]> = [
+  // Anthropic / OpenAI / Stripe-style secret keys.
+  [/\b(sk|rk|pk)[-_][A-Za-z0-9]{20,}\b/g, '[REDACTED-API-KEY]', 'api_key'],
+  // OAuth / generic bearer tokens.
+  [/\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{16,}\b/g, 'Bearer [REDACTED]', 'bearer_token'],
+  // AWS access keys.
+  [/\bAKIA[0-9A-Z]{16}\b/g, '[REDACTED-AWS-KEY]', 'aws_access_key'],
+  // GitHub PATs (classic + fine-grained).
+  [/\bghp_[A-Za-z0-9]{30,}\b/g, '[REDACTED-GITHUB-TOKEN]', 'github_pat'],
+  [/\bgithub_pat_[A-Za-z0-9_]{30,}\b/g, '[REDACTED-GITHUB-TOKEN]', 'github_pat'],
+];
+
+function redactSecrets(input: string, toolName: string): { redacted: string; matched: boolean } {
+  let out = input;
+  let matched = false;
+  for (const [re, sub, kind] of SECRET_PATTERNS) {
+    const count = (out.match(re) ?? []).length;
+    if (count > 0) {
+      logger.warn('credential_redacted', { tool: toolName, kind, count });
+      out = out.replace(re, sub);
+      matched = true;
+    }
+  }
+  return { redacted: out, matched };
+}
 
 /**
  * Check a tool input object for controlled substance names (block) or SSN patterns (redact).
@@ -43,14 +72,29 @@ export function checkToolInput(
     }
   }
 
-  // Redact SSN patterns from all string values
+  // Redact SSN + credential shapes from all string values. Operates on the
+  // serialized JSON so nesting depth doesn't matter.
   const inputStr = JSON.stringify(toolInput);
-  const ssnMatchCount = (inputStr.match(SSN_RE_GLOBAL) ?? []).length;
-  if (ssnMatchCount > 0) {
-    logger.warn('pii_redacted', { tool: toolName, kind: 'ssn', count: ssnMatchCount });
+  let working = inputStr;
+  let didRedact = false;
+
+  const ssnCount = (working.match(SSN_RE_GLOBAL) ?? []).length;
+  if (ssnCount > 0) {
+    logger.warn('pii_redacted', { tool: toolName, kind: 'ssn', count: ssnCount });
+    working = working.replace(SSN_RE_GLOBAL, '[REDACTED-SSN]');
+    didRedact = true;
+  }
+
+  const { redacted, matched } = redactSecrets(working, toolName);
+  if (matched) {
+    working = redacted;
+    didRedact = true;
+  }
+
+  if (didRedact) {
     return {
       action: 'allow',
-      input: JSON.parse(inputStr.replace(SSN_RE_GLOBAL, '[REDACTED-SSN]')) as Record<string, unknown>,
+      input: JSON.parse(working) as Record<string, unknown>,
     };
   }
 
