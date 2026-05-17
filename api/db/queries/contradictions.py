@@ -1,0 +1,105 @@
+"""Wiki contradiction queries — tracks conflicting citations on wiki pages.
+
+Functions that mutate state manage their own transaction via `async with db.begin()`.
+Read-only functions do NOT commit — no transaction management required.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
+
+_VALID_PROPOSED_WINNERS = frozenset(("a", "b", "inconclusive"))
+
+
+async def list_contradictions(
+    db: AsyncSession,
+    page_id: str | None = None,
+    resolved: bool = False,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return contradictions, optionally filtered by page and resolution status.
+
+    When resolved=False (default) only unresolved rows are returned.
+    When resolved=True all rows are returned regardless of resolution.
+    """
+    params: dict[str, Any] = {"lim": limit}
+    page_clause = ""
+    if page_id is not None:
+        page_clause = "AND page_id = :pid::uuid"
+        params["pid"] = page_id
+    resolved_clause = "AND resolved_by IS NULL" if not resolved else ""
+    result = await db.execute(
+        text(f"""
+            SELECT id::text, page_id::text, citation_a, citation_b,
+                   proposed_winner, reason, resolved_by, created_at
+            FROM wiki_contradictions
+            WHERE TRUE
+              {page_clause}
+              {resolved_clause}
+            ORDER BY created_at DESC
+            LIMIT :lim
+        """),
+        params,
+    )
+    return [dict(r._mapping) for r in result]
+
+
+async def create_contradiction(
+    db: AsyncSession,
+    page_id: str,
+    citation_a: str,
+    citation_b: str,
+    proposed_winner: str,
+    reason: str,
+) -> str:
+    """Insert a new contradiction record. Returns the new row's id as a string."""
+    if proposed_winner not in _VALID_PROPOSED_WINNERS:
+        raise ValueError(
+            f"proposed_winner must be one of {sorted(_VALID_PROPOSED_WINNERS)!r},"
+            f" got {proposed_winner!r}"
+        )
+    async with db.begin():
+        result = await db.execute(
+            text("""
+                INSERT INTO wiki_contradictions
+                    (page_id, citation_a, citation_b, proposed_winner, reason)
+                VALUES (:pid::uuid, :citation_a, :citation_b, :proposed_winner, :reason)
+                RETURNING id::text
+            """),
+            {
+                "pid": page_id,
+                "citation_a": citation_a,
+                "citation_b": citation_b,
+                "proposed_winner": proposed_winner,
+                "reason": reason,
+            },
+        )
+        return result.scalar_one()
+
+
+async def resolve_contradiction(
+    db: AsyncSession,
+    contradiction_id: str,
+    resolved_by: str,
+) -> bool:
+    """Mark a contradiction as resolved by resolved_by.
+
+    Idempotent-safe: only updates when resolved_by IS NULL so the first resolver wins.
+    Returns True if the row was updated.
+    """
+    async with db.begin():
+        result = await db.execute(
+            text("""
+                UPDATE wiki_contradictions
+                SET resolved_by = :uid
+                WHERE id = :cid::uuid AND resolved_by IS NULL
+                RETURNING id
+            """),
+            {"cid": contradiction_id, "uid": resolved_by},
+        )
+        return result.one_or_none() is not None

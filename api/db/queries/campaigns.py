@@ -262,3 +262,87 @@ async def all_steps_complete(db: AsyncSession, campaign_id: str) -> bool:
     )
     row = result.one()
     return row.total > 0 and row.incomplete == 0
+
+
+async def list_user_campaigns(
+    db: AsyncSession,
+    user_id: str,
+    limit: int = 50,
+    cursor_updated_at=None,
+    cursor_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """List campaigns owned by user_id, keyset-paginated by (updated_at DESC, id DESC)."""
+    params: dict[str, Any] = {"uid": user_id, "lim": limit}
+    cursor_clause = ""
+    if cursor_updated_at is not None and cursor_id is not None:
+        cursor_clause = "AND (updated_at, id) < (:cur_ts, :cur_id::uuid)"
+        params["cur_ts"] = cursor_updated_at
+        params["cur_id"] = cursor_id
+    result = await db.execute(
+        text(f"""
+            SELECT id::text, session_id, created_by, target_smiles, status, plan,
+                   created_at, updated_at
+            FROM synthesis_campaigns
+            WHERE created_by = :uid
+              {cursor_clause}
+            ORDER BY updated_at DESC, id DESC
+            LIMIT :lim
+        """),
+        params,
+    )
+    return [dict(r._mapping) for r in result]
+
+
+async def get_campaign_with_steps(
+    db: AsyncSession,
+    campaign_id: str,
+    user_id: str,
+) -> dict[str, Any] | None:
+    """Return a campaign plus its steps, owner-scoped."""
+    campaign_result = await db.execute(
+        text("""
+            SELECT id::text, session_id, created_by, target_smiles, status, plan,
+                   created_at, updated_at
+            FROM synthesis_campaigns
+            WHERE id = :cid::uuid AND created_by = :uid
+        """),
+        {"cid": campaign_id, "uid": user_id},
+    )
+    campaign_row = campaign_result.one_or_none()
+    if campaign_row is None:
+        return None
+    steps_result = await db.execute(
+        text("""
+            SELECT id::text, step_idx, reaction_smiles, conditions, status,
+                   retry_count, next_retry_at, result, updated_at
+            FROM campaign_steps
+            WHERE campaign_id = :cid::uuid
+            ORDER BY step_idx
+        """),
+        {"cid": campaign_id},
+    )
+    return {
+        "campaign": dict(campaign_row._mapping),
+        "steps": [dict(r._mapping) for r in steps_result],
+    }
+
+
+async def cancel_campaign(
+    db: AsyncSession,
+    campaign_id: str,
+    user_id: str,
+) -> bool:
+    """Transition a campaign to 'failed' (user cancellation). Owner-scoped."""
+    async with db.begin():
+        result = await db.execute(
+            text("""
+                UPDATE synthesis_campaigns
+                SET status = 'failed', updated_at = now()
+                WHERE id = :cid::uuid
+                  AND created_by = :uid
+                  AND status = ANY(:non_terminal)
+                RETURNING id
+            """),
+            {"cid": campaign_id, "uid": user_id, "non_terminal": list(NON_TERMINAL_STATUSES)},
+        )
+        return result.one_or_none() is not None
