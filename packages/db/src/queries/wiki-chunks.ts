@@ -99,15 +99,42 @@ function chunkProse(text: string, maxSize: number, overlap: number): string[] {
   const paragraphs = text.split(/\n{2,}/).map((p) => p.trim()).filter((p) => p.length > 0);
   const result: string[] = [];
 
+  // Word-split helper: any chunk handed to pushWithOverlap that's still
+  // bigger than maxSize gets word-split here first. The earlier word-boundary
+  // fallback only ran on the trailing `current` after the sentence loop, so
+  // an intermediate sentence > maxSize was pushed verbatim and could blow
+  // past the embedding model's per-input token limit.
+  const splitToMaxSize = (chunk: string): string[] => {
+    if (chunk.length <= maxSize) return [chunk];
+    const words = chunk.split(/\s+/);
+    const subs: string[] = [];
+    let sub = '';
+    for (const word of words) {
+      if ((sub + ' ' + word).trim().length <= maxSize) {
+        sub = sub ? sub + ' ' + word : word;
+      } else {
+        if (sub.length > 0) subs.push(sub);
+        sub = word;
+      }
+    }
+    if (sub.length > 0) subs.push(sub);
+    return subs;
+  };
+
   const pushWithOverlap = (chunk: string, prependPrevTail: boolean) => {
     const t = chunk.trim();
     if (t.length <= 10) return;
-    if (prependPrevTail && result.length > 0) {
-      const prev = result[result.length - 1];
-      const tail = prev.length > overlap ? prev.slice(-overlap) : prev;
-      result.push(`${tail} ${t}`);
-    } else {
-      result.push(t);
+    let prepend = prependPrevTail;
+    for (const part of splitToMaxSize(t)) {
+      if (part.length <= 10) continue;
+      if (prepend && result.length > 0) {
+        const prev = result[result.length - 1];
+        const tail = prev.length > overlap ? prev.slice(-overlap) : prev;
+        result.push(`${tail} ${part}`);
+      } else {
+        result.push(part);
+      }
+      prepend = true; // subsequent word-split pieces always carry the prior tail
     }
   };
 
@@ -116,6 +143,7 @@ function chunkProse(text: string, maxSize: number, overlap: number): string[] {
       pushWithOverlap(para, true);
       continue;
     }
+    // Paragraph too long — split on sentence boundaries
     const sentences = para.split(/(?<=[.!?])\s+/).filter((s) => s.length > 0);
     let current = '';
     let firstInPara = true;
@@ -131,26 +159,8 @@ function chunkProse(text: string, maxSize: number, overlap: number): string[] {
         current = overlapText + ' ' + sentence;
       }
     }
-    const flushed = current.trim();
-    if (flushed.length > maxSize) {
-      const words = flushed.split(/\s+/);
-      let sub = '';
-      for (const word of words) {
-        if ((sub + ' ' + word).trim().length <= maxSize) {
-          sub = sub ? sub + ' ' + word : word;
-        } else {
-          if (sub.length > 10) {
-            pushWithOverlap(sub.trim(), firstInPara);
-            firstInPara = false;
-          }
-          sub = word;
-        }
-      }
-      if (sub.trim().length > 10) {
-        pushWithOverlap(sub.trim(), firstInPara);
-      }
-    } else if (flushed.length > 10) {
-      pushWithOverlap(flushed, firstInPara);
+    if (current.trim().length > 10) {
+      pushWithOverlap(current.trim(), firstInPara);
     }
   }
 
