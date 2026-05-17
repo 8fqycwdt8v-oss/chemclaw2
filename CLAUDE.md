@@ -30,6 +30,14 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 3. Touch only what you must. Investigate unfamiliar state before deleting.
 4. Log deferred work to `BACKLOG.md` — one bullet per item, prefixed by area, append-only.
 
+## Code conventions
+
+- **Validate external input with a schema library.** No hand-rolled `typeof`/`instanceof` chains for nested object shapes — they drift and copy.
+- **Extract on the third copy.** Same 3+ line block in three sibling files = a helper. Applies equally to route preludes, error formatters, custom types, and shared validators.
+- **Filter before map.** Don't materialize values you're about to discard.
+- **No defensive checks the language guarantees.** `Number.isFinite` after `parseInt`, `x ? true : false`, double-casts through primitives (`str(int(b))` on numpy 0/1) — drop them.
+- **Rate-limit responses always carry `Retry-After`.** Route 429s through the shared gate so the header is never missed.
+
 ## Stack
 
 | Layer | Technology |
