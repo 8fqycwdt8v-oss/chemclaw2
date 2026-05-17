@@ -133,7 +133,10 @@ export function createSynthesisCampaignTools(userId: string): {
       // (reactionSmiles, then conditions, then a placeholder for empty steps).
       // Best-effort: a persistence failure here must not block the kickoff
       // itself, mirroring deep-research's handling.
-      const owned = await getCampaignWithStepsForUser(input.campaign_id, userId).catch(() => null);
+      const owned = await getCampaignWithStepsForUser(input.campaign_id, userId).catch((err) => {
+        logger.error('get_campaign_with_steps_failed', { campaign_id: input.campaign_id, user_id: userId }, err);
+        return null;
+      });
       if (owned) {
         const items = owned.steps.map((s, i) => {
           const desc = s.reactionSmiles ?? s.conditions ?? '(step body pending)';

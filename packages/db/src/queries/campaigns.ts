@@ -11,6 +11,7 @@ export async function createCampaign(
     .insert(synthesisCampaigns)
     .values({ sessionId, createdBy, targetSmiles })
     .returning({ id: synthesisCampaigns.id });
+  if (!row) throw new Error('createCampaign: insert returned no row');
   return row.id;
 }
 

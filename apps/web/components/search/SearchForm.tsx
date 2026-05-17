@@ -94,7 +94,7 @@ export function SearchForm() {
           : { type: 'reaction', rows: data.results },
       );
     } catch (err) {
-      setError((err as Error).message);
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }

@@ -61,7 +61,7 @@ export function WikiPageView(p: Props) {
         }
         location.reload();
       } catch (err) {
-        setError((err as Error).message);
+        setError(err instanceof Error ? err.message : String(err));
         throw err;
       } finally {
         setSaving(false);
@@ -82,7 +82,7 @@ export function WikiPageView(p: Props) {
         throw new Error(body?.error ?? `Update failed (${res.status})`);
       }
     } catch (err) {
-      setError((err as Error).message);
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -94,7 +94,7 @@ export function WikiPageView(p: Props) {
       if (!res.ok) throw new Error(`Subscription update failed (${res.status})`);
     } catch (err) {
       setSubscribed(!next);
-      setError((err as Error).message);
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -109,7 +109,7 @@ export function WikiPageView(p: Props) {
       if (!res.ok) throw new Error('Dispute update failed');
     } catch (err) {
       setCitations((cs) => cs.map((c) => (c.citationId === citationId ? { ...c, disputed: !disputed } : c)));
-      setError((err as Error).message);
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 

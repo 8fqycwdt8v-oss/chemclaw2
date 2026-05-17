@@ -59,6 +59,10 @@ export async function recordExternalFact(
  * Wave-3f cut: persistence wrappers in eln-fetch / web-search / doc-fetch
  * all did `.catch(err => console.error(...))` with three slightly-different
  * messages. One helper, one message format, one place to change the policy.
+ *
+ * Returns { ok, error? } so callers can distinguish a persisted fact from a
+ * logged failure — earlier versions returned `Promise<void>` on both paths,
+ * which meant a missing fact was indistinguishable from a recorded one.
  */
 export async function recordExternalFactSafe(
   sourceType: ExternalFactSource,
@@ -66,11 +70,13 @@ export async function recordExternalFactSafe(
   payload: unknown,
   fetchedBy: string,
   contentText?: string | null,
-): Promise<void> {
+): Promise<{ ok: boolean; error?: string }> {
   try {
     await recordExternalFact(sourceType, sourceId, payload, fetchedBy, contentText);
+    return { ok: true };
   } catch (err) {
     logger.error('external_facts_upsert_failed', { source_type: sourceType, source_id: sourceId }, err);
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 

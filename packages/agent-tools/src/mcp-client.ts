@@ -97,7 +97,11 @@ export function callMcpTool(
           send({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
           send({ jsonrpc: '2.0', id: TOOL_CALL_ID, method: 'tools/call', params: { name: toolName, arguments: args } });
         } else if ((msg as { id?: number }).id === TOOL_CALL_ID) {
-          proc.stdin.end();
+          // stdin.end() can throw if the stream is already closed (race vs.
+          // the child closing its side first). Swallow — it's best-effort
+          // cleanup — but it MUST not abort the settle() calls below, or the
+          // outer promise would hang forever.
+          try { proc.stdin.end(); } catch { /* already closed */ }
           const err = (msg as { error?: { message?: string } }).error;
           if (err) {
             settle(() => reject(new Error(err.message ?? 'MCP tool error')), 'reject');
@@ -118,7 +122,9 @@ export function callMcpTool(
         }
       }
     });
+    let errorSeen = false;
     proc.on('error', (e) => {
+      errorSeen = true;
       if ((e as NodeJS.ErrnoException).name === 'AbortError') {
         settle(() => reject(new Error(`MCP tool ${toolName} timed out after ${timeoutMs}ms`)), 'timeout');
       } else {
@@ -126,6 +132,10 @@ export function callMcpTool(
       }
     });
     proc.on('close', (code) => {
+      // If 'error' already fired, its richer cause (ENOENT, EACCES, abort, …)
+      // wins. Without this guard a 'close' racing ahead of 'error' would
+      // mask the diagnosis behind a generic "exited with code N".
+      if (errorSeen) return;
       if (code !== 0) settle(() => reject(new Error(`MCP ${pythonModule} exited with code ${code}`)), 'reject');
       else settle(() => reject(new Error(`MCP ${pythonModule} closed before tool response`)), 'reject');
     });
