@@ -6,7 +6,9 @@ import { CONTROLLED_SUBSTANCE_NAMES, normalizeForGate } from './scheduled-substa
 
 // Pattern matches US Social Security Numbers (NNN-NN-NNNN).
 // Not a general PII scanner — only SSNs. CAS numbers (NN...-NN-N) do not match.
-const SSN_RE = /\b\d{3}-\d{2}-\d{4}\b/g;
+// Non-global so .test() is stateless; replacement uses a per-call /g clone.
+const SSN_RE = /\b\d{3}-\d{2}-\d{4}\b/;
+const SSN_RE_GLOBAL = /\b\d{3}-\d{2}-\d{4}\b/g;
 
 /**
  * Check a tool input object for controlled substance names (block) or SSN patterns (redact).
@@ -41,7 +43,7 @@ export function checkToolInput(
 
   // Redact SSN patterns from all string values
   const inputStr = JSON.stringify(toolInput);
-  const sanitized = inputStr.replace(SSN_RE, '[REDACTED-SSN]');
+  const sanitized = inputStr.replace(SSN_RE_GLOBAL, '[REDACTED-SSN]');
   if (sanitized !== inputStr) {
     return {
       action: 'allow',
@@ -88,17 +90,14 @@ function extractStringValues(obj: unknown): string[] {
 export function checkUserPrompt(
   prompt: string,
 ): { action: 'allow' } | { action: 'block'; reason: string } {
-  // Wave-3h: NFKC-normalize + zero-width-strip before pattern match so
-  // bypass attempts like "123​-45-6789" or NFKC-equivalent variants
-  // get caught the same as the canonical form.
-  const normalized = normalizeForGate(prompt);
-  if (SSN_RE.test(normalized)) {
-    SSN_RE.lastIndex = 0;
+  // NFKC-normalize + zero-width-strip before pattern match so bypass attempts
+  // like "123​-45-6789" or NFKC-equivalent variants get caught the same as
+  // the canonical form. SSN_RE is non-global so .test() is stateless.
+  if (SSN_RE.test(normalizeForGate(prompt))) {
     return {
       action: 'block',
       reason: 'Prompt blocked: contains what looks like a Social Security Number. Remove the SSN and resubmit.',
     };
   }
-  SSN_RE.lastIndex = 0;
   return { action: 'allow' };
 }

@@ -7,7 +7,8 @@ export type ProposedEditStatus = 'pending' | 'applied' | 'rejected' | 'supersede
 export type ProposedEditInput = {
   slug: string;
   title: string;
-  content: Record<string, unknown>;
+  // Stored as JSONB; shape is validated at the agent-tool seam.
+  content: unknown;
   contentText: string;
   citations: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>;
   rationale?: string;

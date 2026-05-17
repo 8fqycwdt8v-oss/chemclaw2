@@ -7,6 +7,15 @@ import { extractMarkdownTables, TABLE_DIVIDER_RE } from './wiki-tables';
 
 const tracer = trace.getTracer('@chemclaw2/db');
 
+// Dimension of OpenAI text-embedding-3-small; mirrors EMBED_DIM in
+// @chemclaw2/agent-tools (kept local to avoid a reverse package import).
+const EMBED_DIM = 1536;
+
+// Defends `chunkText` against pathological inputs that would amplify the
+// table-divider regex into catastrophic backtracking, or that would consume
+// gigabytes of memory during paragraph/sentence splitting.
+const MAX_CHUNK_INPUT_CHARS = 1_000_000;
+
 // Split text into semantically coherent chunks for embedding.
 // Strategy (in order of preference):
 //   1. Markdown tables — emit each table as a single chunk so row↔column
@@ -86,6 +95,9 @@ function splitOnTables(md: string): Array<{ kind: 'table' | 'prose'; text: strin
 }
 
 export function chunkText(text: string, maxSize = 1200, overlap = 200): string[] {
+  if (text.length > MAX_CHUNK_INPUT_CHARS) {
+    throw new Error(`chunkText: input exceeds ${MAX_CHUNK_INPUT_CHARS} chars (got ${text.length})`);
+  }
   // Wave-2c B4: table-aware. Tables are emitted whole; only prose between
   // tables is paragraph/sentence/word-split.
   const segments = splitOnTables(text);
@@ -202,7 +214,10 @@ export type UpsertWikiMetadata = {
 export async function upsertWikiPage(
   slug: string,
   title: string,
-  content: Record<string, unknown>,
+  // Stored as JSONB; shape is validated at the agent-tool seam via
+  // isValidTiptapDoc. Accept `unknown` here so factories don't need
+  // double-casts at the call site.
+  content: unknown,
   contentText: string,
   createdBy: string,
   citations: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>,
@@ -423,13 +438,30 @@ export async function setCitationDisputed(
 /**
  * Reproduce a wiki page as of a given timestamp.
  *
- * The snapshot trigger only fires on UPDATE (migration 0012), so a page that
- * was created and never edited has zero revision rows. In that case fall back
- * to the current wiki_pages row if it predates `asof`. Returns null when the
- * slug didn't exist at the asof timestamp.
+ * The snapshot trigger fires on UPDATE and writes the PRE-edit content into
+ * wiki_revisions stamped with the moment that version became current. Querying
+ * revisions first would return the second-to-last version for an `asof` after
+ * the most recent edit. Check the current row first: if its `updated_at <=
+ * asof`, return it. Otherwise look up the latest revision that does. Pages
+ * that didn't exist at `asof` return null.
  */
 export async function pointInTimeWiki(slug: string, asof: Date) {
   const asofIso = asof.toISOString();
+  const current = await db.execute<{
+    title: string;
+    content: unknown;
+    content_text: string | null;
+    version: number;
+    updated_at: string;
+    updated_by: string | null;
+  }>(sql`
+    SELECT title, content, content_text, version, updated_at, updated_by
+    FROM wiki_pages
+    WHERE slug = ${slug} AND updated_at <= ${asofIso}::timestamptz
+    LIMIT 1
+  `);
+  if (current[0]) return current[0];
+
   const rows = await db.execute<{
     title: string;
     content: unknown;
@@ -445,24 +477,7 @@ export async function pointInTimeWiki(slug: string, asof: Date) {
     ORDER BY r.updated_at DESC
     LIMIT 1
   `);
-  if (rows[0]) return rows[0];
-
-  // No revision before asof — fall back to the current row if it was created
-  // before asof and has never been edited (i.e., still matches the original).
-  const current = await db.execute<{
-    title: string;
-    content: unknown;
-    content_text: string | null;
-    version: number;
-    updated_at: string;
-    updated_by: string | null;
-  }>(sql`
-    SELECT title, content, content_text, version, updated_at, updated_by
-    FROM wiki_pages
-    WHERE slug = ${slug} AND created_at <= ${asofIso}::timestamptz
-    LIMIT 1
-  `);
-  return current[0] ?? null;
+  return rows[0] ?? null;
 }
 
 /**
@@ -573,8 +588,8 @@ export async function semanticSearchWiki(
   limit = 5,
   opts: SemanticSearchOptions = {},
 ): Promise<SemanticSearchResult[]> {
-  if (embedding.length !== 1536) {
-    throw new Error(`embedding must have 1536 dimensions, got ${embedding.length}`);
+  if (embedding.length !== EMBED_DIM) {
+    throw new Error(`embedding must have ${EMBED_DIM} dimensions, got ${embedding.length}`);
   }
   if (embedding.some((v) => !Number.isFinite(v))) {
     throw new Error('embedding contains non-finite values');
@@ -585,7 +600,7 @@ export async function semanticSearchWiki(
   const includeArchived = opts.includeArchived ?? false;
 
   const vecStr = `[${embedding.join(',')}]`;
-  const distExpr = sql<number>`wiki_chunks.embedding <=> ${sql.param(vecStr)}::vector(1536)`;
+  const distExpr = sql<number>`wiki_chunks.embedding <=> ${sql.param(vecStr)}::vector(${sql.raw(String(EMBED_DIM))})`;
 
   const predicates: SQL[] = [sql`wiki_chunks.embedding IS NOT NULL`];
   if (!includeArchived) predicates.push(sql`wiki_pages.archived = false`);

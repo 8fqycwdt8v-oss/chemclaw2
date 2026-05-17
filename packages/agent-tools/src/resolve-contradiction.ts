@@ -76,6 +76,7 @@ export function createContradictionTools(userId: string): {
       'where each [marker] is referenced. Use this before judging which of two ' +
       'disputed claims is better supported — the surrounding chunk text is the ' +
       'evidence the agent must weigh.',
+    subagents: ['contradiction-resolver'],
     schema: readTwoSchema,
     async execute(input) {
       const page = await getWikiPage(input.slug);

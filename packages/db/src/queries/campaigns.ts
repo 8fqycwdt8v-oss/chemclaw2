@@ -92,11 +92,23 @@ export async function addCampaignStep(
   stepIdx: number,
   opts?: { reactionSmiles?: string; conditions?: string },
 ): Promise<string> {
+  // Idempotent insert: if (campaign_id, step_idx) already exists, return the
+  // existing row id instead of throwing. Matches the UNIQUE constraint added
+  // in migration 0031 — concurrent confirm_synthesis_plan retries are safe.
   const [row] = await db
     .insert(campaignSteps)
     .values({ campaignId, stepIdx, ...opts })
+    .onConflictDoNothing({ target: [campaignSteps.campaignId, campaignSteps.stepIdx] })
     .returning({ id: campaignSteps.id });
-  return row.id;
+  if (row) return row.id;
+  const [existing] = await db
+    .select({ id: campaignSteps.id })
+    .from(campaignSteps)
+    .where(and(eq(campaignSteps.campaignId, campaignId), eq(campaignSteps.stepIdx, stepIdx)));
+  if (!existing) {
+    throw new Error(`addCampaignStep: insert no-op but row not found for (${campaignId}, ${stepIdx})`);
+  }
+  return existing.id;
 }
 
 export async function getStepsForRetry(): Promise<Array<typeof campaignSteps.$inferSelect>> {
@@ -113,12 +125,16 @@ export async function getStepsForRetry(): Promise<Array<typeof campaignSteps.$in
 }
 
 export async function markStepFailed(id: string, retryCount: number): Promise<void> {
-  const backoffMinutes = Math.pow(2, retryCount); // 1, 2, 4 minutes
+  // Clamp the previous count to [0, 9] so the written value (clamped + 1)
+  // never exceeds the CHECK constraint (retry_count ≤ 10) and the backoff
+  // stays bounded (2^9 = 512 minutes ≈ 8.5h max).
+  const clamped = Math.min(Math.max(retryCount, 0), 9);
+  const backoffMinutes = Math.pow(2, clamped);
   await db
     .update(campaignSteps)
     .set({
       status: 'failed',
-      retryCount: retryCount + 1,
+      retryCount: clamped + 1,
       // Parameterized interval — avoids sql.raw() with NaN/Infinity risk
       nextRetryAt: sql`NOW() + (${backoffMinutes} * INTERVAL '1 minute')`,
     })
@@ -126,8 +142,10 @@ export async function markStepFailed(id: string, retryCount: number): Promise<vo
 }
 
 export async function markStepComplete(id: string, result: Record<string, unknown>): Promise<void> {
+  // Refuse to leave a terminal state: a late-arriving success from a re-tried
+  // job must not overwrite a 'failed' step the user already saw.
   await db
     .update(campaignSteps)
     .set({ status: 'complete', result })
-    .where(eq(campaignSteps.id, id));
+    .where(and(eq(campaignSteps.id, id), notInArray(campaignSteps.status, ['complete', 'failed'])));
 }

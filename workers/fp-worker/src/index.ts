@@ -2,9 +2,19 @@ import PgBoss from 'pg-boss';
 import type { ChildProcess } from 'child_process';
 import { db, compounds, reactions } from '@chemclaw2/db';
 import { eq, sql } from 'drizzle-orm';
+import { trace } from '@opentelemetry/api';
 import { callMcpTool } from '@chemclaw2/agent-tools';
 import { startCampaignWorker } from './campaign-worker';
 import { startEvalWorker } from './eval-worker';
+
+function logEnqueueFailure(queue: string, id: string) {
+  return (err: unknown) => {
+    trace.getActiveSpan()?.addEvent('fp.enqueue_failed', {
+      queue, target_id: id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  };
+}
 
 const activeProcs = new Set<ChildProcess>();
 
@@ -119,7 +129,7 @@ async function start() {
       .limit(50);
 
     for (const { id } of pendingCompounds) {
-      await boss.send('compute-morgan-fp', { id }, { singletonKey: id }).catch(() => {});
+      await boss.send('compute-morgan-fp', { id }, { singletonKey: id }).catch(logEnqueueFailure('compute-morgan-fp', id));
     }
 
     const pendingReactions = await db
@@ -129,7 +139,7 @@ async function start() {
       .limit(50);
 
     for (const { id } of pendingReactions) {
-      await boss.send('compute-drfp', { id }, { singletonKey: id }).catch(() => {});
+      await boss.send('compute-drfp', { id }, { singletonKey: id }).catch(logEnqueueFailure('compute-drfp', id));
     }
   }
 

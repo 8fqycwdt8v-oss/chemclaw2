@@ -51,9 +51,9 @@ export function ChatClient() {
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
-  // v2.1-B2: refresh the agent todo list. Called after every assistant turn
-  // completes (begin_deep_research seeds them; finalize_deep_research marks
-  // them done) and once on session-resume.
+  // Refresh the agent todo list. Called after every assistant turn and once
+  // on session-resume. Todos are populated by the synthesis-campaign workflow
+  // (kickoff_campaign seeds one entry per step).
   const refreshTodos = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid) return;
@@ -338,9 +338,8 @@ export function ChatClient() {
     const question = window.prompt('Deep-research question (multi-section investigation):');
     if (!question) return;
     void send(
-      `Call begin_deep_research with this question, follow the returned checklist ` +
-      `to gather evidence over the next several turns, then call finalize_deep_research ` +
-      `to persist the report:\n\n${question}`,
+      `Dispatch the deep-research sub-agent (Task tool, subagent_type='deep-research') ` +
+      `for this question, then persist the returned report via finalize_deep_research:\n\n${question}`,
     );
   };
 
@@ -392,34 +391,6 @@ export function ChatClient() {
         body: JSON.stringify({ sessionId, turnIndex, score, reason }),
       });
       if (!res.ok) throw new Error(`Feedback failed (${res.status})`);
-    } catch (err) {
-      setMessages((m) => [...m, { role: 'error', text: (err as Error).message }]);
-    }
-  };
-
-  const presetAnalytical = () => {
-    const technique = prompt('Technique (NMR / MS / IR):');
-    if (!technique) return;
-    const observations = prompt('Observations:');
-    if (!observations) return;
-    const structure = prompt('Proposed structure SMILES (optional):') ?? '';
-    const text =
-      `Use interpret_analytical_result to interpret these data:\n` +
-      `technique: ${technique}\nobservations: ${observations}` +
-      (structure ? `\nproposed_structure_smiles: ${structure}` : '');
-    void send(text);
-  };
-
-  const presetApproveStep = async () => {
-    const campaignId = prompt('Campaign ID:');
-    if (!campaignId) return;
-    const stepIdx = prompt('Step index to approve:');
-    if (!stepIdx) return;
-    try {
-      const res = await fetch(`/api/campaigns/${campaignId}/steps/${stepIdx}/approve`, { method: 'POST' });
-      const body = (await res.json().catch(() => null)) as { error?: string; approved?: boolean } | null;
-      if (!res.ok) throw new Error(body?.error ?? `Approve failed (${res.status})`);
-      setMessages((m) => [...m, { role: 'error', text: `Step ${stepIdx} approved — worker will execute on next sweep.` }]);
     } catch (err) {
       setMessages((m) => [...m, { role: 'error', text: (err as Error).message }]);
     }
@@ -504,22 +475,6 @@ export function ChatClient() {
           void send(input);
         }}
       >
-        <button
-          type="button"
-          onClick={presetAnalytical}
-          className="text-xs px-2 py-1 border rounded text-slate-700 hover:bg-slate-50"
-          disabled={streaming}
-        >
-          Interpret analytical data
-        </button>
-        <button
-          type="button"
-          onClick={presetApproveStep}
-          className="text-xs px-2 py-1 border rounded text-slate-700 hover:bg-slate-50"
-          disabled={streaming}
-        >
-          Approve next step
-        </button>
         <button
           type="button"
           onClick={presetPlan}

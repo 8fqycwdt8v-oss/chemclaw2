@@ -2,40 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('@chemclaw2/db', () => ({
   upsertWikiPage: vi.fn().mockResolvedValue('11111111-1111-1111-1111-111111111111'),
-  // sessionId is omitted in these tests so neither function actually runs, but
-  // the import still has to resolve.
-  replaceSessionTodos: vi.fn().mockResolvedValue(undefined),
   markAllTodosDone: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { createDeepResearchTools } from '../deep-research';
 
 const noopEmbed = async (texts: string[]) => texts.map(() => Array(1536).fill(0));
-
-describe('createDeepResearchTools.begin', () => {
-  const { begin } = createDeepResearchTools('user_test', noopEmbed);
-
-  it('rejects an empty question', async () => {
-    const r = await begin.execute({ question: '   ' });
-    expect(r).toHaveProperty('error');
-  });
-
-  it('rejects a question longer than 2000 chars', async () => {
-    const r = await begin.execute({ question: 'q'.repeat(2001) });
-    expect(r).toHaveProperty('error');
-  });
-
-  it('returns a directive and a non-empty checklist', async () => {
-    const r = (await begin.execute({ question: 'What do we know about PARP inhibitors?' })) as
-      Record<string, unknown>;
-    expect(r.directive).toMatch(/multi-step/);
-    const checklist = r.checklist as string[];
-    expect(Array.isArray(checklist)).toBe(true);
-    expect(checklist.length).toBeGreaterThan(0);
-    expect(checklist.some((c) => /wiki_lookup/.test(c))).toBe(true);
-    expect(checklist.some((c) => /finalize_deep_research/.test(c))).toBe(true);
-  });
-});
 
 describe('createDeepResearchTools.finalize', () => {
   const { finalize } = createDeepResearchTools('user_test', noopEmbed);

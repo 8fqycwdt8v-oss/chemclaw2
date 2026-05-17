@@ -3,12 +3,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { buildQueryOptions } from '@/lib/agent';
 import { agentToStream } from '@/lib/streaming';
-import { scheduledSubstanceGate } from '@chemclaw2/agent-tools';
+import { scheduledSubstanceGate, MAX_PROMPT_BYTES } from '@chemclaw2/agent-tools';
 import { recordOverride, getProjectBudget, incrementSpend } from '@chemclaw2/db';
 import { randomUUID } from 'crypto';
 import { rateLimit } from '@/lib/rate-limit';
 
-const MAX_PROMPT_BYTES = 32_768;
 const MAX_JUSTIFICATION_LEN = 2000;
 const RATE_LIMIT_REQUESTS = 20;
 const RATE_LIMIT_WINDOW_MS = 60_000;

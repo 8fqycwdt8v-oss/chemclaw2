@@ -22,6 +22,7 @@ export const hazardLookupTool: ToolDef<typeof schema> = {
     'Look up GHS hazard classification for a compound (by CAS number or SMILES). ' +
     'Returns pictograms, signal word, and hazard statements from PubChem. ' +
     'Use before recommending a compound for synthesis or handling.',
+  subagents: ['deep-research'],
   schema,
   async execute(input) {
     const id = input.cas_or_smiles.trim();

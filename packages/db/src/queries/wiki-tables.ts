@@ -25,6 +25,8 @@ export type ExtractedTable = {
 
 export const TABLE_DIVIDER_RE = /^\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
 const FENCE_RE = /^\s*```/;
+const MAX_HEADERS = 50;
+const MAX_ROWS_PER_TABLE = 1000;
 
 function splitRow(line: string): string[] {
   const stripped = line.trim().replace(/^\|/, '').replace(/\|$/, '');
@@ -55,12 +57,13 @@ export function extractMarkdownTables(md: string): ExtractedTable[] {
     if (!line.includes('|')) continue;
     const next = lines[i + 1];
     if (!next || !TABLE_DIVIDER_RE.test(next.trim())) continue;
-    const headers = splitRow(line);
+    let headers = splitRow(line);
     if (headers.length < 2) continue;
+    if (headers.length > MAX_HEADERS) headers = headers.slice(0, MAX_HEADERS);
 
     const rows: Array<Record<string, string>> = [];
     let j = i + 2;
-    while (j < lines.length) {
+    while (j < lines.length && rows.length < MAX_ROWS_PER_TABLE) {
       const rowLine = lines[j];
       if (!rowLine.includes('|') || rowLine.trim().length === 0) break;
       // Wave-3h: handle adjacent tables. The current line is either:

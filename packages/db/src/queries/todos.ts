@@ -12,8 +12,7 @@ export type AgentTodo = {
 
 /**
  * Replace the session's todo list with the supplied items in one transaction.
- * Used by begin_deep_research — a new research workflow always starts from a
- * fresh checklist (the agent's previous list is no longer relevant).
+ * Used by kickoff_campaign to seed one entry per step in the campaign plan.
  */
 export async function replaceSessionTodos(
   sessionId: string,

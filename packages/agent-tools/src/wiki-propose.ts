@@ -3,6 +3,9 @@ import { insertProposedEdit } from '@chemclaw2/db';
 import { isValidSlug } from './slug';
 import { markdownToTiptap } from './markdown-to-tiptap';
 import { validateCitations } from './citation-validation';
+import { isValidTiptapDoc } from './tiptap';
+import { toolError } from './tool-error';
+import { MAX_TITLE_LEN, MAX_MARKDOWN_LEN, MAX_RATIONALE_LEN } from './limits';
 import type { ToolDef } from './tool-def';
 
 const wikiProposeSchema = {
@@ -49,25 +52,28 @@ export function createWikiProposeTool(userId: string): ToolDef<typeof wikiPropos
       if (!isValidSlug(input.slug)) {
         return { error: 'slug must be lowercase kebab-case, ≤200 chars' };
       }
-      if (input.title.length === 0 || input.title.length > 500) {
-        return { error: 'title must be 1-500 chars' };
+      if (input.title.length === 0 || input.title.length > MAX_TITLE_LEN) {
+        return { error: `title must be 1-${MAX_TITLE_LEN} chars` };
       }
-      if (input.content_text.length === 0 || input.content_text.length > 500_000) {
-        return { error: 'content_text must be 1-500000 chars' };
+      if (input.content_text.length === 0 || input.content_text.length > MAX_MARKDOWN_LEN) {
+        return { error: `content_text must be 1-${MAX_MARKDOWN_LEN} chars` };
       }
-      if (input.rationale != null && input.rationale.length > 2000) {
-        return { error: 'rationale must be ≤2000 chars' };
+      if (input.rationale != null && input.rationale.length > MAX_RATIONALE_LEN) {
+        return { error: `rationale must be ≤${MAX_RATIONALE_LEN} chars` };
       }
 
       const citations = input.citations ?? [];
       const v = validateCitations(input.content_text, citations);
       if (!v.ok) return { error: `citation validation: ${v.reason}` };
 
+      const doc = markdownToTiptap(input.content_text);
+      if (!isValidTiptapDoc(doc)) return { error: 'internal: markdown conversion produced an invalid Tiptap doc' };
+
       try {
         const result = await insertProposedEdit({
           slug: input.slug,
           title: input.title,
-          content: markdownToTiptap(input.content_text) as unknown as Record<string, unknown>,
+          content: doc,
           contentText: input.content_text,
           citations,
           rationale: input.rationale,
@@ -80,7 +86,7 @@ export function createWikiProposeTool(userId: string): ToolDef<typeof wikiPropos
           note: 'Proposal queued for human review. A reviewer will approve or reject before the change lands.',
         };
       } catch (err) {
-        return { error: err instanceof Error ? err.message : 'propose_wiki_edit failed' };
+        return toolError('propose_wiki_edit', err);
       }
     },
   };

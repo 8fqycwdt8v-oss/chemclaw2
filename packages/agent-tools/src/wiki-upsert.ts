@@ -3,6 +3,9 @@ import { upsertWikiPage } from '@chemclaw2/db';
 import { isValidSlug } from './slug';
 import { markdownToTiptap } from './markdown-to-tiptap';
 import { validateCitations } from './citation-validation';
+import { isValidTiptapDoc } from './tiptap';
+import { toolError } from './tool-error';
+import { MAX_TITLE_LEN, MAX_MARKDOWN_LEN, MAX_PROJECT_LEN } from './limits';
 import type { ToolDef } from './tool-def';
 
 const wikiUpsertSchema = {
@@ -52,21 +55,24 @@ export function createWikiUpsertTool(
       if (!isValidSlug(input.slug)) {
         return { error: 'slug must be lowercase kebab-case, ≤200 chars' };
       }
-      if (input.title.length > 500) return { error: 'title too long (≤500 chars)' };
-      if (input.content_text.length > 500_000) return { error: 'content too large' };
-      if (input.project !== undefined && input.project.length > 100) {
-        return { error: 'project too long (≤100 chars)' };
+      if (input.title.length > MAX_TITLE_LEN) return { error: `title too long (≤${MAX_TITLE_LEN} chars)` };
+      if (input.content_text.length > MAX_MARKDOWN_LEN) return { error: 'content too large' };
+      if (input.project !== undefined && input.project.length > MAX_PROJECT_LEN) {
+        return { error: `project too long (≤${MAX_PROJECT_LEN} chars)` };
       }
 
       const citations = input.citations ?? [];
       const v = validateCitations(input.content_text, citations);
       if (!v.ok) return { error: `citation validation: ${v.reason}` };
 
+      const doc = markdownToTiptap(input.content_text);
+      if (!isValidTiptapDoc(doc)) return { error: 'internal: markdown conversion produced an invalid Tiptap doc' };
+
       try {
         const id = await upsertWikiPage(
           input.slug,
           input.title,
-          markdownToTiptap(input.content_text) as unknown as Record<string, unknown>,
+          doc,
           input.content_text,
           userId,
           citations,
@@ -75,7 +81,7 @@ export function createWikiUpsertTool(
         );
         return { id, slug: input.slug, project: input.project, needs_review: true };
       } catch (err) {
-        return { error: err instanceof Error ? err.message : 'wiki_upsert failed' };
+        return toolError('wiki_upsert', err);
       }
     },
   };
