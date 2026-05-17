@@ -5,10 +5,7 @@ import {
 } from '@chemclaw2/db';
 import { embedTexts } from '../../../../lib/embeddings';
 import { requireUserWithRateLimit } from '@/lib/api-gate';
-import { isValidSlug, isValidTiptapDoc, validateCitations } from '@/lib/validation';
-import {
-  MAX_TITLE_LEN, MAX_MARKDOWN_LEN as MAX_CONTENT_TEXT_LEN, MAX_PROJECT_LEN,
-} from '@chemclaw2/agent-tools';
+import { SlugSchema, WikiPutBodySchema, WikiPatchBodySchema, zodErrorResponse } from '@/lib/wiki-schemas';
 
 export async function GET(
   req: Request,
@@ -18,7 +15,7 @@ export async function GET(
   if (gate instanceof NextResponse) return gate;
 
   const { slug } = await params;
-  if (!isValidSlug(slug)) {
+  if (!SlugSchema.safeParse(slug).success) {
     return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
   }
 
@@ -51,41 +48,26 @@ export async function PUT(
   const { userId } = gate;
 
   const { slug } = await params;
-  if (!isValidSlug(slug)) {
+  if (!SlugSchema.safeParse(slug).success) {
     return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
   }
 
-  let body: {
-    title?: string;
-    content?: Record<string, unknown>;
-    contentText?: string;
-    citations?: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>;
-  };
+  let raw: unknown;
   try {
-    body = await req.json() as typeof body;
+    raw = await req.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
+  const parsed = WikiPutBodySchema.safeParse(raw);
+  if (!parsed.success) {
+    const { message, status } = zodErrorResponse(parsed.error);
+    return NextResponse.json({ error: message }, { status });
+  }
+  const body = parsed.data;
+
   const existing = await getWikiPage(slug);
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-
-  if (body.title !== undefined && (typeof body.title !== 'string' || body.title.length > MAX_TITLE_LEN)) {
-    return NextResponse.json({ error: 'title must be a string of at most 500 characters' }, { status: 400 });
-  }
-  if (body.contentText !== undefined && typeof body.contentText !== 'string') {
-    return NextResponse.json({ error: 'contentText must be a string' }, { status: 400 });
-  }
-  if (typeof body.contentText === 'string' && body.contentText.length > MAX_CONTENT_TEXT_LEN) {
-    return NextResponse.json({ error: 'contentText too large' }, { status: 413 });
-  }
-  const citationError = validateCitations(body.citations);
-  if (citationError) return NextResponse.json({ error: citationError }, { status: 400 });
-
-  // M5: reject malformed Tiptap docs on update.
-  if (body.content !== undefined && !isValidTiptapDoc(body.content)) {
-    return NextResponse.json({ error: 'content must be a Tiptap doc {type:"doc",content:[]}' }, { status: 400 });
-  }
 
   const citations = body.citations !== undefined
     ? body.citations
@@ -104,8 +86,6 @@ export async function PUT(
   return NextResponse.json({ id });
 }
 
-const VALID_MATURITIES = new Set(['exploratory', 'validated', 'authoritative']);
-
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ slug: string }> },
@@ -115,40 +95,23 @@ export async function PATCH(
   const { userId } = gate;
 
   const { slug } = await params;
-  if (!isValidSlug(slug)) {
+  if (!SlugSchema.safeParse(slug).success) {
     return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
   }
 
-  let body: {
-    needsReview?: unknown;
-    archived?: unknown;
-    maturity?: unknown;
-    project?: unknown;
-  };
+  let raw: unknown;
   try {
-    body = (await req.json()) as typeof body;
+    raw = await req.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const patch: { needsReview?: boolean; archived?: boolean; maturity?: string; project?: string | null } = {};
-  if (typeof body.needsReview === 'boolean') patch.needsReview = body.needsReview;
-  if (typeof body.archived === 'boolean') patch.archived = body.archived;
-  if (typeof body.maturity === 'string') {
-    if (!VALID_MATURITIES.has(body.maturity)) {
-      return NextResponse.json({ error: 'invalid maturity' }, { status: 400 });
-    }
-    patch.maturity = body.maturity;
+  const parsed = WikiPatchBodySchema.safeParse(raw);
+  if (!parsed.success) {
+    const { message, status } = zodErrorResponse(parsed.error);
+    return NextResponse.json({ error: message }, { status });
   }
-  if (body.project === null) {
-    patch.project = null;
-  } else if (typeof body.project === 'string') {
-    if (body.project.length > MAX_PROJECT_LEN) return NextResponse.json({ error: 'project too long' }, { status: 400 });
-    patch.project = body.project;
-  }
-  if (Object.keys(patch).length === 0) {
-    return NextResponse.json({ error: 'no metadata fields provided' }, { status: 400 });
-  }
+  const patch = parsed.data;
 
   // Followup #8: lifecycle changes (archive, maturity demotion/promotion,
   // project reassignment) are curation actions — restrict to the page's

@@ -10,6 +10,7 @@ import {
 } from '@chemclaw2/db';
 import { buildInProcessMcpServer, subagentToolNames } from './sdk-tools';
 import { DEEP_RESEARCH_PROMPT, CONTRADICTION_RESOLVER_PROMPT } from './subagent-prompts';
+import { webEnv } from './env';
 
 // Repo root containing .claude/skills/. Production cwd is /app (Dockerfile
 // WORKDIR); dev cwd is apps/web/, hence the two-level fallback. The SDK
@@ -69,8 +70,7 @@ function buildSubagentDefinitions(userId: string, sessionId?: string): NonNullab
 // Wave-1 A3: surface model + turn cap as env so operators can tune without
 // redeploying. SDK defaults are good but invisible; an explicit value is
 // auditable. Sonnet 4.6 matches the chemistry-reasoning weight we target.
-const DEFAULT_MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6';
-const DEFAULT_MAX_TURNS = Number(process.env.AGENT_MAX_TURNS ?? '50');
+const { ANTHROPIC_MODEL: DEFAULT_MODEL, AGENT_MAX_TURNS: DEFAULT_MAX_TURNS } = webEnv();
 
 export type QueryOptionsExtras = {
   /** Wave-1 A1: request plan-mode for this turn — no tools execute. */

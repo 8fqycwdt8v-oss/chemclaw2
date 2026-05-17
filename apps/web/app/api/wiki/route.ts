@@ -3,10 +3,8 @@ import { upsertWikiPage, listWikiPages, listWikiProjects, searchWikiByFTS } from
 import type { WikiPageCursor } from '@chemclaw2/db';
 import { embedTexts } from '../../../lib/embeddings';
 import { requireUserWithRateLimit } from '@/lib/api-gate';
-import { isValidSlug, isValidTiptapDoc, validateCitations } from '@/lib/validation';
-import {
-  MAX_TITLE_LEN, MAX_MARKDOWN_LEN as MAX_CONTENT_TEXT_LEN,
-} from '@chemclaw2/agent-tools';
+import { SlugSchema, WikiPostBodySchema, zodErrorResponse } from '@/lib/wiki-schemas';
+import { UUID_RE } from '@chemclaw2/agent-tools';
 
 export async function GET(req: Request) {
   const gate = await requireUserWithRateLimit('wiki-read', 60, 60_000);
@@ -37,7 +35,7 @@ export async function GET(req: Request) {
     const ts = Date.parse(cursorParam.slice(0, sep));
     if (isNaN(ts)) return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
     const idPart = cursorParam.slice(sep + 1);
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idPart)) {
+    if (!UUID_RE.test(idPart)) {
       return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
     }
     cursor = { updatedAt: new Date(ts), id: idPart };
@@ -55,40 +53,23 @@ export async function POST(req: Request) {
   if (gate instanceof NextResponse) return gate;
   const { userId } = gate;
 
-  let body: {
-    slug: string;
-    title: string;
-    content: Record<string, unknown>;
-    contentText: string;
-    citations?: Array<{ citationId: string; sourceType: string; sourceId?: string; label: string }>;
-  };
+  let raw: unknown;
   try {
-    body = await req.json() as typeof body;
+    raw = await req.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  if (typeof body.slug !== 'string' || typeof body.title !== 'string' || !body.slug || !body.title) {
-    return NextResponse.json({ error: 'slug and title are required strings' }, { status: 400 });
+  const parsed = WikiPostBodySchema.safeParse(raw);
+  if (!parsed.success) {
+    const { message, status } = zodErrorResponse(parsed.error);
+    return NextResponse.json({ error: message }, { status });
   }
-  if (!isValidSlug(body.slug)) {
-    return NextResponse.json({ error: 'Invalid slug: use lowercase letters, numbers, and hyphens only' }, { status: 400 });
-  }
-  if (body.title.length > MAX_TITLE_LEN) {
-    return NextResponse.json({ error: 'title too long' }, { status: 400 });
-  }
-  if (body.contentText !== undefined && typeof body.contentText !== 'string') {
-    return NextResponse.json({ error: 'contentText must be a string' }, { status: 400 });
-  }
-  if (typeof body.contentText === 'string' && body.contentText.length > MAX_CONTENT_TEXT_LEN) {
-    return NextResponse.json({ error: 'contentText too large' }, { status: 413 });
-  }
-  const citationError = validateCitations(body.citations);
-  if (citationError) return NextResponse.json({ error: citationError }, { status: 400 });
+  const body = parsed.data;
 
-  // M5: reject obviously malformed Tiptap docs so the editor doesn't crash on next load.
-  if (body.content !== undefined && !isValidTiptapDoc(body.content)) {
-    return NextResponse.json({ error: 'content must be a Tiptap doc {type:"doc",content:[]}' }, { status: 400 });
+  const slugCheck = SlugSchema.safeParse(body.slug);
+  if (!slugCheck.success) {
+    return NextResponse.json({ error: 'Invalid slug: use lowercase letters, numbers, and hyphens only' }, { status: 400 });
   }
 
   const id = await upsertWikiPage(

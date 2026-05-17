@@ -2,30 +2,21 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { trace } from '@opentelemetry/api';
 import * as schema from './schema/index';
+import { dbEnv } from './env';
 
 // Lazy initialization: defer validation until first DB call so Next.js
 // can bundle and statically analyze the route without DATABASE_URL present.
+// DB_POOL_MAX: pgbouncer transaction-mode pooler; lookup_knowledge alone
+// issues up to 5 parallel queries, plus per-tool-call budget writes — 15 is
+// a defensible floor. Raise via env if a bigger upstream demands.
 let _sql: ReturnType<typeof postgres> | undefined;
 let _db: ReturnType<typeof drizzle<typeof schema>> | undefined;
 
-// Pool sizing: lifted from max:2 → max:15 (configurable via DB_POOL_MAX) to
-// match the v2.2 fan-out shape. lookup_knowledge alone issues up to 5
-// parallel queries; per-tool-call budget hooks add another DB write. 15 is
-// a defensible floor for a pgbouncer transaction-mode pooler; raise via env
-// if a bigger upstream demands.
-function poolMax(): number {
-  const raw = process.env.DB_POOL_MAX;
-  if (!raw) return 15;
-  const n = Number.parseInt(raw, 10);
-  return n > 0 && n <= 100 ? n : 15;
-}
-
 function getDb() {
   if (!_db) {
-    const connectionString = process.env.DATABASE_URL;
-    if (!connectionString) throw new Error('DATABASE_URL is required');
-    _sql = postgres(connectionString, {
-      max: poolMax(),
+    const { DATABASE_URL, DB_POOL_MAX } = dbEnv();
+    _sql = postgres(DATABASE_URL, {
+      max: DB_POOL_MAX,
       onnotice: () => {},
       // Surface socket / pool errors so OTel + Langfuse see them instead of
       // silently dropping queries on transient network issues.
