@@ -54,10 +54,15 @@ export async function POST(req: Request) {
   }
   await mkdir(dir, { recursive: true });
 
+  // YAML single-quoted scalar: collapse newlines, then double any embedded
+  // single quotes. Plain scalars would break on ": " sequences or YAML-reserved
+  // leading chars in user-supplied text — the SDK would silently skip such a
+  // SKILL.md as unparseable.
+  const yamlDesc = body.description.replace(/\s+/g, ' ').trim().replace(/'/g, "''");
   const md = [
     '---',
     `name: ${body.name}`,
-    `description: ${body.description.replace(/\n+/g, ' ').trim()}`,
+    `description: '${yamlDesc}'`,
     '---',
     '',
     `# ${body.name}`,
