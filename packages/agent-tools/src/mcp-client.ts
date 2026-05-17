@@ -62,7 +62,7 @@ export function callMcpTool(
         try {
           msg = JSON.parse(line) as Record<string, unknown>;
         } catch {
-          trace.getActiveSpan()?.addEvent('mcp_response_line_unparseable', {
+          trace.getActiveSpan()?.addEvent('mcp.response_line_unparseable', {
             tool: toolName,
             sample: line.slice(0, 200),
           });
