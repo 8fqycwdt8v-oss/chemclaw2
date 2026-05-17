@@ -18,11 +18,6 @@ export async function POST(
       logger.info('validation_rejected', { route: 'citation_dispute', field: 'slug_or_cid', reason: 'shape' });
       return NextResponse.json({ error: 'Invalid slug or citation id' }, { status: 400 });
     }
-    const page = await getWikiPage(slug).catch((err) => {
-      logger.error('get_wiki_page_failed', { slug, op: 'citation_dispute' }, err);
-      throw err;
-    });
-    if (!page) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
     let body: { disputed?: unknown };
     try {
@@ -36,11 +31,18 @@ export async function POST(
       return NextResponse.json({ error: 'disputed (boolean) is required' }, { status: 400 });
     }
 
-    const { found } = await setCitationDisputed(page.id, cid, body.disputed).catch((err) => {
-      logger.error('set_citation_disputed_failed', { slug, page_id: page.id, citation_id: cid, disputed: body.disputed }, err);
+    // Normalized response: identical shape whether slug+citation exist or
+    // not, so this can't be used to enumerate (slug, cid) pairs.
+    const page = await getWikiPage(slug).catch((err) => {
+      logger.error('get_wiki_page_failed', { slug, op: 'citation_dispute' }, err);
       throw err;
     });
-    if (!found) return NextResponse.json({ error: 'Citation not found' }, { status: 404 });
+    if (page) {
+      await setCitationDisputed(page.id, cid, body.disputed).catch((err) => {
+        logger.error('set_citation_disputed_failed', { slug, page_id: page.id, citation_id: cid, disputed: body.disputed }, err);
+        throw err;
+      });
+    }
     return NextResponse.json({ disputed: body.disputed });
   });
 }

@@ -22,6 +22,11 @@ export async function register() {
     );
     const { LangfuseSpanProcessor } = await import('@langfuse/otel');
 
+    // Security: by default, the HTTP and pg auto-instrumentations capture
+    // request headers and full SQL parameter values. Those get shipped to
+    // Langfuse and may contain user prompts, SMILES, or Bearer tokens.
+    // Redact secret-bearing headers and turn off pg enhanced reporting so
+    // parameter values stay off-span.
     const sdk = new NodeSDK({
       spanProcessors: [
         new LangfuseSpanProcessor({
@@ -30,7 +35,24 @@ export async function register() {
           baseUrl: LANGFUSE_BASEURL,
         }),
       ],
-      instrumentations: [getNodeAutoInstrumentations()],
+      instrumentations: [getNodeAutoInstrumentations({
+        '@opentelemetry/instrumentation-http': {
+          requestHook: (span) => {
+            for (const attr of [
+              'http.request.header.authorization',
+              'http.request.header.cookie',
+              'http.request.header.x-api-key',
+            ]) {
+              span.setAttribute(attr, '[REDACTED]');
+            }
+          },
+        },
+        '@opentelemetry/instrumentation-pg': {
+          // Drizzle parameterizes everything — the template is fine, but
+          // parameter values can carry user prompts and PII.
+          enhancedDatabaseReporting: false,
+        },
+      })],
     });
 
     sdk.start();

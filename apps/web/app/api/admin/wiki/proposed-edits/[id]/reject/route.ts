@@ -1,7 +1,7 @@
 import { UUID_RE } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 import { markProposedEditRejected } from '@chemclaw2/db';
-import { requireAdminApi } from '@/lib/auth';
+import { requireAdminWithRateLimit } from '@/lib/api-gate';
 import { withApiContext } from '@/lib/api-context';
 import { logger } from '@chemclaw2/observability';
 
@@ -11,7 +11,7 @@ import { logger } from '@chemclaw2/observability';
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return withApiContext(async () => {
-    const gate = await requireAdminApi();
+    const gate = await requireAdminWithRateLimit('proposed-edits', 60, 60_000);
     if (gate instanceof NextResponse) return gate;
     const { userId } = gate;
 

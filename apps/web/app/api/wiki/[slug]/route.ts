@@ -84,6 +84,22 @@ export async function PUT(
     });
     if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
+    // Direct overwrite requires page creator or admin. Non-owners must go
+    // through the propose/apply review queue so wholesale rewrites are
+    // auditable. PATCH already enforces this for lifecycle fields; PUT was
+    // the wider gap.
+    if (existing.createdBy !== userId) {
+      const user = await currentUser();
+      const role = (user?.publicMetadata as { role?: string } | undefined)?.role;
+      if (role !== 'admin') {
+        logger.info('wiki_put_forbidden', { slug, user_id: userId, creator: existing.createdBy });
+        return NextResponse.json(
+          { error: 'Forbidden — use propose-edit; direct overwrite requires page ownership or admin role' },
+          { status: 403 },
+        );
+      }
+    }
+
     const citations = body.citations !== undefined
       ? body.citations
       : (await getWikiPageCitations(existing.id)).map((c) => ({ ...c, sourceId: c.sourceId ?? undefined }));

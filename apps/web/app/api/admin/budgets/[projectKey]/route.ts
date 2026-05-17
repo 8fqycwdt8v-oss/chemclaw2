@@ -5,7 +5,7 @@ import {
   getCurrentSpend,
   type BudgetPeriod,
 } from '@chemclaw2/db';
-import { requireAdminApi } from '@/lib/auth';
+import { requireAdminWithRateLimit } from '@/lib/api-gate';
 import { withApiContext } from '@/lib/api-context';
 import { logger } from '@chemclaw2/observability';
 import { PROJECT_KEY_RE } from '@chemclaw2/agent-tools';
@@ -21,7 +21,7 @@ import { PROJECT_KEY_RE } from '@chemclaw2/agent-tools';
 
 export async function GET(_req: Request, { params }: { params: Promise<{ projectKey: string }> }) {
   return withApiContext(async () => {
-    const gate = await requireAdminApi();
+    const gate = await requireAdminWithRateLimit('budgets', 60, 60_000);
     if (gate instanceof NextResponse) return gate;
 
     const { projectKey } = await params;
@@ -45,7 +45,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ project
 
 export async function PUT(req: Request, { params }: { params: Promise<{ projectKey: string }> }) {
   return withApiContext(async () => {
-    const gate = await requireAdminApi();
+    const gate = await requireAdminWithRateLimit('budgets', 60, 60_000);
     if (gate instanceof NextResponse) return gate;
     const { userId: adminUserId } = gate;
 

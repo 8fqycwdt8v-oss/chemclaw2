@@ -1,14 +1,15 @@
 import dns from 'dns';
 import ipaddr from 'ipaddr.js';
+import { Agent } from 'undici';
 import { logger } from '@chemclaw2/observability';
 
 /**
  * Resolve hostname via DNS and reject if any resolved address is non-unicast
  * (loopback, private, link-local, multicast, etc.).
  *
- * This is a best-effort DNS rebinding guard for native fetch(). Two known gaps:
- * - TOCTOU: the resolved IP can change between this check and TCP connection.
- * - Intermediate redirect hops are not individually DNS-validated.
+ * Used as a pre-flight check; the undici dispatcher below repeats the
+ * range-check at connect time so the IP we actually open a socket to is
+ * the IP that was range-checked — closing the prior TOCTOU window.
  */
 async function assertNotPrivateHost(hostname: string): Promise<void> {
   let addresses: Array<{ address: string; family: number }>;
@@ -37,10 +38,48 @@ async function assertNotPrivateHost(hostname: string): Promise<void> {
 }
 
 /**
+ * undici lookup hook that range-checks every candidate IP at connect time.
+ * Returns the first public unicast address; raises an SSRF error otherwise.
+ * Because this runs immediately before TCP connect, the IP we check is the
+ * IP we connect to — no DNS-rebinding TOCTOU window.
+ */
+function safeLookup(
+  hostname: string,
+  options: dns.LookupOptions,
+  cb: (err: NodeJS.ErrnoException | null, address: string, family: number) => void,
+): void {
+  dns.lookup(hostname, { ...options, all: true }, (err, results) => {
+    if (err) return cb(err, '', 0);
+    const list = Array.isArray(results) ? results : [results as unknown as { address: string; family: number }];
+    for (const r of list) {
+      if (!ipaddr.isValid(r.address)) {
+        logger.warn('safe_fetch_ssrf_block_connect', { hostname, reason: 'unrecognised_address', address: r.address });
+        return cb(new Error(`SSRF blocked: ${hostname} resolved to an unrecognised address format`), '', 0);
+      }
+      if (ipaddr.parse(r.address).range() !== 'unicast') {
+        logger.warn('safe_fetch_ssrf_block_connect', { hostname, reason: 'non_unicast', address: r.address });
+        return cb(new Error(`SSRF blocked: ${hostname} → ${r.address} (non-public)`), '', 0);
+      }
+    }
+    const first = list[0];
+    cb(null, first.address, first.family);
+  });
+}
+
+// Singleton dispatcher shared across all safeFetch calls. The connect-time
+// IP range check closes the TOCTOU window — the IP that passes is the IP
+// undici opens a socket to.
+const SAFE_DISPATCHER = new Agent({
+  connect: { lookup: safeLookup },
+});
+
+/**
  * fetch() wrapper that:
  * 1. Validates initial URL hostname against caller-supplied allowlist
- * 2. Performs a DNS pre-flight check to block private/loopback IPs
- * 3. Follows redirects, then re-validates the final hostname + DNS
+ * 2. Routes through an undici Agent whose lookup hook range-checks the IP
+ *    at connect time (closes the TOCTOU window)
+ * 3. After redirects, re-validates the final URL hostname against the
+ *    allowlist (the dispatcher has already re-checked the IP).
  */
 export async function safeFetch(
   url: string,
@@ -57,21 +96,23 @@ export async function safeFetch(
     logger.warn('safe_fetch_domain_blocked', { hostname: initial.hostname });
     throw new Error(`Domain not allowed: ${initial.hostname}`);
   }
+  // Pre-flight check — undici will repeat this at connect time, but doing
+  // it here gives a cleaner error message for the common case (private IP
+  // in the URL itself).
   await assertNotPrivateHost(initial.hostname);
 
-  const res = await fetch(url, { ...init, redirect: 'follow' });
+  const res = await fetch(url, {
+    ...init,
+    redirect: 'follow',
+    // @ts-expect-error — Node's global fetch accepts undici Dispatcher at runtime; the type isn't surfaced on RequestInit.
+    dispatcher: SAFE_DISPATCHER,
+  });
 
-  // Post-redirect revalidation: hostname + DNS check on the final URL.
-  // Always re-resolve, even when the hostname matches the initial one — DNS
-  // for an allowed host can TTL-flip to a private IP between the pre-flight
-  // resolution and the redirect's connection, and a same-hostname redirect
-  // would otherwise skip the second lookup entirely.
   const final = new URL(res.url);
   if (!isDomainAllowed(final.hostname)) {
     logger.warn('safe_fetch_redirect_blocked', { initial_host: initial.hostname, final_host: final.hostname });
     throw new Error(`Redirect target domain not allowed: ${final.hostname}`);
   }
-  await assertNotPrivateHost(final.hostname);
 
   return res;
 }

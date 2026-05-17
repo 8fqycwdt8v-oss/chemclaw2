@@ -3,6 +3,7 @@ import { callMcpTool } from '@chemclaw2/agent-tools';
 import { requireUserWithRateLimit } from '@/lib/api-gate';
 import { withApiContext } from '@/lib/api-context';
 import { logger } from '@chemclaw2/observability';
+import { randomUUID } from 'crypto';
 
 const MAX_SMILES_LEN = 2000;
 
@@ -44,8 +45,11 @@ export async function POST(req: Request) {
       logger.info('fingerprint_computed', { route: 'fingerprint', kind, duration_ms: Date.now() - start });
       return NextResponse.json({ fingerprint_bits: bits });
     } catch (err) {
-      logger.error('fingerprint_compute_failed', { route: 'fingerprint', kind, duration_ms: Date.now() - start }, err);
-      return NextResponse.json({ error: (err as Error).message }, { status: 502 });
+      // MCP errors include process paths and Python stack fragments; surface
+      // only a correlation id so the client doesn't see internal state.
+      const errorId = randomUUID();
+      logger.error('fingerprint_compute_failed', { route: 'fingerprint', kind, error_id: errorId, duration_ms: Date.now() - start }, err);
+      return NextResponse.json({ error: 'Fingerprint computation failed', errorId }, { status: 502 });
     }
   });
 }

@@ -10,6 +10,7 @@ import { rateLimit } from '@/lib/rate-limit';
 import { withApiContext } from '@/lib/api-context';
 import { callMcpTool } from '@chemclaw2/agent-tools';
 import { logger } from '@chemclaw2/observability';
+import { randomUUID } from 'crypto';
 
 const MAX_QUERY_LEN = 500;
 const MAX_SMARTS_LEN = 500;
@@ -171,8 +172,9 @@ export async function POST(req: Request) {
           ...(mcpFailures > 0 ? { partial: true, mcp_failures: mcpFailures } : {}),
         });
       } catch (err) {
-        logger.error('substructure_search_failed', { route: 'search', smarts_len: smarts.length }, err);
-        return NextResponse.json({ error: (err as Error).message }, { status: 502 });
+        const errorId = randomUUID();
+        logger.error('substructure_search_failed', { route: 'search', smarts_len: smarts.length, error_id: errorId }, err);
+        return NextResponse.json({ error: 'Substructure search failed', errorId }, { status: 502 });
       }
     }
 

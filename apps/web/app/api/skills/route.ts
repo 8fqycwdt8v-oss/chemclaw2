@@ -4,7 +4,7 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { replaySession } from '@chemclaw2/db';
-import { requireUserWithRateLimit } from '@/lib/api-gate';
+import { requireAdminWithRateLimit } from '@/lib/api-gate';
 import { withApiContext } from '@/lib/api-context';
 import { logger } from '@chemclaw2/observability';
 
@@ -15,10 +15,15 @@ const SKILL_NAME_RE = /^[a-z][a-z0-9-]{1,40}$/;
 /**
  * Capture the last successful turn from a session and persist it as a new skill
  * pack on disk.
+ *
+ * Admin-only: the Agent SDK auto-loads SKILL.md from the container filesystem,
+ * so a skill written by user A becomes prompt context for *every* subsequent
+ * session of *every* user (durable until the container is reclaimed). That
+ * makes this endpoint a persistent prompt-injection sink unless gated.
  */
 export async function POST(req: Request) {
   return withApiContext(async () => {
-    const gate = await requireUserWithRateLimit('skills', 10, 60_000);
+    const gate = await requireAdminWithRateLimit('skills', 10, 60_000);
     if (gate instanceof NextResponse) return gate;
     const { userId } = gate;
 
