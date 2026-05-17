@@ -7,14 +7,11 @@ import { callMcpTool } from '@chemclaw2/agent-tools';
 import { startCampaignWorker } from './campaign-worker';
 import { startEvalWorker } from './eval-worker';
 
-const fpTracer = trace.getTracer('@chemclaw2/fp-worker');
 function logEnqueueFailure(queue: string, id: string) {
   return (err: unknown) => {
-    fpTracer.startActiveSpan('fp.enqueue_failed', (span) => {
-      span.setAttribute('queue', queue);
-      span.setAttribute('target_id', id);
-      span.setAttribute('error', err instanceof Error ? err.message : String(err));
-      span.end();
+    trace.getActiveSpan()?.addEvent('fp.enqueue_failed', {
+      queue, target_id: id,
+      error: err instanceof Error ? err.message : String(err),
     });
   };
 }

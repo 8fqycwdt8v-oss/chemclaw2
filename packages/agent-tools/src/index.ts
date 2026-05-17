@@ -33,17 +33,11 @@ export { validateCitations, type CitationInput } from './citation-validation';
 export { isValidTiptapDoc } from './tiptap';
 export { toolError } from './tool-error';
 export {
-  MAX_SMILES_LEN,
-  MAX_REACTION_SMILES_LEN,
   MAX_MARKDOWN_LEN,
-  MAX_BODY_BYTES,
   MAX_PROMPT_BYTES,
   MAX_TITLE_LEN,
-  MAX_SLUG_LEN,
   MAX_PROJECT_LEN,
   MAX_RATIONALE_LEN,
   MAX_CITATIONS,
-  MAX_PROPERTY_BATCH,
-  MAX_PROJECT_KEY_LEN,
   PROJECT_KEY_RE,
 } from './limits';

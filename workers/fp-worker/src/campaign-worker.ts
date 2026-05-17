@@ -108,21 +108,15 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
         sql`updated_at < NOW() - (${DEAD_LETTER_TIMEOUT_MINUTES} * INTERVAL '1 minute')`,
       ));
 
-    // Surface permanently-failed steps so a broken MCP doesn't quietly stall
-    // a campaign. getStepsForRetry already excludes retry_count >= 3; this
-    // emits a one-shot OTel event the first time we observe each row so ops
-    // can page on the metric.
-    const permanentlyFailed = await db
-      .select({ id: campaignSteps.id, campaignId: campaignSteps.campaignId, stepIdx: campaignSteps.stepIdx })
+    // Surface stuck-campaign cardinality so a broken MCP doesn't quietly
+    // stall a campaign. One aggregate event per sweep (5min cadence) rather
+    // than per-row — Langfuse/alerts care about the count, not the ids.
+    const [{ count: stuckCount } = { count: 0 }] = await db
+      .select({ count: sql<number>`COUNT(*)::int` })
       .from(campaignSteps)
-      .where(and(eq(campaignSteps.status, 'failed'), sql`${campaignSteps.retryCount} >= 3`))
-      .limit(20);
-    for (const row of permanentlyFailed) {
-      trace.getActiveSpan()?.addEvent('campaign.step.permanent_failure', {
-        step_id: row.id,
-        campaign_id: row.campaignId,
-        step_idx: row.stepIdx,
-      });
+      .where(and(eq(campaignSteps.status, 'failed'), sql`${campaignSteps.retryCount} >= 3`));
+    if (stuckCount > 0) {
+      trace.getActiveSpan()?.addEvent('campaign.steps_permanently_failed', { count: stuckCount });
     }
 
     const stepsToRetry = await getStepsForRetry();

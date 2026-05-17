@@ -29,7 +29,11 @@ const mcpName = (toolName: string) => `mcp__${MCP_SERVER_NAME}__${toolName}`;
  * Whitelist them here per sub-agent so the deep-research path keeps the
  * fingerprint compute tools it relied on pre-refactor. */
 const EXTERNAL_MCP_TOOLS_BY_SUBAGENT: Record<SubagentTag, string[]> = {
-  'deep-research': ['mcp__mcp-molfp__compute_morgan_fp', 'mcp__mcp-rxnfp__compute_drfp'],
+  'deep-research': [
+    'mcp__mcp-molfp__compute_morgan_fp',
+    'mcp__mcp-molfp__substructure_match',
+    'mcp__mcp-rxnfp__compute_drfp',
+  ],
   'contradiction-resolver': [],
 };
 

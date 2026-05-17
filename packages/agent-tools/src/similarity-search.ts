@@ -2,14 +2,12 @@ import { z } from 'zod';
 import type { SubagentTag, ToolDef } from './tool-def';
 import { toolError } from './tool-error';
 
-/** Factory for "search the registry by 2048-bit fingerprint" tools. The
- * compound (Morgan/ECFP4) and reaction (DRFP) variants previously each had
- * a 31-LOC copy of this shape; both now collapse to a 3-line factory call. */
+/** Factory for "search the registry by 2048-bit fingerprint" tools. Used by
+ * compound (Morgan/ECFP4) and reaction (DRFP) variants. */
 export function similaritySearchTool<R>(opts: {
   name: string;
   description: string;
   fingerprintBitsDescription: string;
-  scoreField?: 'min_tanimoto' | 'min_similarity';
   scoreDescription?: string;
   defaultMin?: number;
   subagents?: readonly SubagentTag[];

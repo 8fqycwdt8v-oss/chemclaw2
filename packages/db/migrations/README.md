@@ -6,11 +6,21 @@ order from this directory and tracks applied filenames in a metadata table.
 
 ## Ordering
 
-Files are numbered `NNNN_<slug>.sql`. **Lexical order is the contract** — do
-not renumber existing files, only append. Two existing migrations share
-prefix `0029_` (`0029_tool_perm_check_and_eval_runs.sql` and
-`0029_wiki_tables_cleanup.sql`); they sort deterministically by the second
-half of the name.
+The drizzle-orm migrator reads `meta/_journal.json` — **not the directory**.
+Every new SQL file MUST have a matching entry in `_journal.json` with a
+monotonically increasing `idx` and a `tag` equal to the file's basename
+(no `.sql`). Files without journal entries are silently skipped, and CI
+will not catch the omission.
+
+Prefer `drizzle-kit generate` to author migrations: it writes the SQL,
+the journal entry, and the schema snapshot in one shot. Hand-authored
+SQL files (the project's historical pattern) need a hand-edited journal
+entry — keep the `when` close to the commit date so ordering matches
+intent if anyone later re-runs against a partially-migrated DB.
+
+Two existing files share prefix `0029_` (`tool_perm_check_and_eval_runs`
+and `wiki_tables_cleanup`); both should have journal entries, but only
+the second currently does — see BACKLOG.
 
 ## Applying
 

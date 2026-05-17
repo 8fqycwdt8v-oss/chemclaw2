@@ -5,10 +5,10 @@ import type { WikiPageCursor } from '@chemclaw2/db';
 import { embedTexts } from '../../../lib/embeddings';
 import { rateLimit } from '@/lib/rate-limit';
 import { isValidSlug, isValidTiptapDoc } from '@/lib/validation';
+import {
+  MAX_TITLE_LEN, MAX_MARKDOWN_LEN as MAX_CONTENT_TEXT_LEN, MAX_CITATIONS,
+} from '@chemclaw2/agent-tools';
 
-const MAX_TITLE_LEN = 500;
-const MAX_CONTENT_TEXT_LEN = 500_000;
-const MAX_CITATIONS = 200;
 const MAX_CITATION_FIELD_LEN = 1_000;
 
 export async function GET(req: Request) {

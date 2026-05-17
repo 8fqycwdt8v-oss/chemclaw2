@@ -125,10 +125,11 @@ export async function getStepsForRetry(): Promise<Array<typeof campaignSteps.$in
 }
 
 export async function markStepFailed(id: string, retryCount: number): Promise<void> {
-  // Clamp defends against corrupt rows: a retry_count of 30 would yield
-  // 2^30 ≈ 17h backoff and re-trip the schedule check on every sweep.
-  const clamped = Math.min(Math.max(retryCount, 0), 10);
-  const backoffMinutes = Math.pow(2, clamped); // 1, 2, 4 ... 1024 minutes
+  // Clamp the previous count to [0, 9] so the written value (clamped + 1)
+  // never exceeds the CHECK constraint (retry_count ≤ 10) and the backoff
+  // stays bounded (2^9 = 512 minutes ≈ 8.5h max).
+  const clamped = Math.min(Math.max(retryCount, 0), 9);
+  const backoffMinutes = Math.pow(2, clamped);
   await db
     .update(campaignSteps)
     .set({

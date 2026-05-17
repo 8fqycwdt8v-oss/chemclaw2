@@ -9,7 +9,7 @@ The user pastes a SMILES, reaction SMILES, or SMARTS pattern; asks "have we seen
 ### Similarity (compound or reaction)
 1. For a compound query: call `mcp-molfp.compute_morgan_fp` to get the 2048-bit fingerprint string.
 2. For a reaction query: call `mcp-rxnfp.compute_drfp` instead.
-3. Pass the fingerprint to `compound_similarity_search` (compounds) or `find_similar_reactions` (reactions). Optional filters: `min_tanimoto` (default 0.4), `limit`.
+3. Pass the fingerprint to `compound_similarity_search` (compounds) or `find_similar_reactions` (reactions). Optional filters: `min_similarity` (default 0.4), `limit`.
 4. Apply metadata filters (`created_after`, `has_cas`, `project`) when the user scopes their question to a project or timeframe.
 5. Return ranked hits with Tanimoto scores; cite by name + CAS or reaction ID.
 
