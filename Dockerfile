@@ -44,7 +44,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
 # Skill packs (SKILL.md with YAML frontmatter) — discovered by the Agent SDK
 # under .claude/skills/<name>/SKILL.md. Without this, the seed skills are
 # missing in production and the agent has no skill listing.
-COPY --from=builder --chown=nextjs:nodejs /app/.claude ./.claude
+# Scoped to .claude/skills/ so dev-only contents under .claude/ (agents,
+# commands, settings.json) don't accidentally get baked into prod.
+COPY --from=builder --chown=nextjs:nodejs /app/.claude/skills ./.claude/skills
 
 # Python venv + MCP servers (spawned per request by /api/fingerprint and by the worker).
 # chown the venv to nextjs:nodejs so the unprivileged USER below can exec python and
