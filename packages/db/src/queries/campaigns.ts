@@ -111,6 +111,44 @@ export async function addCampaignStep(
   return existing.id;
 }
 
+/**
+ * Atomic status-flip + step-insert for confirm_synthesis_plan. Without this
+ * the status flips to 'awaiting_input' first, then steps insert in a loop;
+ * a failure partway through the loop leaves the campaign wedged in
+ * awaiting_input with only the steps that landed before the throw.
+ *
+ * Returns { found: false } if the campaign is missing, not owned by userId,
+ * or already terminal. On any insert failure inside the transaction the
+ * whole change rolls back, restoring the prior status.
+ */
+export async function confirmCampaignPlanForUser(
+  campaignId: string,
+  userId: string,
+  plan: Record<string, unknown>,
+  steps: Array<{ reactionSmiles?: string; conditions?: string }>,
+): Promise<{ found: boolean }> {
+  return db.transaction(async (tx) => {
+    const updated = await tx
+      .update(synthesisCampaigns)
+      .set({ status: 'awaiting_input', plan })
+      .where(and(
+        eq(synthesisCampaigns.id, campaignId),
+        eq(synthesisCampaigns.createdBy, userId),
+        inArray(synthesisCampaigns.status, [...NON_TERMINAL_STATUSES]),
+      ))
+      .returning({ id: synthesisCampaigns.id });
+    if (updated.length === 0) return { found: false };
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
+      await tx
+        .insert(campaignSteps)
+        .values({ campaignId, stepIdx: i, ...s })
+        .onConflictDoNothing({ target: [campaignSteps.campaignId, campaignSteps.stepIdx] });
+    }
+    return { found: true };
+  });
+}
+
 export async function getStepsForRetry(): Promise<Array<typeof campaignSteps.$inferSelect>> {
   return db
     .select()
@@ -130,6 +168,9 @@ export async function markStepFailed(id: string, retryCount: number): Promise<vo
   // stays bounded (2^9 = 512 minutes ≈ 8.5h max).
   const clamped = Math.min(Math.max(retryCount, 0), 9);
   const backoffMinutes = Math.pow(2, clamped);
+  // Terminal-state guard: a step that's already 'complete' must not be
+  // flipped to 'failed' because a downstream bookkeeping call threw after
+  // the step itself finished. Mirrors the guard in markStepComplete.
   await db
     .update(campaignSteps)
     .set({
@@ -138,7 +179,7 @@ export async function markStepFailed(id: string, retryCount: number): Promise<vo
       // Parameterized interval — avoids sql.raw() with NaN/Infinity risk
       nextRetryAt: sql`NOW() + (${backoffMinutes} * INTERVAL '1 minute')`,
     })
-    .where(eq(campaignSteps.id, id));
+    .where(and(eq(campaignSteps.id, id), notInArray(campaignSteps.status, ['complete', 'failed'])));
 }
 
 export async function markStepComplete(id: string, result: Record<string, unknown>): Promise<void> {

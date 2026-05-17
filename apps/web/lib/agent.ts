@@ -269,8 +269,12 @@ export function buildQueryOptions(
 
               // J2: per-tool authorization. The deny path short-circuits before
               // the redaction check runs — saves the redaction work on a tool
-              // we'd never allow anyway.
-              const mode = await resolveToolMode(input.tool_name, userId).catch(() => 'allow' as const);
+              // we'd never allow anyway. Fail CLOSED on lookup error: a DB
+              // blip must not silently grant tools the user has been denied.
+              const mode = await resolveToolMode(input.tool_name, userId).catch((err) => {
+                console.error('[agent] resolveToolMode failed:', err);
+                return 'deny' as const;
+              });
               if (mode === 'deny') {
                 const reason = `Tool '${input.tool_name}' is denied for this user by tool_permissions.`;
                 return {

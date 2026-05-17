@@ -20,7 +20,12 @@ export async function replaceSessionTodos(
   items: string[],
 ): Promise<void> {
   await db.transaction(async (tx) => {
-    await tx.delete(agentTodos).where(eq(agentTodos.sessionId, sessionId));
+    // Defense-in-depth: scope DELETE by userId so a leaked or reused
+    // sessionId can't wipe another user's todos. Mirrors setTodoStatus.
+    await tx.delete(agentTodos).where(and(
+      eq(agentTodos.sessionId, sessionId),
+      eq(agentTodos.userId, userId),
+    ));
     if (items.length === 0) return;
     await tx.insert(agentTodos).values(
       items.map((text, i) => ({
