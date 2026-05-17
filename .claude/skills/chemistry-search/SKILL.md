@@ -1,3 +1,8 @@
+---
+name: chemistry-search
+description: Find compounds and reactions in the registry by structural similarity or substructure. Use when the user pastes a SMILES, reaction SMILES, or SMARTS pattern, asks whether anything similar has been seen before, asks what scaffolds are in the library, or wants compound or reaction neighbors before designing a new analog.
+---
+
 # chemistry-search
 
 Find compounds and reactions in the registry by structural similarity or substructure pattern.
