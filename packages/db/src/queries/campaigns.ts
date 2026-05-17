@@ -149,3 +149,116 @@ export async function markStepComplete(id: string, result: Record<string, unknow
     .set({ status: 'complete', result })
     .where(and(eq(campaignSteps.id, id), notInArray(campaignSteps.status, ['complete', 'failed'])));
 }
+
+export type PendingCampaignNotification = {
+  id: string;
+  targetSmiles: string | null;
+  status: string;
+  wikiPageId: string | null;
+  updatedAt: Date;
+};
+
+/**
+ * Terminal-state campaigns owned by the user that have not yet been
+ * acknowledged via `acknowledgeCampaignNotifications`. Source for the
+ * notifications page + nav badge.
+ */
+export async function listPendingCampaignNotifications(
+  userId: string,
+): Promise<PendingCampaignNotification[]> {
+  const rows = await db
+    .select({
+      id: synthesisCampaigns.id,
+      targetSmiles: synthesisCampaigns.targetSmiles,
+      status: synthesisCampaigns.status,
+      wikiPageId: synthesisCampaigns.wikiPageId,
+      updatedAt: synthesisCampaigns.updatedAt,
+    })
+    .from(synthesisCampaigns)
+    .where(and(
+      eq(synthesisCampaigns.createdBy, userId),
+      inArray(synthesisCampaigns.status, ['complete', 'failed']),
+      sql`${synthesisCampaigns.notifiedAt} IS NULL`,
+    ));
+  return rows;
+}
+
+/**
+ * Mark a batch of campaigns as acknowledged. Ownership-scoped: only the
+ * authoring user's rows are flipped, even if an attacker supplies a UUID
+ * they don't own. Returns the ids actually updated.
+ */
+export async function acknowledgeCampaignNotifications(
+  userId: string,
+  campaignIds: string[],
+): Promise<string[]> {
+  if (campaignIds.length === 0) return [];
+  const rows = await db
+    .update(synthesisCampaigns)
+    .set({ notifiedAt: new Date() })
+    .where(and(
+      eq(synthesisCampaigns.createdBy, userId),
+      inArray(synthesisCampaigns.id, campaignIds),
+      sql`${synthesisCampaigns.notifiedAt} IS NULL`,
+    ))
+    .returning({ id: synthesisCampaigns.id });
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Approve one pending step on a user-owned campaign. Atomic:
+ * - flips `requires_approval=false` and bumps `next_retry_at=NOW()` so the
+ *   worker picks it up on the next sweep
+ * - only matches rows where (campaign-owned-by-user, step still pending,
+ *   approval still required) — idempotent on re-call
+ * Returns whether a row was actually flipped.
+ */
+export async function approveCampaignStep(
+  campaignId: string,
+  userId: string,
+  stepIdx: number,
+): Promise<{ approved: boolean }> {
+  const rows = await db.execute<{ id: string }>(sql`
+    UPDATE campaign_steps cs
+       SET requires_approval = false, next_retry_at = NOW()
+      FROM synthesis_campaigns sc
+     WHERE cs.campaign_id = sc.id
+       AND sc.id = ${campaignId}::uuid
+       AND sc.created_by = ${userId}
+       AND cs.step_idx = ${stepIdx}
+       AND cs.requires_approval = true
+       AND cs.status = 'pending'
+    RETURNING cs.id
+  `);
+  return { approved: rows.length > 0 };
+}
+
+/**
+ * Kick off (or no-op) pending steps when a campaign transitions to `running`.
+ * Optionally gate every non-first step on per-step approval. Used by
+ * `kickoff_campaign` so the agent-tool layer no longer reaches for raw SQL.
+ *
+ * `userId` scoping is defence-in-depth: the caller already enforces ownership
+ * via `updateCampaignStatusForUser`, but writing the gating UPDATEs through a
+ * `created_by = userId` predicate keeps a misuse from racing across users.
+ */
+export async function startPendingStepsForUser(
+  campaignId: string,
+  userId: string,
+  opts: { perStepApproval: boolean },
+): Promise<void> {
+  await db.execute(sql`
+    UPDATE campaign_steps SET next_retry_at = NOW()
+     WHERE campaign_id = ${campaignId}::uuid
+       AND status = 'pending'
+       AND campaign_id IN (SELECT id FROM synthesis_campaigns WHERE created_by = ${userId})
+  `);
+  if (opts.perStepApproval) {
+    await db.execute(sql`
+      UPDATE campaign_steps SET requires_approval = true
+       WHERE campaign_id = ${campaignId}::uuid
+         AND step_idx > 0
+         AND campaign_id IN (SELECT id FROM synthesis_campaigns WHERE created_by = ${userId})
+    `);
+  }
+}

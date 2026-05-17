@@ -46,14 +46,5 @@ export const WikiPatchBodySchema = z
     { message: 'no metadata fields provided' },
   );
 
-/**
- * Map a Zod error to the legacy { error, status } shape so route handlers
- * keep their existing 400/413 contract. 413 is reserved for the content/
- * contentText size cap; everything else is 400.
- */
-export function zodErrorResponse(err: z.ZodError): { message: string; status: number } {
-  const first = err.issues[0];
-  const path = first?.path.join('.');
-  const tooBig = first?.code === 'too_big' && (path === 'contentText' || path === 'content');
-  return { message: first?.message ?? 'invalid request body', status: tooBig ? 413 : 400 };
-}
+// zodErrorResponse moved to ./api-gate to centralize the response envelope.
+export { zodErrorResponse } from './api-gate';

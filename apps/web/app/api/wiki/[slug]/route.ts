@@ -4,137 +4,84 @@ import {
   getWikiPage, getWikiPageCitations, upsertWikiPage, updateWikiMetadata, pointInTimeWiki,
 } from '@chemclaw2/db';
 import { embedTexts } from '../../../../lib/embeddings';
-import { requireUserWithRateLimit } from '@/lib/api-gate';
-import { SlugSchema, WikiPutBodySchema, WikiPatchBodySchema, zodErrorResponse } from '@/lib/wiki-schemas';
+import { withRouteParams, errorResponse } from '@/lib/api-gate';
+import { SlugSchema, WikiPutBodySchema, WikiPatchBodySchema } from '@/lib/wiki-schemas';
 
-export async function GET(
-  req: Request,
-  { params }: { params: Promise<{ slug: string }> },
-) {
-  const gate = await requireUserWithRateLimit('wiki-read', 60, 60_000);
-  if (gate instanceof NextResponse) return gate;
+export const GET = withRouteParams<{ slug: string }>(
+  { rateLimit: { key: 'wiki-read', max: 60, windowMs: 60_000 } },
+  async ({ req, params }) => {
+    if (!SlugSchema.safeParse(params.slug).success) return errorResponse('Invalid slug', 400);
 
-  const { slug } = await params;
-  if (!SlugSchema.safeParse(slug).success) {
-    return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
-  }
-
-  // v2.1-B1: bi-temporal lookup. ?asOf=<ISO8601> returns the page revision
-  // active at that instant via pointInTimeWiki (which reads wiki_revisions and
-  // falls back to the current row when no edit predates asOf). Compliance use:
-  // "what did this page say on 2026-03-01?".
-  const asOfRaw = new URL(req.url).searchParams.get('asOf');
-  if (asOfRaw !== null) {
-    const asOf = new Date(asOfRaw);
-    if (isNaN(asOf.getTime())) {
-      return NextResponse.json({ error: 'asOf must be an ISO-8601 timestamp' }, { status: 400 });
+    const asOfRaw = new URL(req.url).searchParams.get('asOf');
+    if (asOfRaw !== null) {
+      const asOf = new Date(asOfRaw);
+      if (isNaN(asOf.getTime())) return errorResponse('asOf must be an ISO-8601 timestamp', 400);
+      const snapshot = await pointInTimeWiki(params.slug, asOf);
+      if (!snapshot) return errorResponse('Not found', 404);
+      return NextResponse.json(snapshot);
     }
-    const snapshot = await pointInTimeWiki(slug, asOf);
-    if (!snapshot) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-    return NextResponse.json(snapshot);
-  }
 
-  const page = await getWikiPage(slug);
-  if (!page) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  return NextResponse.json(page);
-}
+    const page = await getWikiPage(params.slug);
+    if (!page) return errorResponse('Not found', 404);
+    return NextResponse.json(page);
+  },
+);
 
-export async function PUT(
-  req: Request,
-  { params }: { params: Promise<{ slug: string }> },
-) {
-  const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
-  if (gate instanceof NextResponse) return gate;
-  const { userId } = gate;
+export const PUT = withRouteParams<{ slug: string }, typeof WikiPutBodySchema>(
+  { rateLimit: { key: 'wiki', max: 20, windowMs: 60_000 }, body: WikiPutBodySchema },
+  async ({ userId, params, body }) => {
+    if (!SlugSchema.safeParse(params.slug).success) return errorResponse('Invalid slug', 400);
 
-  const { slug } = await params;
-  if (!SlugSchema.safeParse(slug).success) {
-    return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
-  }
+    const existing = await getWikiPage(params.slug);
+    if (!existing) return errorResponse('Not found', 404);
 
-  let raw: unknown;
-  try {
-    raw = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
-  }
+    const citations = body.citations !== undefined
+      ? body.citations
+      : (await getWikiPageCitations(existing.id)).map((c) => ({
+          ...c,
+          sourceId: c.sourceId ?? undefined,
+        }));
 
-  const parsed = WikiPutBodySchema.safeParse(raw);
-  if (!parsed.success) {
-    const { message, status } = zodErrorResponse(parsed.error);
-    return NextResponse.json({ error: message }, { status });
-  }
-  const body = parsed.data;
+    const id = await upsertWikiPage(
+      params.slug,
+      body.title ?? existing.title,
+      body.content ?? existing.content,
+      body.contentText ?? existing.contentText,
+      userId,
+      citations,
+      embedTexts,
+    );
+    return NextResponse.json({ id });
+  },
+);
 
-  const existing = await getWikiPage(slug);
-  if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+export const PATCH = withRouteParams<{ slug: string }, typeof WikiPatchBodySchema>(
+  { rateLimit: { key: 'wiki', max: 20, windowMs: 60_000 }, body: WikiPatchBodySchema },
+  async ({ userId, params, body: patch }) => {
+    if (!SlugSchema.safeParse(params.slug).success) return errorResponse('Invalid slug', 400);
 
-  const citations = body.citations !== undefined
-    ? body.citations
-    : (await getWikiPageCitations(existing.id)).map((c) => ({ ...c, sourceId: c.sourceId ?? undefined }));
-
-  const id = await upsertWikiPage(
-    slug,
-    body.title ?? existing.title,
-    body.content ?? existing.content,
-    body.contentText ?? existing.contentText,
-    userId,
-    citations,
-    embedTexts,
-  );
-
-  return NextResponse.json({ id });
-}
-
-export async function PATCH(
-  req: Request,
-  { params }: { params: Promise<{ slug: string }> },
-) {
-  const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
-  if (gate instanceof NextResponse) return gate;
-  const { userId } = gate;
-
-  const { slug } = await params;
-  if (!SlugSchema.safeParse(slug).success) {
-    return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
-  }
-
-  let raw: unknown;
-  try {
-    raw = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
-  }
-
-  const parsed = WikiPatchBodySchema.safeParse(raw);
-  if (!parsed.success) {
-    const { message, status } = zodErrorResponse(parsed.error);
-    return NextResponse.json({ error: message }, { status });
-  }
-  const patch = parsed.data;
-
-  // Followup #8: lifecycle changes (archive, maturity demotion/promotion,
-  // project reassignment) are curation actions — restrict to the page's
-  // original creator or an admin. needsReview alone is collaborative-OK
-  // because it's the "flag for attention" affordance any chemist needs.
-  const isLifecycleEdit =
-    patch.archived !== undefined ||
-    patch.maturity !== undefined ||
-    patch.project !== undefined;
-  if (isLifecycleEdit) {
-    const existing = await getWikiPage(slug);
-    if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-    const user = await currentUser();
-    const role = (user?.publicMetadata as { role?: string } | undefined)?.role;
-    if (existing.createdBy !== userId && role !== 'admin') {
-      return NextResponse.json(
-        { error: 'Forbidden — lifecycle changes require page ownership or admin role' },
-        { status: 403 },
-      );
+    // Lifecycle changes (archive, maturity, project) are curation actions —
+    // restrict to the page's original creator or an admin. needsReview alone
+    // is collaborative-OK because it's the "flag for attention" affordance.
+    const isLifecycleEdit =
+      patch.archived !== undefined ||
+      patch.maturity !== undefined ||
+      patch.project !== undefined;
+    if (isLifecycleEdit) {
+      const existing = await getWikiPage(params.slug);
+      if (!existing) return errorResponse('Not found', 404);
+      const user = await currentUser();
+      const role = (user?.publicMetadata as { role?: string } | undefined)?.role;
+      if (existing.createdBy !== userId && role !== 'admin') {
+        return errorResponse(
+          'Forbidden — lifecycle changes require page ownership or admin role',
+          403,
+        );
+      }
     }
-  }
 
-  const { found } = await updateWikiMetadata(slug, userId, patch);
-  if (!found) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  return NextResponse.json({ ok: true });
-}
+    const { found } = await updateWikiMetadata(params.slug, userId, patch);
+    if (!found) return errorResponse('Not found', 404);
+    return NextResponse.json({ ok: true });
+  },
+);

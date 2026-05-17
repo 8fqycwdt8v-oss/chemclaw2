@@ -1,45 +1,23 @@
-import { UUID_RE } from '@/lib/validation';
+import { z } from 'zod';
 import { NextResponse } from 'next/server';
 import { upsertFeedback } from '@chemclaw2/db';
-import { requireUserWithRateLimit } from '@/lib/api-gate';
+import { withRoute } from '@/lib/api-gate';
+import { UUID_RE } from '@/lib/validation';
 
 const MAX_REASON_LEN = 1000;
 
-export async function POST(req: Request) {
-  const gate = await requireUserWithRateLimit('feedback', 60, 60_000);
-  if (gate instanceof NextResponse) return gate;
-  const { userId } = gate;
+const FeedbackBody = z.object({
+  sessionId: z.string().refine((s) => UUID_RE.test(s), 'sessionId must be a UUID'),
+  turnIndex: z.number().int().nonnegative({ message: 'turnIndex must be a non-negative integer' }),
+  score: z.union([z.literal(1), z.literal(-1)], { message: 'score must be 1 or -1' }),
+  reason: z.string().max(MAX_REASON_LEN, 'reason must be a string ≤1000 chars').nullish(),
+});
 
-  let body: { sessionId?: unknown; turnIndex?: unknown; score?: unknown; reason?: unknown };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
-  }
-
-  if (typeof body.sessionId !== 'string' || !UUID_RE.test(body.sessionId)) {
-    return NextResponse.json({ error: 'sessionId must be a UUID' }, { status: 400 });
-  }
-  if (!Number.isInteger(body.turnIndex) || (body.turnIndex as number) < 0) {
-    return NextResponse.json({ error: 'turnIndex must be a non-negative integer' }, { status: 400 });
-  }
-  if (body.score !== 1 && body.score !== -1) {
-    return NextResponse.json({ error: 'score must be 1 or -1' }, { status: 400 });
-  }
-  let reason: string | null = null;
-  if (body.reason !== undefined && body.reason !== null) {
-    if (typeof body.reason !== 'string' || body.reason.length > MAX_REASON_LEN) {
-      return NextResponse.json({ error: 'reason must be a string ≤1000 chars' }, { status: 400 });
-    }
-    reason = body.reason.trim() || null;
-  }
-
-  const { id } = await upsertFeedback(
-    body.sessionId,
-    body.turnIndex as number,
-    userId,
-    body.score as 1 | -1,
-    reason,
-  );
-  return NextResponse.json({ id });
-}
+export const POST = withRoute(
+  { rateLimit: { key: 'feedback', max: 60, windowMs: 60_000 }, body: FeedbackBody },
+  async ({ userId, body }) => {
+    const reason = body.reason ? body.reason.trim() || null : null;
+    const { id } = await upsertFeedback(body.sessionId, body.turnIndex, userId, body.score, reason);
+    return NextResponse.json({ id });
+  },
+);

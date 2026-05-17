@@ -10,8 +10,10 @@
  * a network-IO dep.
  */
 
+import { EMBED_DIM } from '@chemclaw2/db';
+
 export const EMBED_MODEL = 'text-embedding-3-small';
-export const EMBED_DIM = 1536;
+export { EMBED_DIM };
 // text-embedding-3-small supports 8191 tokens. 6000 chars is conservative for
 // chemistry text (~1.3 chars/token); rare individual inputs that exceed this
 // are truncated rather than rejected — losing the tail beats failing the call.

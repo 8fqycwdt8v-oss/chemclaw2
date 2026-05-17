@@ -234,6 +234,72 @@ export async function rollbackApplyClaim(id: string): Promise<void> {
     .where(and(eq(wikiProposedEdits.id, id), eq(wikiProposedEdits.status, 'applied')));
 }
 
+export type ApplyProposedEditResult =
+  | { ok: true; pageId: string }
+  | { ok: false; status: number; error: string };
+
+export type ApplyProposedEditDeps = {
+  /**
+   * Re-validate the staged proposal content. Called inside the apply
+   * transaction's compensating window — if it returns `ok: false`, the
+   * claim is rolled back and the route returns the supplied status/error.
+   */
+  validate: (proposal: ProposedEditRow) => { ok: true } | { ok: false; status: number; error: string };
+  /** Publish the validated proposal through the canonical wiki write path. */
+  upsert: (proposal: ProposedEditRow, reviewerId: string) => Promise<string>;
+};
+
+/**
+ * End-to-end "apply this proposal" flow with built-in compensating actions.
+ * The route handler used to own this orchestration (claim → validate →
+ * upsert → setAppliedPageId, with hand-written rollbacks at every failure
+ * site). Centralizing it here means new states or new validation steps
+ * extend the same compensating loop instead of bolting onto a route.
+ *
+ * Returns `{ ok: true, pageId }` on success or `{ ok: false, status, error }`
+ * on any of: missing/non-pending claim (409), validator failure (validator-
+ * supplied status), or upsert failure (500). The proposal row's status is
+ * always rolled back to 'pending' on failure after the claim has succeeded.
+ */
+export async function applyProposedEdit(
+  id: string,
+  reviewerId: string,
+  comment: string | undefined,
+  deps: ApplyProposedEditDeps,
+): Promise<ApplyProposedEditResult> {
+  const proposal = await tryClaimProposedEditForApply(id, reviewerId, comment);
+  if (!proposal) {
+    return {
+      ok: false,
+      status: 409,
+      error:
+        'Conflict: proposal is not pending. Another reviewer may have applied, rejected, or superseded it.',
+    };
+  }
+
+  const validation = deps.validate(proposal);
+  if (!validation.ok) {
+    await rollbackApplyClaim(id);
+    return { ok: false, status: validation.status, error: validation.error };
+  }
+
+  let pageId: string;
+  try {
+    pageId = await deps.upsert(proposal, reviewerId);
+  } catch (err) {
+    await rollbackApplyClaim(id);
+    console.error('[applyProposedEdit] upsert failed, claim rolled back:', err);
+    return {
+      ok: false,
+      status: 500,
+      error: 'Wiki write failed — proposal returned to pending. Try again.',
+    };
+  }
+
+  await setAppliedPageId(id, pageId);
+  return { ok: true, pageId };
+}
+
 /**
  * Reject a pending proposal with a required reviewer comment so the audit
  * trail captures why the change was declined.

@@ -1,7 +1,41 @@
-import { sql, SQL } from 'drizzle-orm';
+import { sql, SQL, inArray } from 'drizzle-orm';
 import { db } from '../client';
 import { compounds } from '../schema/compounds';
 import { rerankByTanimoto, validateFpBits } from './fp-utils';
+
+/**
+ * Count compounds + reactions still awaiting fingerprint computation. Backs
+ * the health endpoint's fp-worker backlog warning. Single query so a slow
+ * connection doesn't double the route's latency on every poll.
+ */
+export async function countPendingFingerprints(): Promise<{
+  pendingCompounds: number;
+  pendingReactions: number;
+}> {
+  const rows = await db.execute<{ pending_compounds: number; pending_reactions: number }>(sql`
+    SELECT
+      (SELECT count(*)::int FROM compounds WHERE morgan_fp IS NULL) AS pending_compounds,
+      (SELECT count(*)::int FROM reactions WHERE drfp IS NULL) AS pending_reactions
+  `);
+  return {
+    pendingCompounds: Number(rows[0]?.pending_compounds ?? 0),
+    pendingReactions: Number(rows[0]?.pending_reactions ?? 0),
+  };
+}
+
+/**
+ * Look up which of the supplied CAS numbers exist in the compound registry.
+ * Used by the fact-id-check hook to flag CAS strings the agent emitted that
+ * aren't backed by a known compound row.
+ */
+export async function knownCasNumbers(casNumbers: string[]): Promise<Set<string | null>> {
+  if (casNumbers.length === 0) return new Set();
+  const rows = await db
+    .select({ casNumber: compounds.casNumber })
+    .from(compounds)
+    .where(inArray(compounds.casNumber, casNumbers));
+  return new Set(rows.map((r) => r.casNumber));
+}
 
 export type SimilarCompound = {
   id: string;

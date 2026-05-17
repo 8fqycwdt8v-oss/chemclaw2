@@ -7,9 +7,7 @@ import { extractMarkdownTables, TABLE_DIVIDER_RE } from './wiki-tables';
 
 const tracer = trace.getTracer('@chemclaw2/db');
 
-// Dimension of OpenAI text-embedding-3-small; mirrors EMBED_DIM in
-// @chemclaw2/agent-tools (kept local to avoid a reverse package import).
-const EMBED_DIM = 1536;
+import { EMBED_DIM } from '../embedding-constants';
 
 // Defends `chunkText` against pathological inputs that would amplify the
 // table-divider regex into catastrophic backtracking, or that would consume

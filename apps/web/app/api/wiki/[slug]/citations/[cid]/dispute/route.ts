@@ -1,33 +1,24 @@
+import { z } from 'zod';
 import { NextResponse } from 'next/server';
 import { getWikiPage, setCitationDisputed } from '@chemclaw2/db';
-import { requireUserWithRateLimit } from '@/lib/api-gate';
+import { withRouteParams, errorResponse } from '@/lib/api-gate';
 import { isValidSlug } from '@/lib/validation';
 
-export async function POST(
-  req: Request,
-  { params }: { params: Promise<{ slug: string; cid: string }> },
-) {
-  const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
-  if (gate instanceof NextResponse) return gate;
+const DisputeBody = z.object({
+  disputed: z.boolean({ message: 'disputed (boolean) is required' }),
+});
 
-  const { slug, cid } = await params;
-  if (!isValidSlug(slug) || cid.length === 0 || cid.length > 200) {
-    return NextResponse.json({ error: 'Invalid slug or citation id' }, { status: 400 });
-  }
-  const page = await getWikiPage(slug);
-  if (!page) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+export const POST = withRouteParams<{ slug: string; cid: string }, typeof DisputeBody>(
+  { rateLimit: { key: 'wiki', max: 20, windowMs: 60_000 }, body: DisputeBody },
+  async ({ params, body }) => {
+    if (!isValidSlug(params.slug) || params.cid.length === 0 || params.cid.length > 200) {
+      return errorResponse('Invalid slug or citation id', 400);
+    }
+    const page = await getWikiPage(params.slug);
+    if (!page) return errorResponse('Not found', 404);
 
-  let body: { disputed?: unknown };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
-  }
-  if (typeof body.disputed !== 'boolean') {
-    return NextResponse.json({ error: 'disputed (boolean) is required' }, { status: 400 });
-  }
-
-  const { found } = await setCitationDisputed(page.id, cid, body.disputed);
-  if (!found) return NextResponse.json({ error: 'Citation not found' }, { status: 404 });
-  return NextResponse.json({ disputed: body.disputed });
-}
+    const { found } = await setCitationDisputed(page.id, params.cid, body.disputed);
+    if (!found) return errorResponse('Citation not found', 404);
+    return NextResponse.json({ disputed: body.disputed });
+  },
+);

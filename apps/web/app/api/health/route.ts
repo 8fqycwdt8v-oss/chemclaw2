@@ -1,5 +1,5 @@
-import { db, sql } from '@chemclaw2/db';
 import { auth } from '@clerk/nextjs/server';
+import { countPendingFingerprints } from '@chemclaw2/db';
 
 const BACKLOG_WARN_THRESHOLD = 500;
 
@@ -9,30 +9,19 @@ const BACKLOG_WARN_THRESHOLD = 500;
  * dashboards/alerting can distinguish "web up, worker behind" from "all green".
  *
  * Backlog counts are signed-in-only to avoid leaking compound/reaction
- * registry size to unauthenticated probes. Unauth probes (Fly health check)
- * still get a stable 200.
+ * registry size to unauthenticated probes.
  */
 export async function GET() {
   const { userId } = await auth();
-  if (!userId) {
-    return Response.json({ ok: true });
-  }
+  if (!userId) return Response.json({ ok: true });
+
   let dbOk = false;
   let pendingCompounds = 0;
   let pendingReactions = 0;
   try {
-    const rows = await db.execute<{
-      pending_compounds: number;
-      pending_reactions: number;
-    }>(sql`
-      SELECT
-        (SELECT count(*)::int FROM compounds WHERE morgan_fp IS NULL) AS pending_compounds,
-        (SELECT count(*)::int FROM reactions WHERE drfp IS NULL) AS pending_reactions
-    `);
-    if (rows[0]) {
-      pendingCompounds = Number(rows[0].pending_compounds ?? 0);
-      pendingReactions = Number(rows[0].pending_reactions ?? 0);
-    }
+    const counts = await countPendingFingerprints();
+    pendingCompounds = counts.pendingCompounds;
+    pendingReactions = counts.pendingReactions;
     dbOk = true;
   } catch {
     dbOk = false;
