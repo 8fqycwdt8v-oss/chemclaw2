@@ -2,6 +2,13 @@
 
 Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agent, living wiki, chemistry-native search.
 
+## Branch: typescript_old — PERMANENT ARCHIVE, DO NOT TOUCH
+
+The `typescript_old` branch is a permanent, read-only archive of the original Next.js + TypeScript
+monorepo. It **must never** be merged into `main`, rebased, force-pushed, or deleted. It exists
+solely as a reference implementation of the original codebase before the Python backend migration.
+No PRs should target this branch.
+
 ## Hard rules — non-negotiable, every session
 
 1. **Commit before the session ends.** Uncommitted edits don't survive parallel sessions or branch switches.
@@ -28,17 +35,20 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 
 | Layer | Technology |
 |---|---|
-| Agent runtime | Claude Agent SDK (TypeScript) |
+| Language | Python 3.12 |
+| Agent runtime | Claude Agent SDK (Python) — `pip install claude-agent-sdk` |
 | LLM | Anthropic models direct |
-| Web app | Next.js (App Router) + RSC |
-| Editor | Tiptap |
-| DB | Postgres (Neon/Supabase/RDS) + pgvector |
-| Molecule fingerprints | RDKit Morgan/ECFP4 via MCP server |
-| Reaction fingerprints | DRFP via MCP server |
-| Job queue | pg-boss (Postgres-backed) |
-| Auth | Microsoft Entra ID / Auth0 / Clerk |
-| Observability | OpenTelemetry → Langfuse + Better Stack/Axiom |
+| API server | FastAPI + Uvicorn |
+| ORM | SQLAlchemy 2.0 async + asyncpg |
+| DB | Postgres + pgvector |
+| Molecule fingerprints | RDKit Morgan/ECFP4 (in-process, no subprocess) |
+| Reaction fingerprints | DRFP (in-process, no subprocess) |
+| Job queue | asyncio polling + Postgres advisory locks |
+| Auth | Clerk JWT via PyJWT + JWKS |
+| Embeddings | OpenAI Python SDK (text-embedding-3-small) |
+| Observability | OpenTelemetry |
 | CI/CD | GitHub Actions |
+| Frontend | Separate repo: chemclaw2_gui |
 
 ## Operating principles (non-negotiable)
 
