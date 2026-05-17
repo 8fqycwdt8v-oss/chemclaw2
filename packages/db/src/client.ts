@@ -11,8 +11,14 @@ function getDb() {
   if (!_db) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) throw new Error('DATABASE_URL is required');
-    // max:2 per worker instance — use a connection pooler (PgBouncer/Supavisor) in front of Postgres for higher throughput
-    _sql = postgres(connectionString, { max: 2 });
+    // Wave-3h perf: lifted from max:2 → max:15 (configurable via DB_POOL_MAX)
+    // to match the v2.2 fan-out shape. lookup_knowledge alone issues up to
+    // 5 parallel queries; per-tool-call budget hooks add another DB write.
+    // With max:2 a single high-fan-out tool call saturated the pool and
+    // serialized concurrent users. 15 is a defensible floor for a pgbouncer
+    // transaction-mode pooler; raise via env if a bigger upstream demands.
+    const max = Number(process.env.DB_POOL_MAX ?? '15');
+    _sql = postgres(connectionString, { max });
     _db = drizzle(_sql, { schema });
   }
   return _db;

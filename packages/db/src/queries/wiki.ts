@@ -3,7 +3,7 @@ import { trace } from '@opentelemetry/api';
 import { db } from '../client';
 import { wikiPages, wikiChunks, wikiCitations, wikiSubscriptions } from '../schema/wiki';
 import { wikiTables } from '../schema/wiki-tables';
-import { extractMarkdownTables } from './wiki-tables';
+import { extractMarkdownTables, TABLE_DIVIDER_RE } from './wiki-tables';
 
 const tracer = trace.getTracer('@chemclaw2/db');
 
@@ -25,22 +25,25 @@ const tracer = trace.getTracer('@chemclaw2/db');
 // Note: the sentence splitter fires on abbreviations like "Dr." and "Fig." —
 // short resulting fragments are discarded by the length > 10 guard.
 
-// Recognizes the divider row that proves a `|`-containing line above is a
-// table header rather than a stray pipe in prose. Mirrors the strict matcher
-// used by extractMarkdownTables.
-const CHUNKTEXT_TABLE_DIVIDER_RE = /^\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
-
 /**
  * Split a markdown body into table blocks and non-table fragments. Each
  * fragment is either `{ kind: 'table', text }` (preserved verbatim) or
  * `{ kind: 'prose', text }` (handed to the paragraph/sentence splitter).
  * The chunker emits tables as single chunks and shards prose fragments
  * normally.
+ *
+ * Wave-3h: shares TABLE_DIVIDER_RE with extractMarkdownTables (was duplicated),
+ * tracks fenced code blocks (so pipe-tables in code examples don't get
+ * parsed as real tables), and stops table parsing when the inner loop
+ * encounters another divider row (adjacent tables now split cleanly).
  */
+const FENCE_RE = /^\s*```/;
+
 function splitOnTables(md: string): Array<{ kind: 'table' | 'prose'; text: string }> {
   const lines = md.replace(/\r\n/g, '\n').split('\n');
   const out: Array<{ kind: 'table' | 'prose'; text: string }> = [];
   let proseBuf: string[] = [];
+  let inFence = false;
   const flushProse = () => {
     if (proseBuf.length === 0) return;
     const joined = proseBuf.join('\n');
@@ -49,14 +52,26 @@ function splitOnTables(md: string): Array<{ kind: 'table' | 'prose'; text: strin
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (FENCE_RE.test(line)) {
+      inFence = !inFence;
+      proseBuf.push(line);
+      continue;
+    }
+    if (inFence) {
+      proseBuf.push(line);
+      continue;
+    }
     const next = lines[i + 1];
-    if (line.includes('|') && next && CHUNKTEXT_TABLE_DIVIDER_RE.test(next.trim())) {
+    if (line.includes('|') && next && TABLE_DIVIDER_RE.test(next.trim())) {
       flushProse();
       const tableLines: string[] = [line, next];
       let j = i + 2;
       while (j < lines.length) {
         const rowLine = lines[j];
         if (!rowLine.includes('|') || rowLine.trim().length === 0) break;
+        if (TABLE_DIVIDER_RE.test(rowLine.trim())) break; // adjacent table's divider
+        const peek = lines[j + 1];
+        if (peek && TABLE_DIVIDER_RE.test(peek.trim())) break; // adjacent table's header
         tableLines.push(rowLine);
         j++;
       }

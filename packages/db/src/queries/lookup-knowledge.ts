@@ -176,6 +176,12 @@ async function lookupProperties(query: string, limit: number): Promise<Knowledge
   // Properties don't have a long-form text body. The retrievable surfaces are
   // name (e.g. "yield", "logP") and value_text. Use ILIKE for partial matches
   // on both; the table is bounded by SAR data volume.
+  //
+  // Wave-3h security: escape LIKE wildcards in the query so a user-supplied
+  // `%` or `_` can't force a leading-wildcard pattern that scans the whole
+  // index. Backslash is the default escape char for LIKE.
+  const escaped = query.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&');
+  const pattern = `%${escaped}%`;
   const rows = await db
     .select({
       id: properties.id,
@@ -186,8 +192,8 @@ async function lookupProperties(query: string, limit: number): Promise<Knowledge
       unit: properties.unit,
     })
     .from(properties)
-    .where(sql`${properties.name} ILIKE ${'%' + query + '%'}
-              OR ${properties.valueText} ILIKE ${'%' + query + '%'}`)
+    .where(sql`${properties.name} ILIKE ${pattern}
+              OR ${properties.valueText} ILIKE ${pattern}`)
     .limit(limit);
   return rows.map((r, i) => ({
     type: 'property' as const,
