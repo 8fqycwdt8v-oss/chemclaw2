@@ -1,0 +1,47 @@
+[project]
+name = "chemclaw2-backend"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "sqlalchemy[asyncio]>=2.0",
+  "asyncpg>=0.30",
+  "alembic>=1.14",
+  "claude-agent-sdk>=0.2.82",
+  "anthropic>=0.40",
+  "openai>=1.50",
+  "pyjwt[crypto]>=2.9",
+  "httpx>=0.28",
+  "python-multipart>=0.0.9",
+  "pgvector>=0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "httpx>=0.28",
+  "mypy>=1.10",
+]
+chem = [
+  "rdkit>=2024.3",
+  "drfp>=0.3",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["api*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["api"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
