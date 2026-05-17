@@ -1,6 +1,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import { randomUUID } from 'crypto';
+import { logger } from '@chemclaw2/observability';
 
 const encoder = new TextEncoder();
 const LOOP_THRESHOLD = 3;
@@ -80,16 +81,40 @@ export async function* runAgentQuery(
   onResult?: (r: AgentStreamResult) => void,
 ): AsyncGenerator<Uint8Array> {
   const detect = makeLoopDetector();
+  const startMs = Date.now();
+  let firstChunk = true;
+  let eventCount = 0;
   for await (const event of query({ prompt, options })) {
+    if (firstChunk) {
+      logger.info('agent_stream_ttfb', { ttfb_ms: Date.now() - startMs, session_id: options.resume });
+      firstChunk = false;
+    }
+    eventCount++;
     yield sseEvent(event);
     const result = extractResult(event);
-    if (result && onResult) onResult(result);
+    if (result) {
+      logger.info('agent_stream_complete', {
+        session_id: options.resume,
+        duration_ms: Date.now() - startMs,
+        event_count: eventCount,
+        input_tokens: result.inputTokens,
+        output_tokens: result.outputTokens,
+        total_cost_usd: result.totalCostUsd,
+        is_error: result.isError,
+      });
+      if (onResult) onResult(result);
+    }
     const message = (event as { message?: { content?: unknown[] } }).message;
     if (message && Array.isArray(message.content)) {
       for (const block of message.content as Array<Record<string, unknown>>) {
         if (block.type !== 'tool_use') continue;
         const looped = detect(String(block.name ?? ''), block.input);
         if (looped) {
+          logger.warn('agent_loop_detected', {
+            session_id: options.resume,
+            tool: looped,
+            threshold: LOOP_THRESHOLD,
+          });
           yield sseEvent({
             type: 'error',
             message: `Loop detected — ${looped} called ${LOOP_THRESHOLD} times in a row with identical input. Stopping.`,
@@ -108,9 +133,12 @@ export function agentToStream(
 ): ReadableStream<Uint8Array> {
   return new ReadableStream({
     async start(controller) {
-      let lastResult: AgentStreamResult | null = null;
+      // Holder pattern so TS sees the inner callback assignment as a possible
+      // mutation; declaring `let lastResult` directly narrows to `null` because
+      // the closure assignment is invisible to the flow analysis.
+      const sink: { value: AgentStreamResult | null } = { value: null };
       try {
-        for await (const chunk of runAgentQuery(prompt, options, (r) => { lastResult = r; })) {
+        for await (const chunk of runAgentQuery(prompt, options, (r) => { sink.value = r; })) {
           controller.enqueue(chunk);
         }
         // [DONE] only on success — clients stop reading at this sentinel
@@ -119,15 +147,23 @@ export function agentToStream(
         // Log full error server-side; send only a correlation ID to the client
         // to avoid leaking internal state (DB details, stack traces, API responses).
         const errorId = randomUUID();
-        console.error({ errorId, err });
+        logger.error('agent_stream_failed', { error_id: errorId, session_id: options.resume }, err);
         controller.enqueue(sseEvent({ type: 'error', message: 'Request failed', errorId }));
       } finally {
         // Wave-2c: surface end-of-stream usage to the caller for budget
         // accounting. Run AFTER the [DONE] sentinel is sent so a slow DB
         // write doesn't delay the client closing the connection.
-        if (lastResult && streamOpts.onResult) {
-          try { await streamOpts.onResult(lastResult); }
-          catch (err) { console.error('[stream] onResult callback failed:', err); }
+        const finalResult = sink.value;
+        if (finalResult && streamOpts.onResult) {
+          try { await streamOpts.onResult(finalResult); }
+          catch (err) {
+            logger.error('on_result_callback_failed', {
+              session_id: options.resume,
+              input_tokens: finalResult.inputTokens,
+              output_tokens: finalResult.outputTokens,
+              total_cost_usd: finalResult.totalCostUsd,
+            }, err);
+          }
         }
         controller.close();
       }

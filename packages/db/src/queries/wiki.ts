@@ -25,6 +25,7 @@ export {
   type SemanticSearchResult,
 } from './wiki-search';
 
+
 /**
  * Optional metadata applied at upsert time. Distinct from PATCH-only fields
  * because agent writes set these on creation (needs_review=true for agent-

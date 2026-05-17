@@ -1,12 +1,18 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    // Process handlers must run in the same Node runtime as the route
+    // handlers; the edge runtime cannot install them. Idempotent.
+    const { installProcessHandlers } = await import('@chemclaw2/observability');
+    installProcessHandlers('web');
+
     const { webEnv } = await import('./lib/env');
     const { LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASEURL, NODE_ENV } = webEnv();
     if (!LANGFUSE_PUBLIC_KEY || !LANGFUSE_SECRET_KEY) {
       if (NODE_ENV === 'production') {
         throw new Error('LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are required in production');
       }
-      console.warn('Langfuse keys missing — OTel tracing disabled');
+      const { logger } = await import('@chemclaw2/observability');
+      logger.warn('langfuse_keys_missing_tracing_disabled');
       return;
     }
 

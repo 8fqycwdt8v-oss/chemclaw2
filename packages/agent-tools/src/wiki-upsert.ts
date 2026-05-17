@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { upsertWikiPage } from '@chemclaw2/db';
+import { logger } from '@chemclaw2/observability';
 import { isValidSlug } from './slug';
 import { markdownToTiptap } from './markdown-to-tiptap';
 import { validateCitations } from './citation-validation';
@@ -66,9 +67,13 @@ export function createWikiUpsertTool(
       if (!v.ok) return { error: `citation validation: ${v.reason}` };
 
       const doc = markdownToTiptap(input.content_text);
-      if (!isValidTiptapDoc(doc)) return { error: 'internal: markdown conversion produced an invalid Tiptap doc' };
+      if (!isValidTiptapDoc(doc)) {
+        logger.warn('tiptap_validation_failed', { slug: input.slug, body_len: input.content_text.length, source: 'wiki_upsert' });
+        return { error: 'internal: markdown conversion produced an invalid Tiptap doc' };
+      }
 
       try {
+        const startMs = Date.now();
         const id = await upsertWikiPage(
           input.slug,
           input.title,
@@ -79,8 +84,16 @@ export function createWikiUpsertTool(
           embedFn,
           { project: input.project, needsReview: true },
         );
+        logger.info('wiki_upsert_complete', {
+          slug: input.slug,
+          page_id: id,
+          body_len: input.content_text.length,
+          citation_count: citations.length,
+          duration_ms: Date.now() - startMs,
+        });
         return { id, slug: input.slug, project: input.project, needs_review: true };
       } catch (err) {
+        logger.error('wiki_upsert_failed', { slug: input.slug, user_id: userId }, err);
         return toolError('wiki_upsert', err);
       }
     },

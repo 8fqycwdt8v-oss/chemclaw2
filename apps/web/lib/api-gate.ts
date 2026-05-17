@@ -1,7 +1,9 @@
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { logger } from '@chemclaw2/observability';
 import { rateLimit } from './rate-limit';
+import { withApiContext } from './api-context';
 
 /**
  * Single response envelope for all API errors. Body shape is `{ error }` plus
@@ -42,9 +44,13 @@ export async function requireUserWithRateLimit(
   rateLimitedMessage = 'Too many requests',
 ): Promise<{ userId: string } | NextResponse> {
   const { userId } = await auth();
-  if (!userId) return errorResponse('Unauthorized', 401);
+  if (!userId) {
+    logger.info('auth_denied', { route: key });
+    return errorResponse('Unauthorized', 401);
+  }
   const { limited } = await rateLimit(`${key}:${userId}`, max, windowMs);
   if (limited) {
+    logger.warn('rate_limit_hit', { route: key, user_id: userId, max, window_ms: windowMs });
     return errorResponse(rateLimitedMessage, 429, undefined, { 'Retry-After': '60' });
   }
   return { userId };
@@ -52,10 +58,16 @@ export async function requireUserWithRateLimit(
 
 export async function requireAdminApi(): Promise<NextResponse | { userId: string }> {
   const { userId } = await auth();
-  if (!userId) return errorResponse('Unauthorized', 401);
+  if (!userId) {
+    logger.info('admin_auth_denied', {});
+    return errorResponse('Unauthorized', 401);
+  }
   const user = await currentUser();
   const role = (user?.publicMetadata as { role?: string } | undefined)?.role;
-  if (role !== 'admin') return errorResponse('Forbidden — admin role required', 403);
+  if (role !== 'admin') {
+    logger.warn('admin_role_required', { user_id: userId, role: role ?? null });
+    return errorResponse('Forbidden — admin role required', 403);
+  }
   return { userId };
 }
 
@@ -91,11 +103,12 @@ export function withRoute<S extends z.ZodTypeAny | undefined = undefined>(
   config: RouteConfig<S>,
   handler: (ctx: RouteContext<S>) => Promise<NextResponse | Response>,
 ): (req: NextRequest) => Promise<NextResponse | Response> {
-  return async (req: NextRequest) => {
-    const { ctx, error } = await runGate(req, config);
-    if (error) return error;
-    return handler(ctx as RouteContext<S>);
-  };
+  return (req: NextRequest) =>
+    withApiContext(async () => {
+      const { ctx, error } = await runGate(req, config);
+      if (error) return error;
+      return handler(ctx as RouteContext<S>);
+    });
 }
 
 export type ParamRouteContext<S extends z.ZodTypeAny | undefined, P> = RouteContext<S> & {
@@ -106,12 +119,13 @@ export function withRouteParams<P, S extends z.ZodTypeAny | undefined = undefine
   config: RouteConfig<S>,
   handler: (ctx: ParamRouteContext<S, P>) => Promise<NextResponse | Response>,
 ): (req: NextRequest, args: { params: Promise<P> }) => Promise<NextResponse | Response> {
-  return async (req: NextRequest, args: { params: Promise<P> }) => {
-    const { ctx, error } = await runGate(req, config);
-    if (error) return error;
-    const params = await args.params;
-    return handler({ ...(ctx as RouteContext<S>), params });
-  };
+  return (req: NextRequest, args: { params: Promise<P> }) =>
+    withApiContext(async () => {
+      const { ctx, error } = await runGate(req, config);
+      if (error) return error;
+      const params = await args.params;
+      return handler({ ...(ctx as RouteContext<S>), params });
+    });
 }
 
 async function runGate<S extends z.ZodTypeAny | undefined>(
@@ -152,6 +166,12 @@ async function runGate<S extends z.ZodTypeAny | undefined>(
       config.rateLimit.windowMs,
     );
     if (limited) {
+      logger.warn('rate_limit_hit', {
+        route: config.rateLimit.key,
+        user_id: userId,
+        max: config.rateLimit.max,
+        window_ms: config.rateLimit.windowMs,
+      });
       return {
         ctx: null,
         error: errorResponse(
@@ -169,11 +189,18 @@ async function runGate<S extends z.ZodTypeAny | undefined>(
     let raw: unknown;
     try {
       raw = await req.json();
-    } catch {
+    } catch (err) {
+      logger.warn('json_parse_failed', { route: config.rateLimit?.key }, err);
       return { ctx: null, error: errorResponse('Invalid JSON', 400) };
     }
     const parsed = config.body.safeParse(raw);
     if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      logger.info('validation_rejected', {
+        route: config.rateLimit?.key,
+        field: first?.path.join('.'),
+        reason: first?.code,
+      });
       return { ctx: null, error: zodErrorResponse(parsed.error) };
     }
     body = parsed.data;

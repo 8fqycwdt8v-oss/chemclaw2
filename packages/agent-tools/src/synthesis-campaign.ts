@@ -4,10 +4,11 @@ import {
   updateCampaignStatusForUser,
   getCampaignBySession,
   getCampaignWithStepsForUser,
-  addCampaignStep,
+  confirmCampaignPlanForUser,
   replaceSessionTodos,
   startPendingStepsForUser,
 } from '@chemclaw2/db';
+import { logger } from '@chemclaw2/observability';
 import { UUID_RE } from './uuid';
 import type { ToolDef } from './tool-def';
 
@@ -71,21 +72,20 @@ export function createSynthesisCampaignTools(userId: string): {
         return { error: `Plan exceeds maximum of ${MAX_STEPS} synthesis steps` };
       }
 
-      const { found } = await updateCampaignStatusForUser(
+      // Status flip + step inserts run in one transaction so a mid-loop
+      // insert failure can't leave the campaign wedged in awaiting_input
+      // with a partial step list.
+      const stepRows = allSteps.map((s) => ({
+        reactionSmiles: typeof s.reaction_smiles === 'string' ? s.reaction_smiles : undefined,
+        conditions: typeof s.conditions === 'string' ? s.conditions : undefined,
+      }));
+      const { found } = await confirmCampaignPlanForUser(
         input.campaign_id,
         userId,
-        'awaiting_input',
         input.plan,
+        stepRows,
       );
       if (!found) return { error: 'Campaign not found or access denied' };
-
-      for (let i = 0; i < allSteps.length; i++) {
-        const s = allSteps[i];
-        await addCampaignStep(input.campaign_id, i, {
-          reactionSmiles: typeof s.reaction_smiles === 'string' ? s.reaction_smiles : undefined,
-          conditions: typeof s.conditions === 'string' ? s.conditions : undefined,
-        });
-      }
 
       return { status: 'awaiting_input', message: 'Plan saved. Waiting for user confirmation.', steps_created: allSteps.length };
     },
@@ -113,7 +113,13 @@ export function createSynthesisCampaignTools(userId: string): {
         perStepApproval: input.approval === 'per_step',
       });
 
-      const owned = await getCampaignWithStepsForUser(input.campaign_id, userId).catch(() => null);
+      // Seed agent_todos so the campaign's step list surfaces in the chat UI
+      // todo panel alongside deep-research checklists. Best-effort: a
+      // persistence failure here must not block the kickoff itself.
+      const owned = await getCampaignWithStepsForUser(input.campaign_id, userId).catch((err) => {
+        logger.error('get_campaign_with_steps_failed', { campaign_id: input.campaign_id, user_id: userId }, err);
+        return null;
+      });
       if (owned) {
         const items = owned.steps.map((s, i) => {
           const desc = s.reactionSmiles ?? s.conditions ?? '(step body pending)';
@@ -121,7 +127,11 @@ export function createSynthesisCampaignTools(userId: string): {
         });
         if (items.length > 0) {
           await replaceSessionTodos(owned.campaign.sessionId, userId, items).catch((err) => {
-            console.error('[kickoff_campaign] replaceSessionTodos failed:', err);
+            logger.error('replace_session_todos_failed', {
+              session_id: owned.campaign.sessionId,
+              user_id: userId,
+              item_count: items.length,
+            }, err);
           });
         }
       }

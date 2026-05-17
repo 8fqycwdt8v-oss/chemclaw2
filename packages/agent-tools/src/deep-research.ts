@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { upsertWikiPage, markAllTodosDone } from '@chemclaw2/db';
+import { logger } from '@chemclaw2/observability';
 import { isValidSlug } from './slug';
 import { markdownToTiptap } from './markdown-to-tiptap';
 import { validateCitations } from './citation-validation';
@@ -57,9 +58,13 @@ export function createDeepResearchTools(
       if (!v.ok) return { error: `citation validation: ${v.reason}` };
 
       const doc = markdownToTiptap(input.body);
-      if (!isValidTiptapDoc(doc)) return { error: 'internal: markdown conversion produced an invalid Tiptap doc' };
+      if (!isValidTiptapDoc(doc)) {
+        logger.warn('tiptap_validation_failed', { slug: input.slug, body_len: input.body.length, source: 'deep_research' });
+        return { error: 'internal: markdown conversion produced an invalid Tiptap doc' };
+      }
 
       try {
+        const startMs = Date.now();
         const id = await upsertWikiPage(
           input.slug,
           input.title,
@@ -70,13 +75,21 @@ export function createDeepResearchTools(
           embedFn,
           { needsReview: true },
         );
+        logger.info('deep_research_finalized', {
+          slug: input.slug,
+          page_id: id,
+          body_len: input.body.length,
+          citation_count: citations.length,
+          duration_ms: Date.now() - startMs,
+        });
         if (sessionId) {
           await markAllTodosDone(sessionId).catch((err) => {
-            console.error('[deep-research] markAllTodosDone failed:', err);
+            logger.error('mark_all_todos_done_failed', { session_id: sessionId }, err);
           });
         }
         return { wiki_page_id: id, slug: input.slug, url: `/wiki/${input.slug}`, needs_review: true };
       } catch (err) {
+        logger.error('deep_research_upsert_failed', { slug: input.slug }, err);
         return toolError('finalize_deep_research', err);
       }
     },

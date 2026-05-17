@@ -139,5 +139,6 @@ export async function insertCompound(
     .insert(compounds)
     .values({ smiles, createdBy, name: opts?.name, casNumber: opts?.casNumber })
     .returning({ id: compounds.id });
+  if (!row) throw new Error('insertCompound: insert returned no row');
   return row.id;
 }

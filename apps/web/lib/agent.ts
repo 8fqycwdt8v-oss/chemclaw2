@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import { scopedSessionStore } from '@chemclaw2/db/session-store';
 import { getBudgetWithSpend, type BudgetWithSpend } from '@chemclaw2/db';
+import { logger } from '@chemclaw2/observability';
 import { buildInProcessMcpServer, subagentToolNames } from './sdk-tools';
 import { buildHooks } from './agent-hooks';
 import { DEEP_RESEARCH_PROMPT, CONTRADICTION_RESOLVER_PROMPT } from './subagent-prompts';
@@ -79,7 +80,7 @@ export function buildQueryOptions(
   const getBudget = (): Promise<BudgetWithSpend | null> => {
     if (!budgetCache) {
       budgetCache = getBudgetWithSpend(projectKey).catch((err) => {
-        console.error('[agent] budget lookup failed:', err);
+        logger.error('budget_lookup_failed', { project_key: projectKey, user_id: userId }, err);
         return null;
       });
     }

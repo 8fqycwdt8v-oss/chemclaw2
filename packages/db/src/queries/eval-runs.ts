@@ -20,6 +20,7 @@ export async function insertEvalRun(opts: {
       notes: opts.notes,
     })
     .returning({ id: evalRuns.id });
+  if (!row) throw new Error('insertEvalRun: insert returned no row');
   return row.id;
 }
 

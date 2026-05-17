@@ -2,6 +2,7 @@ import dns from 'dns';
 import { z } from 'zod';
 import ipaddr from 'ipaddr.js';
 import { recordExternalFactSafe } from '@chemclaw2/db';
+import { logger } from '@chemclaw2/observability';
 import type { ToolDef } from './tool-def';
 
 const ELN_BASE = process.env.ELN_API_BASE_URL ?? '';
@@ -56,28 +57,58 @@ export const elnFetchTool: ToolDef<typeof elnFetchSchema> = {
       return { error: 'Constructed URL does not match ELN_API_BASE_URL origin' };
     }
 
-    const res = await fetch(targetUrl.toString(), {
-      redirect: 'error',
-      headers: {
-        Authorization: `Bearer ${ELN_KEY}`,
-        Accept: 'application/json',
-      },
-    });
+    const startMs = Date.now();
+    let res: Response;
+    try {
+      res = await fetch(targetUrl.toString(), {
+        redirect: 'error',
+        headers: {
+          Authorization: `Bearer ${ELN_KEY}`,
+          Accept: 'application/json',
+        },
+      });
+    } catch (err) {
+      logger.error('eln_fetch_failed', {
+        experiment_id: input.experiment_id,
+        duration_ms: Date.now() - startMs,
+      }, err);
+      return { error: 'ELN fetch failed' };
+    }
 
-    if (!res.ok) return { error: `ELN responded with HTTP ${res.status}` };
+    if (!res.ok) {
+      logger.warn('eln_http_error', {
+        experiment_id: input.experiment_id,
+        status: res.status,
+        duration_ms: Date.now() - startMs,
+      });
+      return { error: `ELN responded with HTTP ${res.status}` };
+    }
 
     // Guard response size before parsing — prevents OOM on unexpectedly large ELN records
     const MAX_BYTES = 500_000;
     const raw = await res.text();
     if (Buffer.byteLength(raw, 'utf8') > MAX_BYTES) {
+      logger.warn('eln_oversized_response', {
+        experiment_id: input.experiment_id,
+        bytes: Buffer.byteLength(raw, 'utf8'),
+      });
       return { error: 'ELN response exceeds size limit (500 KB)' };
     }
     let data: Record<string, unknown>;
     try {
       data = JSON.parse(raw) as Record<string, unknown>;
-    } catch {
+    } catch (err) {
+      logger.warn('eln_json_parse_failed', {
+        experiment_id: input.experiment_id,
+        sample: raw.slice(0, 300),
+        length: raw.length,
+      }, err);
       return { error: 'ELN response is not valid JSON' };
     }
+    logger.info('eln_fetch_complete', {
+      experiment_id: input.experiment_id,
+      duration_ms: Date.now() - startMs,
+    });
     return { experiment_id: input.experiment_id, data };
   },
 };
