@@ -186,10 +186,19 @@ async function start() {
   }
 
   await pollMissingFingerprints();
-  const pollInterval = setInterval(
-    () => pollMissingFingerprints().catch((err) => logger.error('fp_poll_tick_failed', {}, err)),
-    30_000,
-  );
+  // Wrap the async call so a synchronous throw before the first `await`
+  // inside pollMissingFingerprints is also caught — a bare `.catch()` on the
+  // returned promise misses sync throws and they bubble up as unhandled
+  // rejections that may kill the worker (Node ≥15).
+  const pollInterval = setInterval(() => {
+    void (async () => {
+      try {
+        await pollMissingFingerprints();
+      } catch (err) {
+        logger.error('fp_poll_tick_failed', {}, err);
+      }
+    })();
+  }, 30_000);
 
   // Liveness heartbeat. A worker that is alive but stuck (blocked on a hung
   // MCP child, deadlocked on a transaction) was previously indistinguishable

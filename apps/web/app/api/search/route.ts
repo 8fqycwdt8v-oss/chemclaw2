@@ -120,6 +120,8 @@ export async function POST(req: Request) {
         const candidates = await listCompoundsForSubstructure(1000);
         const results: Array<{ id: string; smiles: string; canonSmiles: string | null; name: string | null; casNumber: string | null }> = [];
         let mcpFailures = 0;
+        let consecutiveMcpFailures = 0;
+        const MAX_CONSECUTIVE_MCP_FAILURES = 10;
         // Sequential to avoid spawning hundreds of Python procs concurrently.
         // For larger datasets, switch to the RDKit Postgres cartridge (deferred).
         for (const c of candidates) {
@@ -130,10 +132,29 @@ export async function POST(req: Request) {
               smarts,
             });
             if (r.match === true) results.push(c);
+            consecutiveMcpFailures = 0;
           } catch {
             // Skip individual failures; aggregate count for a single log line
             // at the end so a broken MCP doesn't masquerade as "no results".
+            // A sustained burst of failures means the transport itself is
+            // unstable — bail out with a 502 rather than silently truncating.
             mcpFailures++;
+            consecutiveMcpFailures++;
+            if (consecutiveMcpFailures >= MAX_CONSECUTIVE_MCP_FAILURES) {
+              logger.error('substructure_mcp_unstable', {
+                route: 'search',
+                consecutive_failures: consecutiveMcpFailures,
+                total_failures: mcpFailures,
+                result_count: results.length,
+              });
+              return NextResponse.json(
+                {
+                  error: 'Substructure search MCP transport unstable',
+                  detail: `${consecutiveMcpFailures} consecutive failures; partial results withheld`,
+                },
+                { status: 502 },
+              );
+            }
           }
         }
         if (mcpFailures > 0) {
@@ -144,7 +165,11 @@ export async function POST(req: Request) {
             result_count: results.length,
           });
         }
-        return NextResponse.json({ type: 'substructure', results });
+        return NextResponse.json({
+          type: 'substructure',
+          results,
+          ...(mcpFailures > 0 ? { partial: true, mcp_failures: mcpFailures } : {}),
+        });
       } catch (err) {
         logger.error('substructure_search_failed', { route: 'search', smarts_len: smarts.length }, err);
         return NextResponse.json({ error: (err as Error).message }, { status: 502 });

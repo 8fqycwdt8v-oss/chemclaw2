@@ -40,7 +40,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
     let body: { comment?: unknown } = {};
     try {
-      body = req.body ? (await req.json()) as typeof body : {};
+      // Clients always send a JSON object (possibly `{}`), so just parse and
+      // catch. The previous `req.body ? ...` check was unreliable: `req.body`
+      // is a stream and truthiness doesn't tell us whether the body is safe
+      // to read.
+      body = (await req.json()) as typeof body;
     } catch (err) {
       logger.warn('json_parse_failed', { route: 'admin_apply' }, err);
       return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });

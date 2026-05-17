@@ -29,6 +29,10 @@ export async function pgRateLimit(
 
     // count reflects the post-increment value for this request (INSERT starts at 1).
     // Use > so that the maxRequests-th request is still allowed; only the (maxRequests+1)-th is blocked.
+    if (!row) {
+      logger.error('rate_limit_no_row_returned', { key, max_requests: maxRequests });
+      return { limited: false };
+    }
     return { limited: row.count > maxRequests };
   } catch (err) {
     // Fail open — a DB outage should degrade gracefully, not block all users.

@@ -28,7 +28,7 @@ export function ReviewActions({ proposalId }: { proposalId: string }) {
       setDone({ kind: 'apply', pageId: body?.page_id ?? '' });
       router.refresh();
     } catch (err) {
-      setError((err as Error).message);
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
     }
@@ -54,7 +54,7 @@ export function ReviewActions({ proposalId }: { proposalId: string }) {
       setDone({ kind: 'reject' });
       router.refresh();
     } catch (err) {
-      setError((err as Error).message);
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
     }

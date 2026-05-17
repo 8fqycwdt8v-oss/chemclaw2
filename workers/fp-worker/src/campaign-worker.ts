@@ -182,6 +182,10 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
       } catch (err) {
         await markStepFailed(stepId, claimed.retryCount);
         logger.error('campaign_step_failed', { step_id: stepId, campaign_id: claimed.campaignId, attempt: claimed.retryCount, duration_ms: Date.now() - stepStart }, err);
+        // Re-throw so pg-boss records the job as failed and the queue's retry
+        // policy fires. Without this the DB row says 'failed' while the queue
+        // marks the job complete, and the step stalls until manual re-enqueue.
+        throw err;
       }
     }
   });
