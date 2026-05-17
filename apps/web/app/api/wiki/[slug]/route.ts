@@ -119,7 +119,7 @@ export async function PUT(
   const id = await upsertWikiPage(
     slug,
     body.title ?? existing.title,
-    body.content ?? existing.content as Record<string, unknown>,
+    body.content ?? existing.content,
     body.contentText ?? existing.contentText,
     userId,
     citations,
