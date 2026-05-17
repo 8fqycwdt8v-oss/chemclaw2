@@ -73,12 +73,17 @@ async def eln_webhook(
         fetched_by="eln-webhook",
     )
 
+    # Use fresh sessions for each SMILES insert so a failure on one compound
+    # does not leave the request-scoped session in an error state.
+    from api.db.connection import async_session_factory
     for key in ("smiles", "product_smiles", "reactant_smiles"):
         smiles = body.data.get(key)
         if smiles and isinstance(smiles, str) and smiles.strip():
             try:
-                async with db.begin():
-                    await insert_compound(db, smiles.strip(), created_by="eln-webhook")
+                if async_session_factory is not None:
+                    async with async_session_factory() as cdb:
+                        async with cdb.begin():
+                            await insert_compound(cdb, smiles.strip(), created_by="eln-webhook")
             except Exception:
                 logger.exception(
                     "eln_webhook_insert_compound_failed",

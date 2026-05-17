@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +21,7 @@ router = APIRouter()
 
 class TodoItem(BaseModel):
     text: str
-    status: str  # "pending" | "done"
+    status: Literal["pending", "done"]
     position: int
 
 
@@ -28,7 +30,7 @@ class TodosPutBody(BaseModel):
 
 
 class TodoPatchBody(BaseModel):
-    status: str  # must be "done"
+    status: Literal["done"]
 
 
 @router.get("/api/todos/{session_id}")
@@ -37,6 +39,9 @@ async def get_todos(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
+    limited = await pg_rate_limit(db, f"todos-read:{user_id}", 60, 60_000)
+    if limited["limited"]:
+        raise HTTPException(status_code=429, detail="Too many requests")
     todos = await list_todos(db, session_id, user_id)
     return {"todos": todos}
 
@@ -66,8 +71,6 @@ async def patch_todo(
     limited = await pg_rate_limit(db, f"todos-patch:{user_id}", 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
-    if body.status != "done":
-        raise HTTPException(status_code=400, detail="Only status='done' is supported")
     updated = await mark_todo_done(db, todo_id, user_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Todo not found")

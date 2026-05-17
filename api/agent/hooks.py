@@ -136,11 +136,12 @@ def build_hooks(user_id: str, project_key: str, db_factory: Any) -> dict[str, li
             from api.db.queries.budgets import get_budget_with_spend
             async with db_factory() as db:
                 budget_info = await get_budget_with_spend(db, project_key)
-            if budget_info and budget_info.get("budget"):
-                budget = budget_info["budget"]
+            # get_budget_with_spend returns a flat dict: cap fields at top level,
+            # spend sub-dict under "spend" key with column names tool_calls/experiments/tokens.
+            if budget_info:
                 spend = budget_info.get("spend") or {}
-                cap = budget.get("tool_calls_cap")
-                used = spend.get("tool_calls_used", 0) or 0
+                cap = budget_info.get("tool_calls_cap")
+                used = spend.get("tool_calls", 0) or 0
                 if cap is not None and used >= cap:
                     logger.warning(
                         "budget_cap_exceeded project=%s tool=%s used=%d cap=%d",
@@ -148,7 +149,7 @@ def build_hooks(user_id: str, project_key: str, db_factory: Any) -> dict[str, li
                     )
                     return {"decision": "block", "reason": f"Tool call budget exhausted ({used}/{cap} calls used this period)."}
                 # Warn when within 10% of cap.
-                if cap is not None and cap > 0 and used >= cap * 0.9:
+                if cap is not None and cap > 0 and (used / cap) >= 0.9:
                     logger.warning(
                         "budget_cap_near project=%s tool=%s used=%d cap=%d",
                         project_key, tool_name, used, cap,

@@ -45,6 +45,29 @@ async def audit_overrides(
     return {"overrides": overrides}
 
 
+@router.get("/api/audit/redactions")
+async def audit_redactions(
+    session_id: str | None = Query(None),
+    user_id_filter: str | None = Query(None, alias="user_id"),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    admin_id: str = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """List tool-call redaction events (gate_name='redaction'). Admin only."""
+    limited = await pg_rate_limit(db, f"audit-redactions:{admin_id}", 30, 60_000)
+    if limited["limited"]:
+        logger.warning("audit_redactions_rate_limited admin=%s", admin_id)
+        raise HTTPException(status_code=429, detail="Too many requests")
+    overrides = await list_overrides(
+        db,
+        user_id=user_id_filter,
+        session_id=session_id,
+        gate_name="redaction",
+        limit=limit,
+    )
+    return {"redactions": overrides}
+
+
 @router.get("/api/audit/sessions/{session_id}")
 async def audit_session_replay(
     session_id: str,

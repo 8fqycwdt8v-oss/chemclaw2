@@ -56,6 +56,7 @@ ALLOWED_DOMAINS = [
     'nature.com',
     'sciencedirect.com',
     'elsevier.com',
+    'ich.org',
 ]
 
 
@@ -346,7 +347,7 @@ def build_chemclaw_mcp_server(
     # ── record feedback ───────────────────────────────────────────────────────
     @mcp.tool()
     async def record_feedback(
-        session_id_: str,
+        session_id: str,
         turn_index: int,
         score: int,
         reason: str | None = None,
@@ -356,7 +357,7 @@ def build_chemclaw_mcp_server(
             return {"ok": False, "error": "score must be 1 or -1"}
         from api.db.queries.feedback import record_feedback as _record_feedback
         async with session_factory() as db:
-            feedback_id = await _record_feedback(db, session_id_, turn_index, score, user_id, reason)
+            feedback_id = await _record_feedback(db, session_id, turn_index, score, user_id, reason)
         return {"ok": True, "id": feedback_id}
 
     # ── lookup_knowledge ──────────────────────────────────────────────────────
@@ -424,7 +425,7 @@ def build_chemclaw_mcp_server(
     @mcp.tool()
     async def record_external_fact(
         source_type: str,
-        source_id_: str,
+        source_id: str,
         content_text: str,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -432,7 +433,7 @@ def build_chemclaw_mcp_server(
         from api.db.queries.knowledge import upsert_external_fact
         async with session_factory() as db:
             fact_id, _ = await upsert_external_fact(
-                db, source_type, source_id_, payload or {}, content_text, fetched_by=user_id
+                db, source_type, source_id, payload or {}, content_text, fetched_by=user_id
             )
         return {"id": fact_id}
 
@@ -459,6 +460,36 @@ def build_chemclaw_mcp_server(
                 source_citation_id=source_citation_id,
             )
         return {"id": prop_id}
+
+    # ── verify_citation ───────────────────────────────────────────────────────
+    @mcp.tool()
+    async def verify_citation(citation_id: str) -> dict[str, Any]:
+        """Check whether a wiki citation's underlying source still resolves.
+
+        Looks up external_facts by source_id, checks last_seen freshness, and returns
+        whether the fact is still current (last_seen within 30 days).
+        """
+        from sqlalchemy import text as sa_text
+        from datetime import datetime as _dt, timezone, timedelta
+        async with session_factory() as db:
+            result = await db.execute(
+                sa_text("SELECT source_type, last_seen FROM external_facts WHERE source_id = :sid LIMIT 1"),
+                {"sid": citation_id},
+            )
+            row = result.one_or_none()
+        if not row:
+            return {"found": False, "source_type": None, "last_seen": None, "stale": None}
+        cutoff = _dt.now(tz=timezone.utc) - timedelta(days=30)
+        last_seen = row.last_seen
+        is_stale = last_seen is None or (
+            hasattr(last_seen, "tzinfo") and last_seen.replace(tzinfo=timezone.utc) < cutoff
+        )
+        return {
+            "found": True,
+            "source_type": row.source_type,
+            "last_seen": last_seen.isoformat() if hasattr(last_seen, "isoformat") else str(last_seen),
+            "stale": is_stale,
+        }
 
     # ── record_contradiction ──────────────────────────────────────────────────
     @mcp.tool()
@@ -506,8 +537,6 @@ def build_chemclaw_mcp_server(
         "ICH M7": "https://www.ich.org/page/multidisciplinary-guidelines",
     }
 
-    ALLOWED_DOMAINS.append("ich.org")
-
     @mcp.tool()
     async def lookup_regulatory_guidance(
         guideline: str,
@@ -519,7 +548,6 @@ def build_chemclaw_mcp_server(
         Returns the guideline page text or a topic-filtered excerpt.
         """
         from api.db.queries.knowledge import search_external_facts, upsert_external_fact
-        import time
         from datetime import timezone, timedelta
 
         guideline_key = guideline.strip().upper()

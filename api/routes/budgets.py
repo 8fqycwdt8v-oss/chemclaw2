@@ -43,6 +43,9 @@ async def get_budget(
     user_id: str = Depends(get_current_user),
 ):
     _check_ownership(project_key, user_id)
+    limited = await pg_rate_limit(db, f"budget-read:{user_id}", 60, 60_000)
+    if limited["limited"]:
+        raise HTTPException(status_code=429, detail="Too many requests")
     row = await get_budget_with_spend(db, project_key)
     if row is None:
         return {"budget": None, "spend": None}

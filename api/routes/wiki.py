@@ -6,6 +6,8 @@ import re
 from datetime import datetime
 from typing import Any
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -102,7 +104,7 @@ class WikiSeenBody(BaseModel):
 class ContradictionBody(BaseModel):
     citation_a: str
     citation_b: str
-    proposed_winner: str
+    proposed_winner: Literal["a", "b", "inconclusive"]
     reason: str
 
 
@@ -333,6 +335,9 @@ async def unsubscribe_wiki(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
+    limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
+    if limited["limited"]:
+        raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
@@ -347,6 +352,9 @@ async def mark_wiki_seen(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
+    limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
+    if limited["limited"]:
+        raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
@@ -386,8 +394,6 @@ async def create_wiki_contradiction(
     page = await get_wiki_page(db, slug)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
-    if body.proposed_winner not in ("a", "b", "inconclusive"):
-        raise HTTPException(status_code=400, detail="proposed_winner must be 'a', 'b', or 'inconclusive'")
     contradiction_id = await create_contradiction(
         db, page["id"], body.citation_a, body.citation_b,
         body.proposed_winner, body.reason,
@@ -402,6 +408,9 @@ async def resolve_wiki_contradiction(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
+    limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
+    if limited["limited"]:
+        raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug, include_archived=True)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")

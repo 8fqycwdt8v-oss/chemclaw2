@@ -17,6 +17,7 @@ from api.db.queries.admin import (
     list_tool_permissions,
     upsert_tool_permission,
 )
+from api.db.queries.rate_limit import pg_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -96,3 +97,45 @@ async def get_eval(
     if run is None:
         raise HTTPException(status_code=404, detail="Eval run not found")
     return run
+
+
+@router.get("/api/admin/health")
+async def admin_health(
+    db: AsyncSession = Depends(get_db),
+    admin_id: str = Depends(get_admin_user),
+) -> dict:
+    """Extended health check — worker status, queue depths, wiki backlog."""
+    from sqlalchemy import text
+    limited = await pg_rate_limit(db, f"admin-health:{admin_id}", 20, 60_000)
+    if limited["limited"]:
+        raise HTTPException(status_code=429, detail="Too many requests")
+    try:
+        campaign_queue = await db.execute(
+            text("SELECT COUNT(*) FROM campaigns WHERE status = 'running'")
+        )
+        running_campaigns = campaign_queue.scalar_one()
+    except Exception:
+        logger.exception("admin_health_campaign_queue_error")
+        running_campaigns = -1
+    try:
+        wiki_backlog = await db.execute(
+            text("SELECT COUNT(*) FROM wiki_pages WHERE needs_review = true AND archived = false")
+        )
+        wiki_needs_review = wiki_backlog.scalar_one()
+    except Exception:
+        logger.exception("admin_health_wiki_backlog_error")
+        wiki_needs_review = -1
+    try:
+        pending_steps = await db.execute(
+            text("SELECT COUNT(*) FROM campaign_steps WHERE status = 'pending'")
+        )
+        pending_step_count = pending_steps.scalar_one()
+    except Exception:
+        logger.exception("admin_health_pending_steps_error")
+        pending_step_count = -1
+    return {
+        "status": "ok",
+        "running_campaigns": running_campaigns,
+        "pending_campaign_steps": pending_step_count,
+        "wiki_needs_review": wiki_needs_review,
+    }

@@ -112,7 +112,6 @@ async def get_optional_user(authorization: str | None = Header(None)) -> str | N
 
 async def get_admin_user(authorization: str | None = Header(None)) -> str:
     """Dependency that requires the caller to be in ADMIN_USER_IDS env var."""
-    import os
     user_id = await get_current_user(authorization)
     raw = os.environ.get("ADMIN_USER_IDS", "")
     admin_ids = {x.strip() for x in raw.split(",") if x.strip()}

@@ -75,28 +75,30 @@ async def notification_stream(
     import asyncio
 
     async def gen():
+        in_flight = False
         while True:
-            if async_session_factory is None:
-                await asyncio.sleep(30)
-                continue
-            try:
-                async with async_session_factory() as db:
-                    items = await list_notifications(db, user_id, unread_only=True, limit=20)
-                serialized = [
-                    {
-                        **n,
-                        "created_at": (
-                            n["created_at"].isoformat()
-                            if hasattr(n["created_at"], "isoformat")
-                            else str(n["created_at"])
-                        ),
-                    }
-                    for n in items
-                ]
-                if serialized:
-                    yield f"data: {json.dumps({'type': 'notifications', 'items': serialized})}\n\n"
-            except Exception:
-                logger.exception("notification_stream_error user=%s", user_id)
+            if not in_flight and async_session_factory is not None:
+                in_flight = True
+                try:
+                    async with async_session_factory() as db:
+                        items = await list_notifications(db, user_id, unread_only=True, limit=20)
+                    serialized = [
+                        {
+                            **n,
+                            "created_at": (
+                                n["created_at"].isoformat()
+                                if hasattr(n["created_at"], "isoformat")
+                                else str(n["created_at"])
+                            ),
+                        }
+                        for n in items
+                    ]
+                    if serialized:
+                        yield f"data: {json.dumps({'type': 'notifications', 'items': serialized})}\n\n"
+                except Exception:
+                    logger.exception("notification_stream_error user=%s", user_id)
+                finally:
+                    in_flight = False
             await asyncio.sleep(30)
 
     return StreamingResponse(
