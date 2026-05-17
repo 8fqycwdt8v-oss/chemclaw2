@@ -1,29 +1,21 @@
-import { auth, currentUser } from '@clerk/nextjs/server';
+import { currentUser } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import {
   getWikiPage, getWikiPageCitations, upsertWikiPage, updateWikiMetadata, pointInTimeWiki,
 } from '@chemclaw2/db';
 import { embedTexts } from '../../../../lib/embeddings';
-import { rateLimit } from '@/lib/rate-limit';
-import { isValidSlug, isValidTiptapDoc } from '@/lib/validation';
+import { requireUserWithRateLimit } from '@/lib/api-gate';
+import { isValidSlug, isValidTiptapDoc, validateCitations } from '@/lib/validation';
 import {
-  MAX_TITLE_LEN, MAX_MARKDOWN_LEN as MAX_CONTENT_TEXT_LEN,
-  MAX_CITATIONS, MAX_PROJECT_LEN,
+  MAX_TITLE_LEN, MAX_MARKDOWN_LEN as MAX_CONTENT_TEXT_LEN, MAX_PROJECT_LEN,
 } from '@chemclaw2/agent-tools';
-
-const MAX_CITATION_FIELD_LEN = 1_000;
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const { limited } = await rateLimit(`wiki-read:${userId}`, 60, 60_000);
-  if (limited) {
-    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
-  }
+  const gate = await requireUserWithRateLimit('wiki-read', 60, 60_000);
+  if (gate instanceof NextResponse) return gate;
 
   const { slug } = await params;
   if (!isValidSlug(slug)) {
@@ -54,13 +46,9 @@ export async function PUT(
   req: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const { limited } = await rateLimit(`wiki:${userId}`, 20, 60_000);
-  if (limited) {
-    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
-  }
+  const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
+  if (gate instanceof NextResponse) return gate;
+  const { userId } = gate;
 
   const { slug } = await params;
   if (!isValidSlug(slug)) {
@@ -91,21 +79,8 @@ export async function PUT(
   if (typeof body.contentText === 'string' && body.contentText.length > MAX_CONTENT_TEXT_LEN) {
     return NextResponse.json({ error: 'contentText too large' }, { status: 413 });
   }
-  if (Array.isArray(body.citations)) {
-    if (body.citations.length > MAX_CITATIONS) {
-      return NextResponse.json({ error: 'too many citations' }, { status: 400 });
-    }
-    for (const c of body.citations) {
-      if (
-        typeof c.citationId !== 'string' || c.citationId.length > MAX_CITATION_FIELD_LEN ||
-        typeof c.sourceType !== 'string' || c.sourceType.length > MAX_CITATION_FIELD_LEN ||
-        typeof c.label !== 'string' || c.label.length > MAX_CITATION_FIELD_LEN ||
-        (c.sourceId !== undefined && (typeof c.sourceId !== 'string' || c.sourceId.length > MAX_CITATION_FIELD_LEN))
-      ) {
-        return NextResponse.json({ error: 'invalid citation fields' }, { status: 400 });
-      }
-    }
-  }
+  const citationError = validateCitations(body.citations);
+  if (citationError) return NextResponse.json({ error: citationError }, { status: 400 });
 
   // M5: reject malformed Tiptap docs on update.
   if (body.content !== undefined && !isValidTiptapDoc(body.content)) {
@@ -135,13 +110,9 @@ export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const { limited } = await rateLimit(`wiki:${userId}`, 20, 60_000);
-  if (limited) {
-    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
-  }
+  const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
+  if (gate instanceof NextResponse) return gate;
+  const { userId } = gate;
 
   const { slug } = await params;
   if (!isValidSlug(slug)) {

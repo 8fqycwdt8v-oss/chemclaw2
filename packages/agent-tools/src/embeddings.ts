@@ -58,16 +58,13 @@ export function stripMarkdownForEmbedding(text: string): string {
  * vectors back to chunks by index.
  */
 export function prepareEmbeddingInputs(texts: string[]): string[] {
-  const out: string[] = new Array(texts.length);
-  for (let i = 0; i < texts.length; i++) {
-    const t = texts[i];
+  return texts.map((t, i) => {
     if (typeof t !== 'string') {
       throw new Error(`prepareEmbeddingInputs: element ${i} is not a string (${typeof t})`);
     }
     if (t.trim().length === 0) {
       throw new Error(`prepareEmbeddingInputs: element ${i} is empty/whitespace`);
     }
-    out[i] = t.length > EMBED_CHAR_LIMIT ? t.slice(0, EMBED_CHAR_LIMIT) : t;
-  }
-  return out;
+    return t.length > EMBED_CHAR_LIMIT ? t.slice(0, EMBED_CHAR_LIMIT) : t;
+  });
 }

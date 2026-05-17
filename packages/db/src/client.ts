@@ -17,7 +17,7 @@ function poolMax(): number {
   const raw = process.env.DB_POOL_MAX;
   if (!raw) return 15;
   const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 && n <= 100 ? n : 15;
+  return n > 0 && n <= 100 ? n : 15;
 }
 
 function getDb() {

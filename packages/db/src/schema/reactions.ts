@@ -1,8 +1,5 @@
-import { customType, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-
-const bit2048 = customType<{ data: string }>({
-  dataType: () => 'bit(2048)',
-});
+import { pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bit2048 } from './custom-types';
 
 export const reactions = pgTable('reactions', {
   id: uuid('id').primaryKey().defaultRandom(),

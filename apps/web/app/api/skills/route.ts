@@ -1,11 +1,10 @@
 import { UUID_RE } from '@/lib/validation';
-import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { replaySession } from '@chemclaw2/db';
-import { rateLimit } from '@/lib/rate-limit';
+import { requireUserWithRateLimit } from '@/lib/api-gate';
 
 const SKILLS_DIR =
   process.env.SKILLS_DIR ?? join(process.cwd(), '..', '..', '.claude', 'skills');
@@ -19,11 +18,9 @@ const SKILL_NAME_RE = /^[a-z][a-z0-9-]{1,40}$/;
  * implementation tiny (no dynamic skill registry, no DB table).
  */
 export async function POST(req: Request) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const { limited } = await rateLimit(`skills:${userId}`, 10, 60_000);
-  if (limited) return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
+  const gate = await requireUserWithRateLimit('skills', 10, 60_000);
+  if (gate instanceof NextResponse) return gate;
+  const { userId } = gate;
 
   let body: { sessionId?: unknown; name?: unknown; description?: unknown };
   try {
