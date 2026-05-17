@@ -42,6 +42,14 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 - **Drizzle `customType` factories live in one shared module per package** (e.g. `packages/db/src/schema/custom-types.ts`). Don't redefine column type factories inside individual schema files.
 - **All server-side logging goes through `@chemclaw2/observability` `logger`.** No `console.*` calls in app/worker code; pass `err` as the third arg and the logger handles stringification.
 - **Wrap latency-critical work in `withSpan(name, attrs, fn)`** from `@chemclaw2/observability`. Don't call OTel `trace.getActiveSpan()?.addEvent()` directly for spans that should be measurable on their own.
+- **Security gates fail closed.** A `.catch` on a permissions or authz lookup returns the deny verdict, never the allow path — document any intentional fail-open next to the call site (the `getBudget` cache is the template).
+- **Owner-scope every per-user write.** Every `db.update` / `db.delete` against per-user data includes `eq(userId)` in WHERE — `sessionId` / `pageId` / `campaignId` alone is not enough; mirror the WHERE from the read that gated the write.
+- **Wrap multi-step state transitions in `db.transaction`.** A status flip plus its dependent inserts/updates commit together or roll back together. `await updateStatus(...); for (...) await insertChild(...)` is this rule firing.
+- **Repeat the source-state predicate on every transition UPDATE.** When a sibling function has `notInArray([terminal])` in WHERE, the new one needs it too — call sites can't be trusted to never invoke it post-completion.
+- **Don't short-circuit security checks on identifier equality.** Same hostname ≠ same IP; same id ≠ same trust level. Re-validate DNS, ownership, and signatures on every redirect / hop / retry.
+- **Guard `setInterval` polls against reentrancy.** An `inFlight` flag set on entry, cleared in `finally`; slow networks make poll N+1 fire before N's POST returns.
+- **Escalate child-process kills SIGTERM → SIGKILL.** Add an `.unref()`'d backstop timer (~2 s per-call, ~5 s shutdown). Python-in-C children (RDKit, DRFP) ignore SIGTERM until the C frame returns and leak as zombies otherwise.
+- **Enforce size invariants at the push site, not in fallback branches.** A helper that appends to a result is responsible for bounding its inputs; don't rely on a conditional branch at the call site to handle the oversized case.
 
 ## Stack
 

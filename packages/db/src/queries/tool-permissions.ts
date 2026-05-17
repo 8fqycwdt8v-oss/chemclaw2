@@ -1,4 +1,5 @@
 import { eq, and, inArray } from 'drizzle-orm';
+import { logger } from '@chemclaw2/observability';
 import { db } from '../client';
 import { toolPermissions } from '../schema/tool-permissions';
 
@@ -60,8 +61,13 @@ export async function resolveToolMode(
 
   cache.set(key, promise);
   // Drop the entry if the resolution rejects so the next call retries the DB
-  // instead of serving the rejection forever.
-  promise.catch(() => cache.delete(key));
+  // instead of serving the rejection forever. Log so the failure isn't silent
+  // — callers awaiting the promise still see the rejection, but ops needs a
+  // breadcrumb for why permission resolution started failing.
+  promise.catch((err) => {
+    logger.error('tool_permissions_lookup_failed', { tool_name: toolName, user_id: userId, project_id: projectId }, err);
+    cache.delete(key);
+  });
   return promise;
 }
 

@@ -44,5 +44,6 @@ export async function insertReaction(
     .insert(reactions)
     .values({ rxnSmiles, createdBy, name: opts?.name, conditions: opts?.conditions })
     .returning({ id: reactions.id });
+  if (!row) throw new Error('insertReaction: insert returned no row');
   return row.id;
 }

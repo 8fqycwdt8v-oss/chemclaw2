@@ -67,7 +67,13 @@ export const docFetchTool: ToolDef<typeof docFetchSchema> = {
       if (done || !value) break;
       chunks.push(value);
       totalBytes += value.byteLength;
-      if (totalBytes >= MAX_BYTES) { reader.cancel().catch(() => {}); break; }
+      if (totalBytes >= MAX_BYTES) {
+        // Cancel can reject (already closed, race with downstream). The stream
+        // is being abandoned anyway, so the rejection isn't actionable — warn
+        // so it's observable but doesn't pollute error counts.
+        reader.cancel().catch((err) => logger.warn('doc_fetch_reader_cancel_failed', { url: input.url.slice(0, 200) }, err));
+        break;
+      }
     }
     const bytes = Buffer.concat(chunks);
 

@@ -1,17 +1,28 @@
 import Link from 'next/link';
 import { UserButton } from '@clerk/nextjs';
 import { countUnreadSubscriptions, countPendingProposedEdits } from '@chemclaw2/db';
+import { logger } from '@chemclaw2/observability';
 import { getAdminContext } from '@/lib/auth';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { userId, isAdmin } = await getAdminContext();
-  const unread = userId ? await countUnreadSubscriptions(userId).catch(() => 0) : 0;
+  // Fail open on the count queries so a broken DB doesn't blank the whole
+  // chrome — but log so ops can distinguish a real "zero" from a silent fallback.
+  const unread = userId
+    ? await countUnreadSubscriptions(userId).catch((err) => {
+        logger.error('layout_count_unread_subscriptions_failed', { user_id: userId }, err);
+        return 0;
+      })
+    : 0;
   // Wave-3d: admin-only review-queue link with a count badge.
   // Wave-3h: switched from listPendingProposedEdits().length (pulled full
   // JSONB rows on every render) to a dedicated COUNT(*) query that's
   // index-only via the partial pending-index.
   const queueCount = isAdmin
-    ? await countPendingProposedEdits().catch(() => 0)
+    ? await countPendingProposedEdits().catch((err) => {
+        logger.error('layout_count_pending_proposed_edits_failed', { user_id: userId }, err);
+        return 0;
+      })
     : 0;
   return (
     <div className="min-h-screen flex flex-col">
