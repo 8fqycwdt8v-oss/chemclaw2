@@ -71,6 +71,18 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 7. Post-response background work (onResult callbacks, fire-and-forget writes) logs its own outcomes. No caller will surface its failure.
 8. Workers emit startup, heartbeat, and shutdown events; cron sweeps log what they deleted. Silence is not healthy.
 
+### Error handling
+
+- **Every `.catch()` and `catch {}` must log the error.** Server-side use `@chemclaw2/observability`'s `logger.error('event_name', {fields}, err)`; client-side use `console.error`. `.catch(() => 0)` / `.catch(() => [])` / `.catch(() => null)` without a log is indistinguishable from a genuine empty result.
+- **Narrow caught errors with `err instanceof Error ? err.message : String(err)`. Never `(err as Error).message`.** Non-Error rejections (string throws, third-party SDKs rejecting with `{code, message}`) crash with `TypeError` or print `undefined`.
+- **Guard `.returning()` destructuring before dereferencing.** After `const [row] = await db.insert(...).returning(...)`, write `if (!row) throw new Error('...: insert returned no row')` before touching `row.<field>`. Drizzle returns `[]` on RLS / schema mismatch / race-on-conflict failures.
+- **In pg-boss worker handlers, re-throw after logging the failure.** A swallowed exception makes the queue mark a failed job as done, so retry policy never fires and the row stalls forever.
+- **Wrap async `setInterval`/`setTimeout` callbacks in `try/catch`, not `.catch()` on the returned promise.** Sync throws before the first `await` slip past `.catch()` and become process-killing unhandled rejections (Node ≥15).
+- **Guard child-process cleanup methods with `try/catch`.** `proc.kill()`, `proc.stdin.end()`, `reader.cancel()` all throw on already-closed handles, and a throw inside a settle/timer callback orphans the surrounding promise.
+- **When listening to both `'error'` and `'close'` on a child process, short-circuit `'close'` if `'error'` already fired.** Set an `errorSeen` flag in the error handler. Otherwise a `close` racing ahead of `error` masks the real cause (ENOENT, EACCES, AbortError) behind a generic `exited with code N`.
+- **Best-effort persistence wrappers must signal success/failure to callers.** Return `{ ok, error? }`, not `Promise<void>` — a void return makes "logged the failure and dropped it" look identical to "persisted".
+- **In Next.js App Router, parse JSON as `await req.json()` inside `try/catch` — never `req.body ? await req.json() : {}`.** `req.body` is a stream; its truthiness doesn't tell you whether the body is safe to read.
+
 ## Stack
 
 | Layer | Technology |
