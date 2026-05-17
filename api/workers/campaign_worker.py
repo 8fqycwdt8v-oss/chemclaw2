@@ -139,8 +139,16 @@ async def process_running_campaigns(
         done = await all_steps_complete(db, campaign_id)
         if done:
             try:
+                from api.db.queries.notifications import create_notification
                 async with db.begin():
                     await system_advance_campaign(db, campaign_id, "complete")
+                    created_by = campaign.get("created_by")
+                    if created_by:
+                        await create_notification(
+                            db, created_by, "campaign_complete",
+                            {"campaign_id": campaign_id,
+                             "target_smiles": campaign.get("target_smiles")},
+                        )
                 logger.info("campaign_complete campaign=%s", campaign_id)
                 await _create_campaign_wiki(campaign, session_factory)
                 updates += 1

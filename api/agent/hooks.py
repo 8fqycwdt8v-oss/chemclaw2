@@ -131,6 +131,31 @@ def build_hooks(user_id: str, project_key: str, db_factory: Any) -> dict[str, li
         tool_name = input_data.get("tool_name", "")
         tool_input = input_data.get("tool_input", {})
 
+        # Budget cap check — fail open (non-security) but log on error.
+        try:
+            from api.db.queries.budgets import get_budget_with_spend
+            async with db_factory() as db:
+                budget_info = await get_budget_with_spend(db, project_key)
+            if budget_info and budget_info.get("budget"):
+                budget = budget_info["budget"]
+                spend = budget_info.get("spend") or {}
+                cap = budget.get("tool_calls_cap")
+                used = spend.get("tool_calls_used", 0) or 0
+                if cap is not None and used >= cap:
+                    logger.warning(
+                        "budget_cap_exceeded project=%s tool=%s used=%d cap=%d",
+                        project_key, tool_name, used, cap,
+                    )
+                    return {"decision": "block", "reason": f"Tool call budget exhausted ({used}/{cap} calls used this period)."}
+                # Warn when within 10% of cap.
+                if cap is not None and cap > 0 and used >= cap * 0.9:
+                    logger.warning(
+                        "budget_cap_near project=%s tool=%s used=%d cap=%d",
+                        project_key, tool_name, used, cap,
+                    )
+        except Exception:
+            logger.error("budget_check_failed project=%s tool=%s", project_key, tool_name, exc_info=True)
+
         # Block controlled substance names in tool params
         for val in _extract_string_values(tool_input):
             if _CONTROLLED_SUBSTANCES.search(_normalize(val)):

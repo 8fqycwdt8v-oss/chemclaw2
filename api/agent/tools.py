@@ -343,4 +343,252 @@ def build_chemclaw_mcp_server(
                     )
         return {"campaign_id": campaign_id, "status": "running", "steps_added": len(steps)}
 
+    # ── record feedback ───────────────────────────────────────────────────────
+    @mcp.tool()
+    async def record_feedback(
+        session_id_: str,
+        turn_index: int,
+        score: int,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Record thumbs-up (score=1) or thumbs-down (score=-1) for a conversation turn."""
+        if score not in (1, -1):
+            return {"ok": False, "error": "score must be 1 or -1"}
+        from api.db.queries.feedback import record_feedback as _record_feedback
+        async with session_factory() as db:
+            feedback_id = await _record_feedback(db, session_id_, turn_index, score, user_id, reason)
+        return {"ok": True, "id": feedback_id}
+
+    # ── lookup_knowledge ──────────────────────────────────────────────────────
+    @mcp.tool()
+    async def lookup_knowledge(
+        query: str,
+        sources: list[str] | None = None,
+        compound_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Unified knowledge retrieval across wiki, papers, compound properties, and external facts.
+
+        sources may be any subset of ['wiki', 'papers', 'properties', 'facts'].
+        Defaults to all sources.  Use wiki_lookup(slug=...) for direct page access.
+        """
+        if not query or len(query) > 500:
+            return {"error": "query must be 1-500 chars"}
+        active = set(sources) if sources else {"wiki", "papers", "properties", "facts"}
+
+        from api.db.queries.wiki import search_wiki_by_fts
+        from api.db.queries.knowledge import (
+            search_papers,
+            search_external_facts,
+            lookup_compound_properties,
+        )
+
+        async with session_factory() as db:
+            wiki_results: list[dict] = []
+            paper_results: list[dict] = []
+            fact_results: list[dict] = []
+            prop_results: list[dict] = []
+
+            if "wiki" in active:
+                wiki_results = await search_wiki_by_fts(db, query, limit=5)
+            if "papers" in active:
+                paper_results = await search_papers(db, query, limit=5)
+            if "facts" in active:
+                fact_results = await search_external_facts(db, query=query, limit=5)
+            if "properties" in active and compound_id:
+                prop_results = await lookup_compound_properties(db, compound_id=compound_id)
+
+        return {
+            "wiki": wiki_results,
+            "papers": paper_results,
+            "properties": prop_results,
+            "facts": fact_results,
+        }
+
+    # ── register_paper ────────────────────────────────────────────────────────
+    @mcp.tool()
+    async def register_paper(
+        url: str,
+        title: str,
+        doi: str | None = None,
+        abstract: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist a fetched paper's metadata into the knowledge base for future retrieval."""
+        from api.db.queries.knowledge import upsert_paper
+        async with session_factory() as db:
+            paper_id, already_existed = await upsert_paper(
+                db, url, title, doi=doi, abstract=abstract, created_by=user_id
+            )
+        return {"id": paper_id, "already_existed": already_existed}
+
+    # ── record_external_fact ──────────────────────────────────────────────────
+    @mcp.tool()
+    async def record_external_fact(
+        source_type: str,
+        source_id_: str,
+        content_text: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Persist a fetched external fact (ELN data, search result, document excerpt) for later lookup."""
+        from api.db.queries.knowledge import upsert_external_fact
+        async with session_factory() as db:
+            fact_id, _ = await upsert_external_fact(
+                db, source_type, source_id_, payload or {}, content_text, fetched_by=user_id
+            )
+        return {"id": fact_id}
+
+    # ── register_compound_property ────────────────────────────────────────────
+    @mcp.tool()
+    async def register_compound_property(
+        compound_id: str,
+        name: str,
+        value_num: float | None = None,
+        value_text: str | None = None,
+        unit: str | None = None,
+        method: str | None = None,
+        source_citation_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Record a measured or calculated property for a compound."""
+        if value_num is None and value_text is None:
+            return {"error": "Provide at least one of value_num or value_text"}
+        from api.db.queries.knowledge import insert_compound_property
+        async with session_factory() as db:
+            prop_id = await insert_compound_property(
+                db, compound_id, name, user_id,
+                value_num=value_num, value_text=value_text,
+                unit=unit, method=method,
+                source_citation_id=source_citation_id,
+            )
+        return {"id": prop_id}
+
+    # ── record_contradiction ──────────────────────────────────────────────────
+    @mcp.tool()
+    async def record_contradiction(
+        page_slug: str,
+        citation_a: str,
+        citation_b: str,
+        proposed_winner: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Persist the result of a contradiction-resolver sub-agent invocation.
+
+        Call this after the contradiction-resolver Task tool returns, passing the
+        page slug and the sub-agent's WINNER/REASON output.
+        proposed_winner must be 'a', 'b', or 'inconclusive'.
+        """
+        if proposed_winner not in ("a", "b", "inconclusive"):
+            return {"error": "proposed_winner must be 'a', 'b', or 'inconclusive'"}
+        from api.db.queries.wiki import get_wiki_page
+        from api.db.queries.contradictions import create_contradiction
+        async with session_factory() as db:
+            page = await get_wiki_page(db, page_slug)
+            if not page:
+                return {"error": f"Wiki page '{page_slug}' not found"}
+            contradiction_id = await create_contradiction(
+                db, page["id"], citation_a, citation_b, proposed_winner, reason
+            )
+        return {"id": contradiction_id}
+
+    # ── lookup_regulatory_guidance ────────────────────────────────────────────
+    _ICH_URLS: dict[str, str] = {
+        "ICH Q1": "https://www.ich.org/page/quality-guidelines",
+        "ICH Q2": "https://www.ich.org/page/quality-guidelines",
+        "ICH Q3A": "https://www.ich.org/page/quality-guidelines",
+        "ICH Q3B": "https://www.ich.org/page/quality-guidelines",
+        "ICH Q3C": "https://www.ich.org/page/quality-guidelines",
+        "ICH Q3D": "https://www.ich.org/page/quality-guidelines",
+        "ICH Q6A": "https://www.ich.org/page/quality-guidelines",
+        "ICH Q6B": "https://www.ich.org/page/quality-guidelines",
+        "ICH Q7": "https://www.ich.org/page/quality-guidelines",
+        "ICH Q8": "https://www.ich.org/page/quality-guidelines",
+        "ICH Q9": "https://www.ich.org/page/quality-guidelines",
+        "ICH Q10": "https://www.ich.org/page/quality-guidelines",
+        "ICH Q11": "https://www.ich.org/page/quality-guidelines",
+        "ICH M7": "https://www.ich.org/page/multidisciplinary-guidelines",
+    }
+
+    ALLOWED_DOMAINS.append("ich.org")
+
+    @mcp.tool()
+    async def lookup_regulatory_guidance(
+        guideline: str,
+        topic: str | None = None,
+    ) -> dict[str, Any]:
+        """Look up ICH or pharmacopoeial guidance.
+
+        Checks external_facts cache first (24h TTL), then fetches from ich.org.
+        Returns the guideline page text or a topic-filtered excerpt.
+        """
+        from api.db.queries.knowledge import search_external_facts, upsert_external_fact
+        import time
+        from datetime import timezone, timedelta
+
+        guideline_key = guideline.strip().upper()
+        # Normalise common variants: "ICH Q3A(R2)" -> "ICH Q3A"
+        guideline_key = re.sub(r'\([^)]*\)', '', guideline_key).strip()
+
+        cache_source_id = f"regulatory:{guideline_key}"
+        freshness_cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+
+        async with session_factory() as db:
+            cached = await search_external_facts(db, source_type="regulatory", query=guideline_key, limit=1)
+
+        if cached:
+            entry = cached[0]
+            last_seen = entry.get("last_seen") or entry.get("fetched_at")
+            if last_seen and (
+                (hasattr(last_seen, "tzinfo") and last_seen >= freshness_cutoff)
+                or (isinstance(last_seen, str) and last_seen >= freshness_cutoff.isoformat())
+            ):
+                text_body = entry.get("content_text", "")
+                if topic:
+                    idx = text_body.lower().find(topic.lower())
+                    if idx >= 0:
+                        text_body = text_body[max(0, idx - 100): idx + 2000]
+                return {
+                    "guideline": guideline_key,
+                    "summary": text_body[:3000],
+                    "url": entry.get("payload", {}).get("url", ""),
+                    "cached": True,
+                }
+
+        # Fetch from ich.org
+        url = _ICH_URLS.get(guideline_key, "https://www.ich.org/page/quality-guidelines")
+        try:
+            parsed = urlparse(url)
+            hostname = parsed.hostname or ""
+            await _assert_not_private(hostname)
+            async with httpx.AsyncClient(
+                timeout=15.0,
+                follow_redirects=True,
+                headers={"User-Agent": "chemclaw2/1.0 (research assistant)"},
+            ) as client:
+                r = await client.get(url)
+            if not r.is_success:
+                return {"error": f"ICH fetch returned HTTP {r.status_code}", "guideline": guideline_key}
+            raw_text = _html_to_text(r.text)
+        except Exception as e:
+            logger.warning("regulatory_fetch_failed guideline=%s: %s", guideline_key, e)
+            return {"error": "Failed to fetch regulatory guidance", "guideline": guideline_key}
+
+        excerpt = raw_text[:10_000]
+        async with session_factory() as db:
+            await upsert_external_fact(
+                db, "regulatory", cache_source_id,
+                {"url": url, "guideline": guideline_key},
+                excerpt,
+                fetched_by=user_id,
+            )
+
+        result_text = excerpt
+        if topic:
+            idx = result_text.lower().find(topic.lower())
+            if idx >= 0:
+                result_text = result_text[max(0, idx - 100): idx + 2000]
+        return {
+            "guideline": guideline_key,
+            "summary": result_text[:3000],
+            "url": url,
+            "cached": False,
+        }
+
     return mcp
