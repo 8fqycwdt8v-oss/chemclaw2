@@ -23,7 +23,8 @@ export type ExtractedTable = {
   rows: Array<Record<string, string>>;
 };
 
-const DIVIDER_RE = /^\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
+export const TABLE_DIVIDER_RE = /^\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
+const FENCE_RE = /^\s*```/;
 
 function splitRow(line: string): string[] {
   const stripped = line.trim().replace(/^\|/, '').replace(/\|$/, '');
@@ -35,9 +36,17 @@ export function extractMarkdownTables(md: string): ExtractedTable[] {
   const out: ExtractedTable[] = [];
   let position = 0;
   let lastHeading: string | undefined;
+  // Wave-3h: skip content inside fenced code blocks so pipe-tables in
+  // documentation about markdown don't get parsed as real tables.
+  let inFence = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (FENCE_RE.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
     const headingMatch = /^#{1,6}\s+(.+)$/.exec(line.trim());
     if (headingMatch) {
       lastHeading = headingMatch[1].trim();
@@ -45,7 +54,7 @@ export function extractMarkdownTables(md: string): ExtractedTable[] {
     }
     if (!line.includes('|')) continue;
     const next = lines[i + 1];
-    if (!next || !DIVIDER_RE.test(next.trim())) continue;
+    if (!next || !TABLE_DIVIDER_RE.test(next.trim())) continue;
     const headers = splitRow(line);
     if (headers.length < 2) continue;
 
@@ -54,6 +63,15 @@ export function extractMarkdownTables(md: string): ExtractedTable[] {
     while (j < lines.length) {
       const rowLine = lines[j];
       if (!rowLine.includes('|') || rowLine.trim().length === 0) break;
+      // Wave-3h: handle adjacent tables. The current line is either:
+      //   - a divider — terminator (e.g. table-after-divider, no data in
+      //     between)
+      //   - looks-like-a-header AND the NEXT line is a divider — this is
+      //     actually the next table's header row; stop here so we don't
+      //     absorb it as data of the current table.
+      if (TABLE_DIVIDER_RE.test(rowLine.trim())) break;
+      const peek = lines[j + 1];
+      if (peek && TABLE_DIVIDER_RE.test(peek.trim())) break;
       const cells = splitRow(rowLine);
       if (cells.length === 0) break;
       const row: Record<string, string> = {};

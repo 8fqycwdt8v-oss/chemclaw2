@@ -5,6 +5,9 @@ const mocks = vi.hoisted(() => ({
   insertCaptured: [] as unknown[],
   updateCaptured: [] as Array<{ set: Record<string, unknown> }>,
   returningResults: [] as unknown[],
+  // Wave-3h: tryClaimProposedEditForApply uses tx.execute(sql`...`). Tests
+  // push rows here to seed each execute() result in FIFO.
+  executeRows: [] as unknown[][],
   txTouched: false,
 }));
 
@@ -47,14 +50,17 @@ vi.mock('../client', () => {
       };
     },
   });
+  const execute = () => Promise.resolve(mocks.executeRows.shift() ?? []);
   return {
     db: {
       select: buildSelect,
       insert: buildInsert,
       update: buildUpdate,
+      execute,
       transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
         mocks.txTouched = true;
         return fn({
+          execute,
           select: buildSelect,
           insert: buildInsert,
           update: buildUpdate,
@@ -70,6 +76,10 @@ import {
   listPendingProposedEdits,
   markProposedEditApplied,
   markProposedEditRejected,
+  tryClaimProposedEditForApply,
+  setAppliedPageId,
+  rollbackApplyClaim,
+  countPendingProposedEdits,
 } from '../queries/wiki-proposed-edits';
 
 const baseInput = {
@@ -85,6 +95,7 @@ beforeEach(() => {
   mocks.insertCaptured = [];
   mocks.updateCaptured = [];
   mocks.returningResults = [];
+  mocks.executeRows = [];
   mocks.txTouched = false;
 });
 
@@ -193,5 +204,82 @@ describe('markProposedEditRejected', () => {
       reviewedBy: 'admin_user',
       reviewComment: 'duplicate of #42',
     });
+  });
+});
+
+describe('tryClaimProposedEditForApply (Wave-3h TOCTOU fix)', () => {
+  it('returns null when the proposal is no longer pending', async () => {
+    // Empty executeRows → SELECT FOR UPDATE returns []. Helper returns null.
+    const r = await tryClaimProposedEditForApply('p1', 'admin_user');
+    expect(r).toBeNull();
+    // Must NOT have issued any UPDATE.
+    expect(mocks.updateCaptured).toHaveLength(0);
+    // Must have opened a transaction (the SELECT FOR UPDATE needs row lock).
+    expect(mocks.txTouched).toBe(true);
+  });
+
+  it('claims the proposal atomically and marks it applied', async () => {
+    const row = {
+      id: 'p1',
+      slug: 'aspirin',
+      title: 'Aspirin',
+      contentText: 'body',
+      status: 'pending',
+    };
+    mocks.executeRows.push([row]);
+    const r = await tryClaimProposedEditForApply('p1', 'admin_user', 'looks good');
+    expect(r).toEqual(row);
+    expect(mocks.txTouched).toBe(true);
+    // Exactly one UPDATE inside the transaction setting status=applied.
+    expect(mocks.updateCaptured).toHaveLength(1);
+    expect(mocks.updateCaptured[0].set).toMatchObject({
+      status: 'applied',
+      reviewedBy: 'admin_user',
+      reviewComment: 'looks good',
+    });
+    // appliedPageId is NOT set yet — the caller fills it via setAppliedPageId.
+    expect(mocks.updateCaptured[0].set.appliedPageId).toBeUndefined();
+  });
+
+  it('does NOT update when the row is gone (terminate cleanly)', async () => {
+    mocks.executeRows.push([]); // explicit empty
+    const r = await tryClaimProposedEditForApply('p1', 'admin_user');
+    expect(r).toBeNull();
+    expect(mocks.updateCaptured).toHaveLength(0);
+  });
+});
+
+describe('setAppliedPageId / rollbackApplyClaim', () => {
+  it('setAppliedPageId issues an UPDATE with appliedPageId', async () => {
+    await setAppliedPageId('p1', 'page-id-1');
+    expect(mocks.updateCaptured).toHaveLength(1);
+    expect(mocks.updateCaptured[0].set).toEqual({ appliedPageId: 'page-id-1' });
+  });
+
+  it('rollbackApplyClaim resets status + clears reviewer fields', async () => {
+    await rollbackApplyClaim('p1');
+    expect(mocks.updateCaptured).toHaveLength(1);
+    expect(mocks.updateCaptured[0].set).toMatchObject({
+      status: 'pending',
+      reviewedBy: null,
+      reviewedAt: null,
+      reviewComment: null,
+    });
+  });
+});
+
+describe('countPendingProposedEdits (Wave-3h perf — cheap nav badge)', () => {
+  it('returns the COUNT(*) result', async () => {
+    mocks.executeRows.push([{ count: 7 }]);
+    expect(await countPendingProposedEdits()).toBe(7);
+  });
+
+  it('coerces BIGINT-string Postgres values to Number', async () => {
+    mocks.executeRows.push([{ count: '42' }]);
+    expect(await countPendingProposedEdits()).toBe(42);
+  });
+
+  it('returns 0 when the result is empty', async () => {
+    expect(await countPendingProposedEdits()).toBe(0);
   });
 });

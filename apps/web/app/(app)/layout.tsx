@@ -1,15 +1,17 @@
 import Link from 'next/link';
 import { UserButton } from '@clerk/nextjs';
-import { countUnreadSubscriptions, listPendingProposedEdits } from '@chemclaw2/db';
+import { countUnreadSubscriptions, countPendingProposedEdits } from '@chemclaw2/db';
 import { getAdminContext } from '@/lib/auth';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { userId, isAdmin } = await getAdminContext();
   const unread = userId ? await countUnreadSubscriptions(userId).catch(() => 0) : 0;
-  // Wave-3d: admin-only review-queue link with a count badge. Skip the
-  // queue lookup for non-admins so the nav stays cheap.
+  // Wave-3d: admin-only review-queue link with a count badge.
+  // Wave-3h: switched from listPendingProposedEdits().length (pulled full
+  // JSONB rows on every render) to a dedicated COUNT(*) query that's
+  // index-only via the partial pending-index.
   const queueCount = isAdmin
-    ? await listPendingProposedEdits(50).then((p) => p.length).catch(() => 0)
+    ? await countPendingProposedEdits().catch(() => 0)
     : 0;
   return (
     <div className="min-h-screen flex flex-col">

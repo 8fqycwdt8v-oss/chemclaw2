@@ -468,15 +468,16 @@ export function buildQueryOptions(
 
               // v2.1-D3 + Wave-1 D1: accumulate spend after every tool
               // invocation (success or error — the cost has already been paid).
-              // Re-uses the cached budget config from PreToolUse, so no
-              // additional DB read; bumps localSpend in lock-step with the DB
-              // increment so the next PreToolUse cap check sees fresh state.
+              // Wave-3h perf: fire-and-forget the DB write. Awaiting blocked
+              // the next tool call by one round-trip per tool. localSpend is
+              // updated SYNCHRONOUSLY so the in-process budget cap check
+              // stays accurate; the DB increment catches up on its own.
               const budgetInfo = await getBudget();
               if (budgetInfo) {
                 const isExperiment = EXPERIMENT_TOOLS.has(input.tool_name);
                 localSpend.toolCalls += 1;
                 if (isExperiment) localSpend.experiments += 1;
-                await incrementSpend(projectKey, budgetInfo.budget.period, {
+                void incrementSpend(projectKey, budgetInfo.budget.period, {
                   toolCalls: 1,
                   experiments: isExperiment ? 1 : 0,
                 }).catch((err) => {
