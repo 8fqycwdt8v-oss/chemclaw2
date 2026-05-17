@@ -19,7 +19,7 @@
   "dependencies": {
     "@chemclaw2/observability": "workspace:*",
     "@opentelemetry/api": "^1.9.1",
-    "drizzle-orm": "^0.38.0",
+    "drizzle-orm": "^0.45.2",
     "postgres": "^3.4.5",
     "zod": "^4.4.3"
   },

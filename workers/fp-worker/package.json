@@ -12,7 +12,7 @@
     "@chemclaw2/db": "workspace:*",
     "@chemclaw2/observability": "workspace:*",
     "@opentelemetry/api": "^1.9.1",
-    "drizzle-orm": "^0.38.0",
+    "drizzle-orm": "^0.45.2",
     "openai": "^6.37.0",
     "pg-boss": "^10.0.0",
     "tsx": "^4.22.0"
