@@ -44,6 +44,7 @@
     { "idx": 27, "version": "7", "when": 1749652800000, "tag": "0028_wiki_proposed_edits", "breakpoints": true },
     { "idx": 28, "version": "7", "when": 1749739200000, "tag": "0029_wiki_tables_cleanup", "breakpoints": true },
     { "idx": 29, "version": "7", "when": 1749825600000, "tag": "0030_wiki_trigger_fix", "breakpoints": true },
-    { "idx": 30, "version": "7", "when": 1779000000000, "tag": "0031_invariants", "breakpoints": true }
+    { "idx": 30, "version": "7", "when": 1779000000000, "tag": "0031_invariants", "breakpoints": true },
+    { "idx": 31, "version": "7", "when": 1779086400000, "tag": "0032_users", "breakpoints": true }
   ]
 }

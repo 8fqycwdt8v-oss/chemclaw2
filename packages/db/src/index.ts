@@ -19,3 +19,4 @@ export * from './queries/lookup-knowledge';
 export * from './queries/wiki-tables';
 export * from './queries/wiki-proposed-edits';
 export * from './queries/eval-runs';
+export * from './queries/users';
