@@ -5,6 +5,7 @@ import {
   prepareEmbeddingInputs,
   stripMarkdownForEmbedding,
 } from '@chemclaw2/agent-tools';
+import { logger } from '@chemclaw2/observability';
 import { webEnv } from './env';
 
 let client: OpenAI | undefined;
@@ -33,15 +34,13 @@ export async function embedText(text: string): Promise<number[]> {
  * wiki page yields ~400 chunks; without the cap a single request approaches
  * the OpenAI per-call limit.
  *
- * Wave-3h perf: batches now fire in parallel via Promise.all. Order is
- * preserved by indexing batches into their slots up-front. Previously the
- * sequential await chain held the wiki upsert connection open for 4 round-
- * trips on a 400-chunk page; parallel cuts that to one round-trip's latency.
+ * Wave-3h perf: batches now fire in parallel via Promise.all.
  */
 const MAX_BATCH = 100;
 
 export async function embedTexts(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
+  const startMs = Date.now();
   const stripped = texts.map(stripMarkdownForEmbedding);
   const inputs = prepareEmbeddingInputs(stripped);
 
@@ -50,9 +49,19 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
     batches.push(inputs.slice(start, start + MAX_BATCH));
   }
   const client = getClient();
-  const responses = await Promise.all(
-    batches.map((batch) => client.embeddings.create({ model: EMBED_MODEL, input: batch })),
-  );
+  let responses;
+  try {
+    responses = await Promise.all(
+      batches.map((batch) => client.embeddings.create({ model: EMBED_MODEL, input: batch })),
+    );
+  } catch (err) {
+    logger.error('embed_texts_failed', {
+      text_count: texts.length,
+      batch_count: batches.length,
+      duration_ms: Date.now() - startMs,
+    }, err);
+    throw err;
+  }
 
   const out: number[][] = [];
   for (let i = 0; i < batches.length; i++) {
@@ -68,5 +77,10 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
       out.push(d.embedding);
     }
   }
+  logger.info('embed_texts_complete', {
+    text_count: texts.length,
+    batch_count: batches.length,
+    duration_ms: Date.now() - startMs,
+  });
   return out;
 }

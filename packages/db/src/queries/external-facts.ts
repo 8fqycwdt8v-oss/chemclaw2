@@ -1,4 +1,5 @@
 import { sql, eq, and, desc } from 'drizzle-orm';
+import { logger } from '@chemclaw2/observability';
 import { db } from '../client';
 import { externalFacts } from '../schema/external-facts';
 
@@ -57,8 +58,7 @@ export async function recordExternalFact(
 /**
  * Wave-3f cut: persistence wrappers in eln-fetch / web-search / doc-fetch
  * all did `.catch(err => console.error(...))` with three slightly-different
- * messages. One helper, one message format, one place to change the policy
- * (e.g. swap to OpenTelemetry event emission later).
+ * messages. One helper, one message format, one place to change the policy.
  */
 export async function recordExternalFactSafe(
   sourceType: ExternalFactSource,
@@ -70,7 +70,7 @@ export async function recordExternalFactSafe(
   try {
     await recordExternalFact(sourceType, sourceId, payload, fetchedBy, contentText);
   } catch (err) {
-    console.error(`[external-facts] upsert failed (${sourceType}:${sourceId}):`, err);
+    logger.error('external_facts_upsert_failed', { source_type: sourceType, source_id: sourceId }, err);
   }
 }
 

@@ -1,3 +1,4 @@
+import { logger } from '@chemclaw2/observability';
 import { ALLOWED_DOMAINS } from './doc-fetch';
 
 export type CitationInput = {
@@ -54,6 +55,7 @@ export function validateCitations(
   const ids = new Set<string>();
   for (const c of citations) {
     if (ids.has(c.citationId)) {
+      logger.warn('citation_validation_failed', { kind: 'duplicate_id', citation_id: c.citationId });
       return { ok: false, reason: `duplicate citationId "${c.citationId}"` };
     }
     ids.add(c.citationId);
@@ -62,6 +64,7 @@ export function validateCitations(
     // the sourceType string. The label field may also carry a URL.
     for (const candidate of [c.sourceId, c.label]) {
       if (looksLikeHttpUrl(candidate) && !isAllowedCitationUrl(candidate)) {
+        logger.warn('citation_validation_failed', { kind: 'disallowed_url', citation_id: c.citationId });
         return {
           ok: false,
           reason: `citation "${c.citationId}" points to "${candidate}" which is not on the allowed science-domain list`,
@@ -79,6 +82,7 @@ export function validateCitations(
   }
   for (const marker of referenced) {
     if (!ids.has(marker)) {
+      logger.warn('citation_validation_failed', { kind: 'missing_marker', marker });
       return {
         ok: false,
         reason: `body references [${marker}] but no citation with citationId "${marker}" was provided`,

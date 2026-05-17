@@ -1,3 +1,4 @@
+import { logger } from '@chemclaw2/observability';
 import { CONTROLLED_SUBSTANCE_NAMES, normalizeForGate } from './scheduled-substance-gate';
 
 // Wave-3h security fix: also strip zero-width characters before SSN matching
@@ -24,7 +25,7 @@ const SSN_RE_GLOBAL = /\b\d{3}-\d{2}-\d{4}\b/g;
  * term is NOT echoed to avoid confirming what triggered the block.
  */
 export function checkToolInput(
-  _toolName: string,
+  toolName: string,
   toolInput: Record<string, unknown>,
 ): { action: 'allow'; input?: Record<string, unknown> } | { action: 'block'; reason: string } {
   // Collect all string leaf values from the input object
@@ -34,6 +35,7 @@ export function checkToolInput(
   // Apply the same normalization used in scheduledSubstanceGate for consistency.
   for (const val of stringValues) {
     if (CONTROLLED_SUBSTANCE_NAMES.test(normalizeForGate(val))) {
+      logger.warn('tool_input_block_controlled_substance', { tool: toolName });
       return {
         action: 'block',
         reason: 'Tool input blocked: contains a term that is not permitted in this context.',
@@ -43,11 +45,12 @@ export function checkToolInput(
 
   // Redact SSN patterns from all string values
   const inputStr = JSON.stringify(toolInput);
-  const sanitized = inputStr.replace(SSN_RE_GLOBAL, '[REDACTED-SSN]');
-  if (sanitized !== inputStr) {
+  const ssnMatchCount = (inputStr.match(SSN_RE_GLOBAL) ?? []).length;
+  if (ssnMatchCount > 0) {
+    logger.warn('pii_redacted', { tool: toolName, kind: 'ssn', count: ssnMatchCount });
     return {
       action: 'allow',
-      input: JSON.parse(sanitized) as Record<string, unknown>,
+      input: JSON.parse(inputStr.replace(SSN_RE_GLOBAL, '[REDACTED-SSN]')) as Record<string, unknown>,
     };
   }
 
@@ -94,6 +97,7 @@ export function checkUserPrompt(
   // like "123​-45-6789" or NFKC-equivalent variants get caught the same as
   // the canonical form. SSN_RE is non-global so .test() is stateless.
   if (SSN_RE.test(normalizeForGate(prompt))) {
+    logger.warn('prompt_block', { reason: 'ssn', prompt_len: prompt.length });
     return {
       action: 'block',
       reason: 'Prompt blocked: contains what looks like a Social Security Number. Remove the SSN and resubmit.',

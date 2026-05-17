@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { insertProposedEdit } from '@chemclaw2/db';
+import { logger } from '@chemclaw2/observability';
 import { isValidSlug } from './slug';
 import { markdownToTiptap } from './markdown-to-tiptap';
 import { validateCitations } from './citation-validation';
@@ -67,7 +68,10 @@ export function createWikiProposeTool(userId: string): ToolDef<typeof wikiPropos
       if (!v.ok) return { error: `citation validation: ${v.reason}` };
 
       const doc = markdownToTiptap(input.content_text);
-      if (!isValidTiptapDoc(doc)) return { error: 'internal: markdown conversion produced an invalid Tiptap doc' };
+      if (!isValidTiptapDoc(doc)) {
+        logger.warn('tiptap_validation_failed', { slug: input.slug, body_len: input.content_text.length, source: 'wiki_propose' });
+        return { error: 'internal: markdown conversion produced an invalid Tiptap doc' };
+      }
 
       try {
         const result = await insertProposedEdit({
@@ -78,6 +82,7 @@ export function createWikiProposeTool(userId: string): ToolDef<typeof wikiPropos
           citations,
           rationale: input.rationale,
         }, userId);
+        logger.info('wiki_propose_complete', { slug: input.slug, proposal_id: result.id, superseded_id: result.supersededId });
         return {
           proposal_id: result.id,
           slug: input.slug,
@@ -86,6 +91,7 @@ export function createWikiProposeTool(userId: string): ToolDef<typeof wikiPropos
           note: 'Proposal queued for human review. A reviewer will approve or reject before the change lands.',
         };
       } catch (err) {
+        logger.error('wiki_propose_failed', { slug: input.slug, user_id: userId }, err);
         return toolError('propose_wiki_edit', err);
       }
     },

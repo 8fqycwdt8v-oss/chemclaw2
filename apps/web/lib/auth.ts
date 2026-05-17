@@ -1,5 +1,6 @@
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
+import { logger } from '@chemclaw2/observability';
 
 /**
  * Wave-3f cut: the Clerk auth+currentUser+role triple was open-coded in 8+
@@ -20,10 +21,14 @@ import { NextResponse } from 'next/server';
  */
 export async function requireAdminApi(): Promise<NextResponse | { userId: string }> {
   const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!userId) {
+    logger.warn('admin_unauth');
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   const user = await currentUser();
   const role = (user?.publicMetadata as { role?: string } | undefined)?.role;
   if (role !== 'admin') {
+    logger.warn('admin_forbidden', { user_id: userId, role: role ?? 'none' });
     return NextResponse.json({ error: 'Forbidden — admin role required' }, { status: 403 });
   }
   return { userId };

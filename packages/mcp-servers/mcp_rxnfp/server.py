@@ -1,6 +1,44 @@
+import json
+import logging
+import os
+import sys
+import time
+from datetime import datetime, timezone
+
 from mcp.server.fastmcp import FastMCP
 from drfp import DrfpEncoder
 
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "time": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+            "level": record.levelname.lower(),
+            "component": "mcp-rxnfp",
+            "event": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        for k, v in record.__dict__.items():
+            if k in ("args", "msg", "name", "exc_info", "exc_text", "stack_info",
+                     "lineno", "funcName", "created", "msecs", "relativeCreated",
+                     "thread", "threadName", "processName", "process", "filename",
+                     "module", "pathname", "levelname", "levelno"):
+                continue
+            payload[k] = v
+        return json.dumps(payload)
+
+
+def _configure_logging() -> logging.Logger:
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(JsonFormatter())
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(os.environ.get("MCP_LOG_LEVEL", "INFO"))
+    return logging.getLogger("mcp_rxnfp")
+
+
+log = _configure_logging()
 mcp = FastMCP("mcp-rxnfp")
 
 # Fixed at 2048 to match the BIT(2048) column in reactions.drfp. DRFP's library
@@ -21,23 +59,42 @@ def compute_drfp(reaction_smiles: str) -> dict:
     Compatible with Postgres BIT(2048) via $1::bit(2048) parameter cast.
     """
     if len(reaction_smiles) > MAX_REACTION_SMILES_LEN:
+        log.warning("rxn_smiles_oversize", extra={"length": len(reaction_smiles), "max": MAX_REACTION_SMILES_LEN})
         raise ValueError(
             f"reaction_smiles exceeds {MAX_REACTION_SMILES_LEN} chars (got {len(reaction_smiles)})"
         )
+    t0 = time.monotonic()
     fps = DrfpEncoder.encode([reaction_smiles], n_folded_length=_NBITS)
     bit_arr = fps[0]
     # DrfpEncoder returns a numpy array of 0/1 ints
     bit_str = "".join(str(b) for b in bit_arr)
     if len(bit_str) != _NBITS:
+        log.error(
+            "drfp_bit_length_drift",
+            extra={"expected": _NBITS, "actual": len(bit_str)},
+        )
         raise RuntimeError(
             f"DRFP returned {len(bit_str)} bits, expected {_NBITS}. "
             "Verify drfp version supports n_folded_length."
         )
+    log.info(
+        "drfp_computed",
+        extra={
+            "smiles_len": len(reaction_smiles),
+            "n_bits": _NBITS,
+            "duration_ms": int((time.monotonic() - t0) * 1000),
+        },
+    )
     return {"fingerprint_bits": bit_str, "n_bits": _NBITS}
 
 
 def main():
-    mcp.run(transport="stdio")
+    log.info("mcp_server_starting", extra={"name": mcp.name, "pid": os.getpid()})
+    try:
+        mcp.run(transport="stdio")
+    except Exception:
+        log.exception("mcp_server_crashed")
+        raise
 
 
 if __name__ == "__main__":
