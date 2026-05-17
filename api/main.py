@@ -36,11 +36,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 def create_app() -> FastAPI:
     app = FastAPI(title="chemclaw2", lifespan=lifespan)
 
-    # Allow all origins — frontend lives on a separate origin (chemclaw2_gui).
+    # Auth is Bearer-token only (no cookies), so allow_credentials is not needed.
+    # Set CORS_ALLOWED_ORIGINS to a comma-separated list in production
+    # (e.g. "https://app.chemclaw.com,https://staging.chemclaw.com").
+    raw_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "")
+    allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()] or [
+        "http://localhost:3000",
+        "http://localhost:5173",
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=allowed_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )

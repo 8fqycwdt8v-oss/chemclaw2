@@ -49,7 +49,6 @@ def scheduled_substance_gate(prompt: str) -> dict[str, Any]:
 # ── Credential redaction ──────────────────────────────────────────────────────
 
 _SSN_RE = re.compile(r'\b\d{3}-\d{2}-\d{4}\b')
-_SSN_RE_G = re.compile(r'\b\d{3}-\d{2}-\d{4}\b')
 
 _SECRET_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r'\b(sk|rk|pk)[-_][A-Za-z0-9]{20,}\b'), '[REDACTED-API-KEY]', 'api_key'),
@@ -88,13 +87,12 @@ def _extract_string_values(obj: Any, depth: int = 0) -> list[str]:
 
 _CAS_RE = re.compile(r'\b\d{2,7}-\d{2}-\d\b')
 
-_consecutive_failures = 0
-_STORM_THRESHOLD = 10
-
-
 async def check_tool_output(tool_name: str, tool_output: str, db: Any) -> dict[str, list[str]]:
-    """Check tool output for unregistered CAS numbers."""
-    global _consecutive_failures
+    """Check tool output for unregistered CAS numbers.
+
+    Fails open (returns no warnings) on DB error — this is a fact-check guard,
+    not a security gate. The error is always logged so DB outages are visible.
+    """
     from api.db.queries.compounds import known_cas_numbers
 
     cas_numbers = list(set(_CAS_RE.findall(tool_output)))
@@ -103,16 +101,9 @@ async def check_tool_output(tool_name: str, tool_output: str, db: Any) -> dict[s
 
     try:
         known = await known_cas_numbers(db, cas_numbers)
-        if _consecutive_failures > 0:
-            logger.info("fact_id_check_db_recovered", extra={"prior_failures": _consecutive_failures})
-            _consecutive_failures = 0
-    except Exception as e:
-        _consecutive_failures += 1
-        if _consecutive_failures <= _STORM_THRESHOLD:
-            logger.warning("fact_id_check_db_error", extra={"tool": tool_name, "cas_count": len(cas_numbers)})
-        elif _consecutive_failures == _STORM_THRESHOLD + 1:
-            logger.error("fact_id_check_storm", extra={"threshold": _STORM_THRESHOLD})
-        return {"warnings": []}
+    except Exception:
+        logger.warning("fact_id_check_db_error", extra={"tool": tool_name, "cas_count": len(cas_numbers)}, exc_info=True)
+        return {"warnings": ["CAS fact-check unavailable — database error"]}
 
     unknown = [c for c in cas_numbers if c not in known]
     if unknown:
@@ -150,7 +141,7 @@ def build_hooks(user_id: str, project_key: str, db_factory: Any) -> dict[str, li
             if isinstance(val, str):
                 new_val, did_redact = _redact_secrets(val, tool_name)
                 if _SSN_RE.search(val):
-                    new_val = _SSN_RE_G.sub('[REDACTED-SSN]', new_val)
+                    new_val = _SSN_RE.sub('[REDACTED-SSN]', new_val)
                     did_redact = True
                 if did_redact:
                     redacted_input[key] = new_val

@@ -1,6 +1,7 @@
 """Wiki queries — Python port of packages/db/src/queries/wiki*.ts."""
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
 from typing import Any
@@ -147,15 +148,24 @@ async def get_wiki_page_citations(db: AsyncSession, page_id: str) -> list[dict[s
 
 # ── upsert ────────────────────────────────────────────────────────────────────
 
+_MIN_CHUNK_LENGTH = 50
+
+
 def chunk_text(text_body: str, chunk_size: int = 800, overlap: int = 100) -> list[str]:
-    """Split text into overlapping chunks for embedding."""
+    """Split text into overlapping chunks for embedding.
+
+    Chunks shorter than _MIN_CHUNK_LENGTH chars are dropped — single-character
+    tail slices produce near-zero-information vectors and waste embedding calls.
+    """
     if not text_body.strip():
         return []
     chunks = []
     start = 0
     while start < len(text_body):
         end = start + chunk_size
-        chunks.append(text_body[start:end])
+        chunk = text_body[start:end]
+        if len(chunk) >= _MIN_CHUNK_LENGTH:
+            chunks.append(chunk)
         if end >= len(text_body):
             break
         start = end - overlap
@@ -221,7 +231,7 @@ async def upsert_wiki_page(
         """),
         {
             "slug": slug, "title": title,
-            "content": str(content) if not isinstance(content, str) else content,
+            "content": content if isinstance(content, str) else json.dumps(content),
             "content_text": content_text,
             "created_by": created_by, "updated_by": created_by,
             **meta_params,
@@ -293,11 +303,18 @@ async def patch_wiki_page(
         sets.append("project = :project")
         params["project"] = project
     if not sets:
-        return {"found": False}
+        # No-op patch: check existence without a misleading 404.
+        exists = await db.execute(
+            text("SELECT 1 FROM wiki_pages WHERE slug = :slug"),
+            {"slug": slug},
+        )
+        return {"found": exists.one_or_none() is not None, "updated": False}
 
+    sets.append("updated_by = :updated_by")
+    params["updated_by"] = updated_by
     result = await db.execute(
         text(f"UPDATE wiki_pages SET {', '.join(sets)} WHERE slug = :slug RETURNING id"),
         params,
     )
     await db.commit()
-    return {"found": result.one_or_none() is not None}
+    return {"found": result.one_or_none() is not None, "updated": True}

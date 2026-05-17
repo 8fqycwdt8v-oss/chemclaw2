@@ -5,12 +5,12 @@ validates incoming Bearer tokens using PyJWT.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
 from typing import Any
 
-import httpx
 import jwt
 from fastapi import Header, HTTPException
 from jwt import PyJWKClient
@@ -23,18 +23,30 @@ _jwks_client: PyJWKClient | None = None
 _jwks_loaded_at: float = 0.0
 
 
+def _make_jwks_client() -> PyJWKClient:
+    """Create a PyJWKClient pointing at the Clerk Frontend API JWKS endpoint.
+
+    Clerk's public JWKS is at https://<clerk-domain>/.well-known/jwks.json.
+    Set CLERK_JWKS_URL to override (required in production).
+    """
+    jwks_url = os.environ.get("CLERK_JWKS_URL")
+    if not jwks_url:
+        # Derive from CLERK_DOMAIN if set, else fall back to api.clerk.com for
+        # environments that configure tokens without a custom domain.
+        clerk_domain = os.environ.get("CLERK_DOMAIN", "")
+        jwks_url = (
+            f"https://{clerk_domain}/.well-known/jwks.json"
+            if clerk_domain
+            else "https://api.clerk.com/v1/jwks"
+        )
+    return PyJWKClient(jwks_url, headers={"User-Agent": "chemclaw2-backend/1.0"})
+
+
 def _get_jwks_client() -> PyJWKClient:
     global _jwks_client, _jwks_loaded_at
     now = time.monotonic()
     if _jwks_client is None or (now - _jwks_loaded_at) > _JWKS_TTL_SECONDS:
-        clerk_domain = os.environ.get("CLERK_DOMAIN") or os.environ.get("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "")
-        # Derive the JWKS URL: Clerk exposes it at https://<frontend-api>/v1/jwks
-        # For local dev, fall back to the standard api.clerk.com endpoint.
-        jwks_url = os.environ.get(
-            "CLERK_JWKS_URL",
-            "https://api.clerk.com/v1/jwks",
-        )
-        _jwks_client = PyJWKClient(jwks_url, headers={"User-Agent": "chemclaw2-backend/1.0"})
+        _jwks_client = _make_jwks_client()
         _jwks_loaded_at = now
     return _jwks_client
 
@@ -43,35 +55,46 @@ async def get_current_user(authorization: str | None = Header(None)) -> str:
     """FastAPI dependency that returns the Clerk userId from a Bearer JWT.
 
     Raises 401 if the header is absent or the token is invalid.
+
+    Local dev: set ALLOW_MOCK_AUTH=1 and pass "Bearer mock:<userId>" to bypass
+    Clerk validation. This env var must never be set in production.
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized")
     token = authorization.removeprefix("Bearer ").strip()
 
-    clerk_secret = os.environ.get("CLERK_SECRET_KEY", "")
-
-    # In local dev without real Clerk keys, accept a synthetic token
-    # format "mock:<userId>" so the rest of the stack can be tested end-to-end.
-    if clerk_secret.startswith("sk_test_REPLACE") or not clerk_secret:
+    # Mock auth: only active when explicitly enabled via env var.
+    if os.environ.get("ALLOW_MOCK_AUTH") == "1":
         if token.startswith("mock:"):
-            return token.removeprefix("mock:")
-        raise HTTPException(status_code=401, detail="Unauthorized: configure CLERK_SECRET_KEY or use mock:<userId> token")
+            user_id = token.removeprefix("mock:")
+            if not user_id:
+                raise HTTPException(status_code=401, detail="Unauthorized: empty mock user ID")
+            return user_id
 
     try:
         client = _get_jwks_client()
-        signing_key = client.get_signing_key_from_jwt(token)
+        # get_signing_key_from_jwt may do a blocking HTTP fetch on cache miss;
+        # run it in a thread pool to keep the event loop unblocked.
+        loop = asyncio.get_event_loop()
+        signing_key = await loop.run_in_executor(
+            None, client.get_signing_key_from_jwt, token
+        )
         claims: dict[str, Any] = jwt.decode(
             token,
             signing_key.key,
             algorithms=["RS256"],
             options={"verify_aud": False},  # Clerk tokens don't always have audience
         )
-        user_id: str = claims.get("sub", "")
+        user_id = claims.get("sub", "")
         if not user_id:
             raise HTTPException(status_code=401, detail="Unauthorized: missing sub claim")
         return user_id
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.PyJWKClientError as e:
+        # JWKS fetch failure (network error, kid not found, etc.) — fail closed
+        logger.warning("jwks_client_error: %s", e)
+        raise HTTPException(status_code=401, detail="Unauthorized")
     except jwt.InvalidTokenError as e:
         logger.warning("jwt_validation_failed: %s", e)
         raise HTTPException(status_code=401, detail="Unauthorized")

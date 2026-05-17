@@ -5,6 +5,7 @@ create_sdk_mcp_server() / @mcp.tool() pattern.
 """
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import os
@@ -21,10 +22,15 @@ logger = logging.getLogger(__name__)
 
 # ── SSRF protection ───────────────────────────────────────────────────────────
 
-def _assert_not_private(hostname: str) -> None:
-    """Raise if hostname resolves to a private/loopback IP."""
+async def _assert_not_private(hostname: str) -> None:
+    """Raise if hostname resolves to a private/loopback/non-global IP.
+
+    Uses run_in_executor so the blocking getaddrinfo call does not stall
+    the event loop. Fails closed: a DNS resolution failure raises ValueError.
+    """
+    loop = asyncio.get_event_loop()
     try:
-        infos = socket.getaddrinfo(hostname, None)
+        infos = await loop.run_in_executor(None, socket.getaddrinfo, hostname, None)
     except OSError as e:
         raise ValueError(f"DNS resolution failed for {hostname}: {e}") from e
     for info in infos:
@@ -163,12 +169,12 @@ def build_chemclaw_mcp_server(
         if not api_key:
             return {"results": [], "error": "BRAVE_SEARCH_API_KEY not configured"}
         if site_filter:
-            if not re.match(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', site_filter):
+            sf = site_filter.strip().lower()
+            if not re.match(r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$', sf):
                 return {"results": [], "error": "Invalid site_filter"}
-            if not _is_allowed_domain(site_filter):
-                return {"results": [], "error": f"site_filter '{site_filter}' is not in the approved domain list"}
-            q = f"site:{site_filter.lower()} {q}"
-        url = f"https://api.search.brave.com/res/v1/web/search?q={httpx.URL(q).path}&count=5"
+            if not _is_allowed_domain(sf):
+                return {"results": [], "error": f"site_filter '{sf}' is not in the approved domain list"}
+            q = f"site:{sf} {q}"
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 r = await client.get(
@@ -203,17 +209,40 @@ def build_chemclaw_mcp_server(
         if not _is_allowed_domain(hostname):
             return {"error": f"Domain '{hostname}' is not in the allowed list"}
         try:
-            _assert_not_private(hostname)
+            await _assert_not_private(hostname)
         except ValueError as e:
             return {"error": str(e)}
         MAX_BYTES = 500_000
-        try:
-            async with httpx.AsyncClient(
-                timeout=15.0,
-                follow_redirects=True,
-                headers={"User-Agent": "chemclaw2/1.0 (research assistant)"},
-            ) as client:
-                r = await client.get(url)
+        # Follow redirects manually: re-validate each hop's domain and IP.
+        current_url = url
+        for _ in range(5):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=15.0,
+                    follow_redirects=False,
+                    headers={"User-Agent": "chemclaw2/1.0 (research assistant)"},
+                ) as client:
+                    r = await client.get(current_url)
+            except Exception:
+                logger.warning("fetch_document_failed url=%s", current_url[:100])
+                return {"error": "Fetch failed"}
+            if r.is_redirect:
+                redir_loc = r.headers.get("location", "")
+                if not redir_loc:
+                    return {"error": "Redirect with no Location header"}
+                try:
+                    redir_parsed = urlparse(redir_loc)
+                    redir_hostname = redir_parsed.hostname or ""
+                except Exception:
+                    return {"error": "Invalid redirect URL"}
+                if not _is_allowed_domain(redir_hostname):
+                    return {"error": f"Redirect to blocked domain: '{redir_hostname}'"}
+                try:
+                    await _assert_not_private(redir_hostname)
+                except ValueError as e:
+                    return {"error": str(e)}
+                current_url = redir_loc
+                continue
             if not r.is_success:
                 return {"error": f"HTTP {r.status_code}"}
             content_type = r.headers.get("content-type", "")
@@ -227,9 +256,7 @@ def build_chemclaw_mcp_server(
             if format == "markdown":
                 text = _html_to_text(text)
             return {"content": text[:100_000], "truncated": len(r.content) > MAX_BYTES}
-        except Exception as e:
-            logger.warning("fetch_document_failed url=%s: %s", url[:100], e)
-            return {"error": f"Fetch failed: {e}"}
+        return {"error": "Too many redirects"}
 
     # ── ELN experiment fetch ──────────────────────────────────────────────────
     @mcp.tool()
@@ -241,7 +268,7 @@ def build_chemclaw_mcp_server(
         try:
             parsed = urlparse(eln_base)
             hostname = parsed.hostname or ""
-            _assert_not_private(hostname)
+            await _assert_not_private(hostname)
         except ValueError as e:
             return {"error": str(e)}
         eln_key = os.environ.get("ELN_API_KEY", "")
@@ -261,7 +288,7 @@ def build_chemclaw_mcp_server(
             return r.json()
         except Exception as e:
             logger.warning("eln_fetch_failed exp=%s: %s", exp_id, e)
-            return {"error": f"ELN fetch failed: {e}"}
+            return {"error": "ELN fetch failed"}
 
     # ── synthesis campaign tools ──────────────────────────────────────────────
     @mcp.tool()
@@ -273,7 +300,8 @@ def build_chemclaw_mcp_server(
         if not session_id:
             return {"error": "No session_id — cannot create campaign"}
         async with session_factory() as db:
-            campaign_id = await create_campaign(db, session_id, user_id, target_smiles)
+            async with db.begin():
+                campaign_id = await create_campaign(db, session_id, user_id, target_smiles)
         return {"campaign_id": campaign_id, "status": "planning"}
 
     @mcp.tool()
@@ -284,16 +312,19 @@ def build_chemclaw_mcp_server(
     ) -> dict[str, Any]:
         """Confirm a synthesis plan and add steps to the campaign."""
         from api.db.queries.campaigns import update_campaign_status, add_campaign_step
+        # Single transaction: status flip + step inserts are atomic.
+        # If any step insert fails the whole operation rolls back.
         async with session_factory() as db:
-            await update_campaign_status(db, campaign_id, "running", plan)
-            for step in steps:
-                await add_campaign_step(
-                    db,
-                    campaign_id,
-                    step["step_idx"],
-                    step.get("reaction_smiles"),
-                    step.get("conditions"),
-                )
+            async with db.begin():
+                await update_campaign_status(db, campaign_id, user_id, "running", plan)
+                for step in steps:
+                    await add_campaign_step(
+                        db,
+                        campaign_id,
+                        step["step_idx"],
+                        step.get("reaction_smiles"),
+                        step.get("conditions"),
+                    )
         return {"campaign_id": campaign_id, "status": "running", "steps_added": len(steps)}
 
     return mcp
