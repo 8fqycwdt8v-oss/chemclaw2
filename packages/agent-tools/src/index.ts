@@ -30,7 +30,7 @@ export {
 } from './embeddings';
 export { markdownToTiptap, type TiptapDoc } from './markdown-to-tiptap';
 export { validateCitations, type CitationInput } from './citation-validation';
-export { isValidTiptapDoc } from './tiptap';
+export { isValidTiptapDoc, TiptapDocSchema, type TiptapDocShape } from './tiptap';
 export { toolError } from './tool-error';
 export {
   MAX_MARKDOWN_LEN,
