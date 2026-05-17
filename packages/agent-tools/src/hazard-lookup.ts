@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { safeFetch } from './safe-fetch';
+import { logger } from '@chemclaw2/observability';
 import { toolError } from './tool-error';
 import type { ToolDef } from './tool-def';
 
@@ -34,24 +35,34 @@ export const hazardLookupTool: ToolDef<typeof schema> = {
       : `/rest/pug/compound/smiles/${encodeURIComponent(id)}/cids/JSON`;
 
     try {
+      const cidStart = Date.now();
       const cidRes = await safeFetch(`https://pubchem.ncbi.nlm.nih.gov${path}`, ALLOWED);
+      logger.info('pubchem_cid_lookup', { kind: input.kind, status: cidRes.status, duration_ms: Date.now() - cidStart });
       if (!cidRes.ok) return { error: `PubChem CID lookup failed: ${cidRes.status}` };
       const cidBody = (await cidRes.json()) as { IdentifierList?: { CID?: number[] } };
       const cid = cidBody.IdentifierList?.CID?.[0];
       if (!cid) return { error: 'No PubChem record found for that identifier' };
 
+      const ghsStart = Date.now();
       const ghsRes = await safeFetch(
         `https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/${cid}/JSON?heading=GHS+Classification`,
         ALLOWED,
       );
+      logger.info('pubchem_ghs_lookup', { cid, status: ghsRes.status, duration_ms: Date.now() - ghsStart });
       if (!ghsRes.ok) {
         return { cid, hazards: null, note: `PubChem has no GHS classification for CID ${cid}` };
       }
       const raw = await ghsRes.text();
       if (Buffer.byteLength(raw, 'utf8') > MAX_BYTES) {
+        logger.warn('pubchem_ghs_oversized', { cid, bytes: Buffer.byteLength(raw, 'utf8') });
         return { error: 'PubChem GHS response exceeds size limit' };
       }
-      return { cid, ghs_raw: JSON.parse(raw) };
+      try {
+        return { cid, ghs_raw: JSON.parse(raw) };
+      } catch (parseErr) {
+        logger.warn('pubchem_ghs_json_parse_failed', { cid, sample: raw.slice(0, 300) }, parseErr);
+        throw parseErr;
+      }
     } catch (err) {
       return toolError('lookup_hazard', err);
     }

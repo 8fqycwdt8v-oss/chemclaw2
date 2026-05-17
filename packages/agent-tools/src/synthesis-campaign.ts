@@ -9,6 +9,7 @@ import {
   db,
   sql,
 } from '@chemclaw2/db';
+import { logger } from '@chemclaw2/observability';
 import { UUID_RE } from './uuid';
 import type { ToolDef } from './tool-def';
 
@@ -143,7 +144,11 @@ export function createSynthesisCampaignTools(userId: string): {
         });
         if (items.length > 0) {
           await replaceSessionTodos(owned.campaign.sessionId, userId, items).catch((err) => {
-            console.error('[kickoff_campaign] replaceSessionTodos failed:', err);
+            logger.error('replace_session_todos_failed', {
+              session_id: owned.campaign.sessionId,
+              user_id: userId,
+              item_count: items.length,
+            }, err);
           });
         }
       }

@@ -1,5 +1,6 @@
 import dns from 'dns';
 import ipaddr from 'ipaddr.js';
+import { logger } from '@chemclaw2/observability';
 
 /**
  * Resolve hostname via DNS and reject if any resolved address is non-unicast
@@ -7,26 +8,29 @@ import ipaddr from 'ipaddr.js';
  *
  * This is a best-effort DNS rebinding guard for native fetch(). Two known gaps:
  * - TOCTOU: the resolved IP can change between this check and TCP connection.
- * - Intermediate redirect hops are not individually DNS-validated; only the
- *   initial URL and the final res.url are checked against both the allowlist and DNS.
- *   Multi-hop redirect chains through a compromised allowed domain remain a
- *   theoretical gap. Definitive protection requires infrastructure-level egress
- *   filtering or per-hop redirect interception.
+ * - Intermediate redirect hops are not individually DNS-validated.
  */
 async function assertNotPrivateHost(hostname: string): Promise<void> {
   let addresses: Array<{ address: string; family: number }>;
+  const startMs = Date.now();
   try {
     addresses = await dns.promises.lookup(hostname, { all: true });
-  } catch {
+  } catch (err) {
+    logger.warn('dns_lookup_failed', {
+      hostname,
+      duration_ms: Date.now() - startMs,
+    }, err);
     throw new Error(`DNS resolution failed for ${hostname}`);
   }
   for (const { address } of addresses) {
     // Fail closed: treat unrecognised address formats as non-public to prevent bypass
     if (!ipaddr.isValid(address)) {
+      logger.warn('safe_fetch_ssrf_block', { hostname, reason: 'unrecognised_address', address });
       throw new Error(`SSRF blocked: ${hostname} resolved to an unrecognised address format`);
     }
     const parsed = ipaddr.parse(address);
     if (parsed.range() !== 'unicast') {
+      logger.warn('safe_fetch_ssrf_block', { hostname, reason: 'non_unicast', range: parsed.range() });
       throw new Error(`SSRF blocked: ${hostname} resolves to a non-public address`);
     }
   }
@@ -50,6 +54,7 @@ export async function safeFetch(
 
   const initial = new URL(url);
   if (!isDomainAllowed(initial.hostname)) {
+    logger.warn('safe_fetch_domain_blocked', { hostname: initial.hostname });
     throw new Error(`Domain not allowed: ${initial.hostname}`);
   }
   await assertNotPrivateHost(initial.hostname);
@@ -59,6 +64,7 @@ export async function safeFetch(
   // Post-redirect revalidation: hostname + DNS check on the final URL
   const final = new URL(res.url);
   if (!isDomainAllowed(final.hostname)) {
+    logger.warn('safe_fetch_redirect_blocked', { initial_host: initial.hostname, final_host: final.hostname });
     throw new Error(`Redirect target domain not allowed: ${final.hostname}`);
   }
   if (final.hostname !== initial.hostname) {

@@ -1,6 +1,6 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { trace } from '@opentelemetry/api';
+import { logger } from '@chemclaw2/observability';
 import * as schema from './schema/index';
 
 // Lazy initialization: defer validation until first DB call so Next.js
@@ -26,11 +26,19 @@ function getDb() {
     if (!connectionString) throw new Error('DATABASE_URL is required');
     _sql = postgres(connectionString, {
       max: poolMax(),
-      onnotice: () => {},
+      // Surface Postgres NOTICE/WARNING messages — deadlocks, autovacuum,
+      // IF EXISTS skips. Dropping them silently was masking schema drift.
+      onnotice: (n) => {
+        logger.warn('pg_notice', {
+          severity: n.severity_local ?? n.severity,
+          code: n.code,
+          message: n.message,
+        });
+      },
       // Surface socket / pool errors so OTel + Langfuse see them instead of
       // silently dropping queries on transient network issues.
       onclose: (connId) => {
-        trace.getActiveSpan()?.addEvent('db.connection_closed', { conn_id: String(connId) });
+        logger.debug('db_connection_closed', { conn_id: String(connId) });
       },
     });
     _db = drizzle(_sql, { schema });

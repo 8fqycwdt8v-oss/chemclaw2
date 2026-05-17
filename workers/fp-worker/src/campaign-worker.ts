@@ -1,7 +1,7 @@
 import PgBoss from 'pg-boss';
 import OpenAI from 'openai';
 import { ne, eq, and, lt, inArray, notInArray, sql } from 'drizzle-orm';
-import { trace } from '@opentelemetry/api';
+import { logger } from '@chemclaw2/observability';
 import { db } from '@chemclaw2/db';
 import { campaignSteps, synthesisCampaigns, reactions } from '@chemclaw2/db';
 import { upsertWikiPage, findSimilarReactions } from '@chemclaw2/db';
@@ -26,9 +26,17 @@ function getOpenAI(): OpenAI {
 
 async function embedTextsForWorker(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
+  const startMs = Date.now();
   const stripped = texts.map(stripMarkdownForEmbedding);
   const inputs = prepareEmbeddingInputs(stripped);
-  const res = await getOpenAI().embeddings.create({ model: EMBED_MODEL, input: inputs });
+  let res;
+  try {
+    res = await getOpenAI().embeddings.create({ model: EMBED_MODEL, input: inputs });
+  } catch (err) {
+    logger.error('campaign_embed_failed', { text_count: texts.length, duration_ms: Date.now() - startMs }, err);
+    throw err;
+  }
+  logger.info('campaign_embed_complete', { text_count: texts.length, duration_ms: Date.now() - startMs });
   return res.data.map((d) => {
     if (d.embedding.length !== EMBED_DIM) {
       throw new Error(`embedTextsForWorker: vector dim ${d.embedding.length} ≠ expected ${EMBED_DIM}`);
@@ -90,9 +98,7 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
       .limit(50);
     for (const { id } of pending) {
       await boss.send('run-campaign-step', { stepId: id }, { singletonKey: id }).catch((err) => {
-        trace.getActiveSpan()?.addEvent('campaign.enqueue_failed', {
-          queue: 'run-campaign-step', step_id: id, error: err instanceof Error ? err.message : String(err),
-        });
+        logger.warn('campaign_enqueue_failed', { queue: 'run-campaign-step', step_id: id }, err);
       });
     }
 
@@ -116,15 +122,13 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
       .from(campaignSteps)
       .where(and(eq(campaignSteps.status, 'failed'), sql`${campaignSteps.retryCount} >= 3`));
     if (stuckCount > 0) {
-      trace.getActiveSpan()?.addEvent('campaign.steps_permanently_failed', { count: stuckCount });
+      logger.warn('campaign_steps_permanently_failed', { count: stuckCount });
     }
 
     const stepsToRetry = await getStepsForRetry();
     for (const { id } of stepsToRetry) {
       await boss.send('run-campaign-step', { stepId: id }, { singletonKey: id }).catch((err) => {
-        trace.getActiveSpan()?.addEvent('campaign.enqueue_failed', {
-          queue: 'run-campaign-step', step_id: id, error: err instanceof Error ? err.message : String(err),
-        });
+        logger.warn('campaign_enqueue_failed', { queue: 'run-campaign-step', step_id: id }, err);
       });
     }
   });
@@ -149,9 +153,12 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
         });
       if (!claimed) continue;
 
+      const stepStart = Date.now();
+      logger.info('campaign_step_start', { step_id: stepId, campaign_id: claimed.campaignId, attempt: claimed.retryCount });
       try {
         const result = await buildStepResult(claimed.reactionSmiles);
         await markStepComplete(stepId, result);
+        logger.info('campaign_step_complete', { step_id: stepId, campaign_id: claimed.campaignId, duration_ms: Date.now() - stepStart });
 
         const [campaign] = await db.select().from(synthesisCampaigns).where(eq(synthesisCampaigns.id, claimed.campaignId));
         if (campaign) {
@@ -165,17 +172,16 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
               and(eq(synthesisCampaigns.id, campaign.id), notInArray(synthesisCampaigns.status, [...TERMINAL_STATUSES])),
             ).returning({ id: synthesisCampaigns.id });
             if (updated.length > 0) {
+              logger.info('campaign_complete', { campaign_id: campaign.id });
               await boss.send('create-campaign-wiki', { campaignId: campaign.id }, { singletonKey: campaign.id }).catch((err) => {
-                trace.getActiveSpan()?.addEvent('campaign.enqueue_failed', {
-                  queue: 'create-campaign-wiki', campaign_id: campaign.id, error: err instanceof Error ? err.message : String(err),
-                });
+                logger.warn('campaign_enqueue_failed', { queue: 'create-campaign-wiki', campaign_id: campaign.id }, err);
               });
             }
           }
         }
       } catch (err) {
         await markStepFailed(stepId, claimed.retryCount);
-        console.error(`[campaign-worker] step ${stepId} failed:`, err);
+        logger.error('campaign_step_failed', { step_id: stepId, campaign_id: claimed.campaignId, attempt: claimed.retryCount, duration_ms: Date.now() - stepStart }, err);
       }
     }
   });
@@ -246,9 +252,9 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
         );
 
         await db.update(synthesisCampaigns).set({ wikiPageId }).where(eq(synthesisCampaigns.id, campaignId));
-        console.log(`[campaign-worker] wiki page created for campaign ${campaignId}: ${slug}`);
+        logger.info('campaign_wiki_created', { campaign_id: campaignId, slug, page_id: wikiPageId, citation_count: citations.length });
       } catch (err) {
-        console.error(`[campaign-worker] wiki page creation failed for campaign ${campaignId}:`, err);
+        logger.error('campaign_wiki_create_failed', { campaign_id: campaignId }, err);
         throw err; // allow pg-boss to retry
       }
     }

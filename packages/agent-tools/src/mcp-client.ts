@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process';
-import { trace } from '@opentelemetry/api';
+import { logger } from '@chemclaw2/observability';
 
 const PYTHON = process.env.MCP_PYTHON_PATH ?? '/opt/venv/bin/python';
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -25,23 +25,33 @@ export function callMcpTool(
 ): Promise<Record<string, unknown>> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
+    const startMs = Date.now();
     const proc = spawn(PYTHON, ['-m', pythonModule], { stdio: ['pipe', 'pipe', 'inherit'] });
     opts.activeProcs?.add(proc);
 
     let buf = '';
     let initDone = false;
     let settled = false;
+    let droppedLines = 0;
 
-    const settle = (fn: () => void) => {
+    const settle = (fn: () => void, outcome: 'resolve' | 'reject' | 'timeout') => {
       if (settled) return;
       settled = true;
       opts.activeProcs?.delete(proc);
       clearTimeout(timer);
+      const duration_ms = Date.now() - startMs;
+      if (outcome === 'resolve') {
+        logger.info('mcp_call_complete', { tool: toolName, duration_ms, dropped_lines: droppedLines });
+      } else if (outcome === 'timeout') {
+        logger.warn('mcp_call_timeout', { tool: toolName, duration_ms, timeout_ms: timeoutMs, dropped_lines: droppedLines });
+      } else {
+        logger.warn('mcp_call_rejected', { tool: toolName, duration_ms, dropped_lines: droppedLines });
+      }
       fn();
     };
     const timer = setTimeout(() => {
       proc.kill();
-      settle(() => reject(new Error(`MCP tool ${toolName} timed out after ${timeoutMs}ms`)));
+      settle(() => reject(new Error(`MCP tool ${toolName} timed out after ${timeoutMs}ms`)), 'timeout');
     }, timeoutMs);
     const send = (msg: object) => proc.stdin.write(JSON.stringify(msg) + '\n');
 
@@ -62,10 +72,15 @@ export function callMcpTool(
         try {
           msg = JSON.parse(line) as Record<string, unknown>;
         } catch {
-          trace.getActiveSpan()?.addEvent('mcp.response_line_unparseable', {
-            tool: toolName,
-            sample: line.slice(0, 200),
-          });
+          droppedLines++;
+          // Log only the first to avoid flooding when a broken child sends
+          // every line as garbage; settle() includes the final cumulative count.
+          if (droppedLines === 1) {
+            logger.warn('mcp_response_line_unparseable', {
+              tool: toolName,
+              sample: line.slice(0, 200),
+            });
+          }
           continue;
         }
         if (!initDone && (msg as { id?: number }).id === INIT_ID) {
@@ -76,24 +91,28 @@ export function callMcpTool(
           proc.stdin.end();
           const err = (msg as { error?: { message?: string } }).error;
           if (err) {
-            settle(() => reject(new Error(err.message ?? 'MCP tool error')));
+            settle(() => reject(new Error(err.message ?? 'MCP tool error')), 'reject');
             return;
           }
           const result = msg as { result?: { content?: Array<{ text?: string }> } };
           const text = result.result?.content?.[0]?.text;
           try {
             const parsed = text ? (JSON.parse(text) as Record<string, unknown>) : ((msg.result as Record<string, unknown>) ?? {});
-            settle(() => resolve(parsed));
-          } catch {
-            settle(() => reject(new Error(`Failed to parse MCP response for ${toolName}`)));
+            settle(() => resolve(parsed), 'resolve');
+          } catch (parseErr) {
+            logger.error('mcp_response_final_parse_failed', {
+              tool: toolName,
+              sample: text?.slice(0, 500) ?? '(no text)',
+            }, parseErr);
+            settle(() => reject(new Error(`Failed to parse MCP response for ${toolName}`)), 'reject');
           }
         }
       }
     });
-    proc.on('error', (e) => settle(() => reject(e)));
+    proc.on('error', (e) => settle(() => reject(e), 'reject'));
     proc.on('close', (code) => {
-      if (code !== 0) settle(() => reject(new Error(`MCP ${pythonModule} exited with code ${code}`)));
-      else settle(() => reject(new Error(`MCP ${pythonModule} closed before tool response`)));
+      if (code !== 0) settle(() => reject(new Error(`MCP ${pythonModule} exited with code ${code}`)), 'reject');
+      else settle(() => reject(new Error(`MCP ${pythonModule} closed before tool response`)), 'reject');
     });
   });
 }

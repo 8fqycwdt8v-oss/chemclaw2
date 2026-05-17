@@ -1,22 +1,21 @@
 import { db, sql } from '@chemclaw2/db';
 import { auth } from '@clerk/nextjs/server';
+import { logger } from '@chemclaw2/observability';
 
 const BACKLOG_WARN_THRESHOLD = 500;
 
 /**
- * /api/health returns 200 even on partial degradation — Fly's health check
- * only watches HTTP status. Component-level state is in the JSON body so
- * dashboards/alerting can distinguish "web up, worker behind" from "all green".
- *
- * Backlog counts are signed-in-only to avoid leaking compound/reaction
- * registry size to unauthenticated probes. Unauth probes (Fly health check)
- * still get a stable 200.
+ * /api/health is dual-purpose:
+ *   - unauthenticated: Fly's TCP/HTTP health check. Returns 503 if DB is
+ *     unreachable so a bad rollout fails the check instead of staying up
+ *     with a dark backend (audit finding #2).
+ *   - authenticated: returns component-level state for the admin
+ *     dashboard. Backlog counts are signed-in-only to avoid leaking
+ *     compound/reaction registry size to unauthenticated probes.
  */
 export async function GET() {
   const { userId } = await auth();
-  if (!userId) {
-    return Response.json({ ok: true });
-  }
+
   let dbOk = false;
   let pendingCompounds = 0;
   let pendingReactions = 0;
@@ -34,8 +33,14 @@ export async function GET() {
       pendingReactions = Number(rows[0].pending_reactions ?? 0);
     }
     dbOk = true;
-  } catch {
+  } catch (err) {
+    logger.error('health_db_query_failed', {}, err);
     dbOk = false;
+  }
+
+  if (!userId) {
+    // Probe path — body is intentionally small. Bad rollouts fail the check.
+    return Response.json({ ok: dbOk }, { status: dbOk ? 200 : 503 });
   }
 
   const fpBacklog = pendingCompounds + pendingReactions;
