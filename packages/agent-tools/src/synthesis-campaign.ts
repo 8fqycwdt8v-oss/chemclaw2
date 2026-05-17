@@ -4,7 +4,7 @@ import {
   updateCampaignStatusForUser,
   getCampaignBySession,
   getCampaignWithStepsForUser,
-  addCampaignStep,
+  confirmCampaignPlanForUser,
   replaceSessionTodos,
   db,
   sql,
@@ -73,23 +73,20 @@ export function createSynthesisCampaignTools(userId: string): {
         return { error: `Plan exceeds maximum of ${MAX_STEPS} synthesis steps` };
       }
 
-      const { found } = await updateCampaignStatusForUser(
+      // Status flip + step inserts run in one transaction so a mid-loop
+      // insert failure can't leave the campaign wedged in awaiting_input
+      // with a partial step list.
+      const stepRows = allSteps.map((s) => ({
+        reactionSmiles: typeof s.reaction_smiles === 'string' ? s.reaction_smiles : undefined,
+        conditions: typeof s.conditions === 'string' ? s.conditions : undefined,
+      }));
+      const { found } = await confirmCampaignPlanForUser(
         input.campaign_id,
         userId,
-        'awaiting_input',
         input.plan,
+        stepRows,
       );
       if (!found) return { error: 'Campaign not found or access denied' };
-
-      // Create individual step rows from the plan's steps array so the worker
-      // can track and retry each step independently.
-      for (let i = 0; i < allSteps.length; i++) {
-        const s = allSteps[i];
-        await addCampaignStep(input.campaign_id, i, {
-          reactionSmiles: typeof s.reaction_smiles === 'string' ? s.reaction_smiles : undefined,
-          conditions: typeof s.conditions === 'string' ? s.conditions : undefined,
-        });
-      }
 
       return { status: 'awaiting_input', message: 'Plan saved. Waiting for user confirmation.', steps_created: allSteps.length };
     },

@@ -102,8 +102,13 @@ export function ChatClient() {
   // GET is idempotent; we then POST campaign ids to mark them acknowledged.
   useEffect(() => {
     let cancelled = false;
+    // In-flight guard: on a slow network a poll can outlast the 30s tick,
+    // so without this two pollers overlap, see the same campaigns, and
+    // double-render toasts before the ACK round-trip completes.
+    let inFlight = false;
     const poll = async () => {
-      if (document.visibilityState !== 'visible') return;
+      if (document.visibilityState !== 'visible' || inFlight) return;
+      inFlight = true;
       try {
         const res = await fetch('/api/notifications');
         if (!res.ok || cancelled) return;
@@ -128,6 +133,8 @@ export function ChatClient() {
         }).catch(() => {});
       } catch {
         // network glitches are fine; the next tick will retry
+      } finally {
+        inFlight = false;
       }
     };
     const handle = setInterval(poll, 30_000);

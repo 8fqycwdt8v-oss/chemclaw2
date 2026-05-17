@@ -33,6 +33,16 @@ export function callMcpTool(
       signal,
     });
     opts.activeProcs?.add(proc);
+    // SIGKILL backstop: spawn's `signal` option sends SIGTERM on timeout, but
+    // a Python child mid-RDKit/DRFP C call ignores SIGTERM until the C frame
+    // returns. Without escalation the process leaks as a zombie holding pipe
+    // FDs and its activeProcs slot. Close stdin so the child sees EOF, then
+    // SIGKILL after a grace window. unref() so the timer never holds the
+    // event loop open past a clean exit.
+    signal.addEventListener('abort', () => {
+      try { proc.stdin.destroy(); } catch { /* already closed */ }
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* already exited */ } }, 2_000).unref();
+    }, { once: true });
 
     let buf = '';
     let initDone = false;
