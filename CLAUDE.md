@@ -37,6 +37,11 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 - **Filter before map.** Don't materialize values you're about to discard.
 - **No defensive checks the language guarantees.** `Number.isFinite` after `parseInt`, `x ? true : false`, double-casts through primitives (`str(int(b))` on numpy 0/1) — drop them.
 - **Rate-limit responses always carry `Retry-After`.** Route 429s through the shared gate so the header is never missed.
+- **Next.js route handlers gate auth + rate-limit through one helper** (e.g. `requireUserWithRateLimit` in `apps/web/lib/api-gate.ts`). No inline `auth()` → `rateLimit()` → 401/429 prelude per route.
+- **Zod request body schemas live in `*-schemas.ts` modules** alongside a shared error formatter — route handlers `safeParse` the raw body and translate failures through it. No hand-rolled body validation inside the handler.
+- **Drizzle `customType` factories live in one shared module per package** (e.g. `packages/db/src/schema/custom-types.ts`). Don't redefine column type factories inside individual schema files.
+- **All server-side logging goes through `@chemclaw2/observability` `logger`.** No `console.*` calls in app/worker code; pass `err` as the third arg and the logger handles stringification.
+- **Wrap latency-critical work in `withSpan(name, attrs, fn)`** from `@chemclaw2/observability`. Don't call OTel `trace.getActiveSpan()?.addEvent()` directly for spans that should be measurable on their own.
 
 ## Stack
 
