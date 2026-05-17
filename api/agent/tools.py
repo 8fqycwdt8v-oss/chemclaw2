@@ -332,12 +332,12 @@ def build_chemclaw_mcp_server(
         # If any step insert fails the whole operation rolls back.
         async with session_factory() as db:
             async with db.begin():
-                await update_campaign_status(db, campaign_id, "running", user_id=user_id, plan=plan)
+                await update_campaign_status(db, campaign_id, user_id, "running", plan=plan)
                 for step in steps:
                     await add_campaign_step(
                         db,
                         campaign_id,
-                        step["step_idx"],
+                        int(step.get("step_idx", 0)),
                         step.get("reaction_smiles"),
                         step.get("conditions"),
                     )
