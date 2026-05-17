@@ -1,23 +1,15 @@
-import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { getWikiPage, subscribeToWikiPage, unsubscribeFromWikiPage } from '@chemclaw2/db';
-import { rateLimit } from '@/lib/rate-limit';
+import { requireUserWithRateLimit } from '@/lib/api-gate';
 import { isValidSlug } from '@/lib/validation';
 import { withApiContext } from '@/lib/api-context';
 import { logger } from '@chemclaw2/observability';
 
 export async function POST(_req: Request, { params }: { params: Promise<{ slug: string }> }) {
   return withApiContext(async () => {
-    const { userId } = await auth();
-    if (!userId) {
-      logger.info('auth_denied', { route: 'wiki_subscribe', method: 'POST' });
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    const { limited } = await rateLimit(`wiki:${userId}`, 20, 60_000);
-    if (limited) {
-      logger.warn('rate_limit_hit', { route: 'wiki_subscribe', method: 'POST', user_id: userId });
-      return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
-    }
+    const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
+    if (gate instanceof NextResponse) return gate;
+    const { userId } = gate;
 
     const { slug } = await params;
     if (!isValidSlug(slug)) {
@@ -40,16 +32,9 @@ export async function POST(_req: Request, { params }: { params: Promise<{ slug: 
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ slug: string }> }) {
   return withApiContext(async () => {
-    const { userId } = await auth();
-    if (!userId) {
-      logger.info('auth_denied', { route: 'wiki_subscribe', method: 'DELETE' });
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    const { limited } = await rateLimit(`wiki:${userId}`, 20, 60_000);
-    if (limited) {
-      logger.warn('rate_limit_hit', { route: 'wiki_subscribe', method: 'DELETE', user_id: userId });
-      return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
-    }
+    const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
+    if (gate instanceof NextResponse) return gate;
+    const { userId } = gate;
 
     const { slug } = await params;
     if (!isValidSlug(slug)) {

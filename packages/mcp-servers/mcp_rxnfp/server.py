@@ -67,7 +67,7 @@ def compute_drfp(reaction_smiles: str) -> dict:
     fps = DrfpEncoder.encode([reaction_smiles], n_folded_length=_NBITS)
     bit_arr = fps[0]
     # DrfpEncoder returns a numpy array of 0/1 ints
-    bit_str = "".join(str(int(b)) for b in bit_arr)
+    bit_str = "".join(str(b) for b in bit_arr)
     if len(bit_str) != _NBITS:
         log.error(
             "drfp_bit_length_drift",

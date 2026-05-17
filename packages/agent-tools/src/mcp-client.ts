@@ -26,8 +26,22 @@ export function callMcpTool(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
     const startMs = Date.now();
-    const proc = spawn(PYTHON, ['-m', pythonModule], { stdio: ['pipe', 'pipe', 'inherit'] });
+    // AbortSignal.timeout() + spawn's `signal` option auto-kills the child on
+    // timeout (default SIGTERM) and surfaces an AbortError via proc.on('error').
+    const signal = AbortSignal.timeout(timeoutMs);
+    const proc = spawn(PYTHON, ['-m', pythonModule], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+      signal,
+    });
     opts.activeProcs?.add(proc);
+    // SIGKILL backstop: spawn's `signal` option sends SIGTERM on timeout, but
+    // a Python child mid-RDKit/DRFP C call ignores SIGTERM until the C frame
+    // returns. Close stdin so the child sees EOF, then SIGKILL after a grace
+    // window.
+    signal.addEventListener('abort', () => {
+      try { proc.stdin.destroy(); } catch { /* already closed */ }
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* already exited */ } }, 2_000).unref();
+    }, { once: true });
 
     let buf = '';
     let initDone = false;
@@ -38,7 +52,6 @@ export function callMcpTool(
       if (settled) return;
       settled = true;
       opts.activeProcs?.delete(proc);
-      clearTimeout(timer);
       const duration_ms = Date.now() - startMs;
       if (outcome === 'resolve') {
         logger.info('mcp_call_complete', { tool: toolName, duration_ms, dropped_lines: droppedLines });
@@ -49,10 +62,6 @@ export function callMcpTool(
       }
       fn();
     };
-    const timer = setTimeout(() => {
-      proc.kill();
-      settle(() => reject(new Error(`MCP tool ${toolName} timed out after ${timeoutMs}ms`)), 'timeout');
-    }, timeoutMs);
     const send = (msg: object) => proc.stdin.write(JSON.stringify(msg) + '\n');
 
     send({
@@ -109,7 +118,13 @@ export function callMcpTool(
         }
       }
     });
-    proc.on('error', (e) => settle(() => reject(e), 'reject'));
+    proc.on('error', (e) => {
+      if ((e as NodeJS.ErrnoException).name === 'AbortError') {
+        settle(() => reject(new Error(`MCP tool ${toolName} timed out after ${timeoutMs}ms`)), 'timeout');
+      } else {
+        settle(() => reject(e), 'reject');
+      }
+    });
     proc.on('close', (code) => {
       if (code !== 0) settle(() => reject(new Error(`MCP ${pythonModule} exited with code ${code}`)), 'reject');
       else settle(() => reject(new Error(`MCP ${pythonModule} closed before tool response`)), 'reject');

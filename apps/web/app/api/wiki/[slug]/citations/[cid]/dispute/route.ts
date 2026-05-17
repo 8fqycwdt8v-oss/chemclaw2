@@ -1,7 +1,6 @@
-import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { getWikiPage, setCitationDisputed } from '@chemclaw2/db';
-import { rateLimit } from '@/lib/rate-limit';
+import { requireUserWithRateLimit } from '@/lib/api-gate';
 import { isValidSlug } from '@/lib/validation';
 import { withApiContext } from '@/lib/api-context';
 import { logger } from '@chemclaw2/observability';
@@ -11,16 +10,8 @@ export async function POST(
   { params }: { params: Promise<{ slug: string; cid: string }> },
 ) {
   return withApiContext(async () => {
-    const { userId } = await auth();
-    if (!userId) {
-      logger.info('auth_denied', { route: 'citation_dispute' });
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    const { limited } = await rateLimit(`wiki:${userId}`, 20, 60_000);
-    if (limited) {
-      logger.warn('rate_limit_hit', { route: 'citation_dispute', user_id: userId });
-      return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
-    }
+    const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
+    if (gate instanceof NextResponse) return gate;
 
     const { slug, cid } = await params;
     if (!isValidSlug(slug) || cid.length === 0 || cid.length > 200) {

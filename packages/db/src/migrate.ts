@@ -4,14 +4,13 @@ import postgres from 'postgres';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { logger } from '@chemclaw2/observability';
+import { dbEnv } from './env';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 async function runMigrations() {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) throw new Error('DATABASE_URL is required');
-
-  const sql = postgres(connectionString, { max: 1 });
+  const { DATABASE_URL } = dbEnv();
+  const sql = postgres(DATABASE_URL, { max: 1 });
   const db = drizzle(sql);
 
   const migrationsFolder = join(__dirname, '../migrations');

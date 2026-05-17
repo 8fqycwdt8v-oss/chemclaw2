@@ -8,7 +8,8 @@
     "./client": "./src/client.ts",
     "./session-store": "./src/session-store.ts",
     "./schema": "./src/schema/index.ts",
-    "./migrate": "./src/migrate.ts"
+    "./migrate": "./src/migrate.ts",
+    "./env": "./src/env.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -19,7 +20,8 @@
     "@chemclaw2/observability": "workspace:*",
     "@opentelemetry/api": "^1.9.1",
     "drizzle-orm": "^0.38.0",
-    "postgres": "^3.4.5"
+    "postgres": "^3.4.5",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

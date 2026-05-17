@@ -5,10 +5,10 @@ export async function register() {
     const { installProcessHandlers } = await import('@chemclaw2/observability');
     installProcessHandlers('web');
 
-    const publicKey = process.env.LANGFUSE_PUBLIC_KEY;
-    const secretKey = process.env.LANGFUSE_SECRET_KEY;
-    if (!publicKey || !secretKey) {
-      if (process.env.NODE_ENV === 'production') {
+    const { webEnv } = await import('./lib/env');
+    const { LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASEURL, NODE_ENV } = webEnv();
+    if (!LANGFUSE_PUBLIC_KEY || !LANGFUSE_SECRET_KEY) {
+      if (NODE_ENV === 'production') {
         throw new Error('LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are required in production');
       }
       const { logger } = await import('@chemclaw2/observability');
@@ -25,9 +25,9 @@ export async function register() {
     const sdk = new NodeSDK({
       spanProcessors: [
         new LangfuseSpanProcessor({
-          publicKey,
-          secretKey,
-          baseUrl: process.env.LANGFUSE_BASEURL ?? 'https://cloud.langfuse.com',
+          publicKey: LANGFUSE_PUBLIC_KEY,
+          secretKey: LANGFUSE_SECRET_KEY,
+          baseUrl: LANGFUSE_BASEURL,
         }),
       ],
       instrumentations: [getNodeAutoInstrumentations()],

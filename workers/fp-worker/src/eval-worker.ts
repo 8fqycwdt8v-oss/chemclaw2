@@ -10,6 +10,7 @@ import {
   pgRateLimit,
   type EvalProbeResult,
 } from '@chemclaw2/db';
+import { errorMessage } from './errors';
 
 // BACKLOG #37 — scheduled regression eval. Probes the chemistry plumbing
 // deterministically (no LLM calls, no $ cost per run) so the cron catches
@@ -89,7 +90,7 @@ async function runProbe(p: Probe): Promise<EvalProbeResult> {
       name: p.name,
       passed: false,
       durationMs: Date.now() - t0,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     };
   }
 }

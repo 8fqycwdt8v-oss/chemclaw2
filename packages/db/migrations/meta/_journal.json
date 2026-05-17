@@ -46,6 +46,7 @@
     { "idx": 29, "version": "7", "when": 1749825600000, "tag": "0030_wiki_trigger_fix", "breakpoints": true },
     { "idx": 30, "version": "7", "when": 1779000000000, "tag": "0031_invariants", "breakpoints": true },
     { "idx": 31, "version": "7", "when": 1779001000000, "tag": "0029_tool_perm_check_and_eval_runs", "breakpoints": true },
-    { "idx": 32, "version": "7", "when": 1779002000000, "tag": "0032_drop_redundant_retry_idx", "breakpoints": true }
+    { "idx": 32, "version": "7", "when": 1779002000000, "tag": "0032_drop_redundant_retry_idx", "breakpoints": true },
+    { "idx": 33, "version": "7", "when": 1779086400000, "tag": "0033_users", "breakpoints": true }
   ]
 }

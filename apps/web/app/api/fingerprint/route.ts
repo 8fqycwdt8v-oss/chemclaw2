@@ -1,7 +1,6 @@
-import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { callMcpTool } from '@chemclaw2/agent-tools';
-import { rateLimit } from '@/lib/rate-limit';
+import { requireUserWithRateLimit } from '@/lib/api-gate';
 import { withApiContext } from '@/lib/api-context';
 import { logger } from '@chemclaw2/observability';
 
@@ -9,17 +8,8 @@ const MAX_SMILES_LEN = 2000;
 
 export async function POST(req: Request) {
   return withApiContext(async () => {
-    const { userId } = await auth();
-    if (!userId) {
-      logger.info('auth_denied', { route: 'fingerprint' });
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const { limited } = await rateLimit(`fp:${userId}`, 30, 60_000);
-    if (limited) {
-      logger.warn('rate_limit_hit', { route: 'fingerprint', user_id: userId });
-      return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
-    }
+    const gate = await requireUserWithRateLimit('fp', 30, 60_000);
+    if (gate instanceof NextResponse) return gate;
 
     let body: { kind?: unknown; smiles?: unknown };
     try {

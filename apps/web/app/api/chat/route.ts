@@ -1,6 +1,5 @@
-import { UUID_RE } from '@/lib/validation';
+import { z } from 'zod';
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@clerk/nextjs/server';
 import { buildQueryOptions } from '@/lib/agent';
 import { agentToStream } from '@/lib/streaming';
 import { withApiContext } from '@/lib/api-context';
@@ -8,67 +7,58 @@ import { scheduledSubstanceGate, MAX_PROMPT_BYTES } from '@chemclaw2/agent-tools
 import { recordOverride, getProjectBudget, incrementSpend } from '@chemclaw2/db';
 import { logger } from '@chemclaw2/observability';
 import { randomUUID } from 'crypto';
-import { rateLimit } from '@/lib/rate-limit';
+import { requireUserWithRateLimit } from '@/lib/api-gate';
 
 const MAX_JUSTIFICATION_LEN = 2000;
 const RATE_LIMIT_REQUESTS = 20;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
+const BodySchema = z.object({
+  prompt: z.string().trim().min(1).refine(
+    (s) => Buffer.byteLength(s, 'utf8') <= MAX_PROMPT_BYTES,
+    { message: 'prompt too large' },
+  ),
+  sessionId: z.string().uuid().optional().catch(undefined),
+  override_justification: z.string().min(20).max(MAX_JUSTIFICATION_LEN).optional().catch(undefined),
+  plan_mode: z.boolean().optional().catch(undefined),
+});
+
 export async function POST(req: NextRequest) {
   return withApiContext(async () => {
-    const { userId } = await auth();
-    if (!userId) {
-      logger.info('auth_denied', { route: 'chat' });
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const apiGate = await requireUserWithRateLimit(
+      'chat', RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS,
+      'Too many requests — please wait before sending another message',
+    );
+    if (apiGate instanceof NextResponse) return apiGate;
+    const { userId } = apiGate;
 
-    const { limited } = await rateLimit(`chat:${userId}`, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS);
-    if (limited) {
-      logger.warn('rate_limit_hit', { route: 'chat', user_id: userId, max: RATE_LIMIT_REQUESTS, window_ms: RATE_LIMIT_WINDOW_MS });
-      return NextResponse.json(
-        { error: 'Too many requests — please wait before sending another message' },
-        { status: 429, headers: { 'Retry-After': '60' } },
-      );
-    }
-
-    let body: {
-      prompt?: unknown;
-      sessionId?: unknown;
-      override_justification?: unknown;
-      plan_mode?: unknown;
-    };
+    let raw: unknown;
     try {
-      body = await req.json();
+      raw = await req.json();
     } catch (err) {
       logger.warn('json_parse_failed', { route: 'chat' }, err);
       return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
     }
 
+    const parsed = BodySchema.safeParse(raw);
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      const isSize = first?.message === 'prompt too large';
+      logger.info('validation_rejected', { route: 'chat', reason: first?.message ?? 'unknown', oversize: isSize });
+      return NextResponse.json(
+        { error: first?.message ?? 'invalid request body' },
+        { status: isSize ? 413 : 400 },
+      );
+    }
+    const body = parsed.data;
+
     const prompt = body.prompt;
-    if (typeof prompt !== 'string' || prompt.trim() === '') {
-      logger.info('validation_rejected', { route: 'chat', field: 'prompt', reason: 'empty' });
-      return NextResponse.json({ error: 'prompt is required' }, { status: 400 });
-    }
-    if (Buffer.byteLength(prompt, 'utf8') > MAX_PROMPT_BYTES) {
-      logger.info('validation_rejected', { route: 'chat', field: 'prompt', reason: 'oversize', size: Buffer.byteLength(prompt, 'utf8') });
-      return NextResponse.json({ error: 'prompt too large' }, { status: 413 });
-    }
+    const sessionId = body.sessionId ?? randomUUID();
 
-    // Validate client-supplied sessionId to prevent header injection; fall back to fresh UUID
-    const sessionId =
-      typeof body.sessionId === 'string' && UUID_RE.test(body.sessionId)
-        ? body.sessionId
-        : randomUUID();
-
-    // Scheduled-substance gate: blocks by default. An authenticated user may
-    // supply override_justification (≥20 chars) to bypass — the justification
-    // and a prompt hash are recorded BEFORE the agent runs (append-only).
     const gate = scheduledSubstanceGate(prompt);
     if (gate.blocked) {
-      const justification = typeof body.override_justification === 'string'
-        ? body.override_justification.trim()
-        : '';
-      if (justification.length < 20 || justification.length > MAX_JUSTIFICATION_LEN) {
+      const justification = body.override_justification?.trim();
+      if (!justification) {
         return NextResponse.json({
           error: gate.reason,
           override_available: true,
@@ -85,13 +75,8 @@ export async function POST(req: NextRequest) {
 
     const planMode = body.plan_mode === true;
     const options = buildQueryOptions(sessionId, userId, { planMode });
-    // Wave-2c opportunity #6: persist LLM input+output tokens to the period
-    // spend row at end-of-stream. Cache-read/create tokens are reported but
-    // not billed against tokens_cap (they're effectively free and would
-    // punish cache-friendly prompts). Failure is logged but never blocks
-    // the response — same fail-open semantics as the tool-call budget hook.
     const projectKey = `chemclaw2:${userId}`;
-    const stream = agentToStream(prompt.trim(), options, {
+    const stream = agentToStream(prompt, options, {
       async onResult(result) {
         const tokens = result.inputTokens + result.outputTokens;
         if (tokens === 0) return;
@@ -111,8 +96,6 @@ export async function POST(req: NextRequest) {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache, no-store',
         Connection: 'keep-alive',
-        // Followup #11: tells nginx-style proxies (incl. Fly's) not to buffer
-        // chunks; without this the live-progress UX can stall multiple seconds.
         'X-Accel-Buffering': 'no',
       },
     });

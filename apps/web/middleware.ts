@@ -6,6 +6,7 @@ const isPublicRoute = createRouteMatcher([
   '/sign-in(.*)',
   '/sign-up(.*)',
   '/api/health',
+  '/api/webhooks/(.*)',
 ]);
 
 const REQUEST_ID_HEADER = 'x-request-id';

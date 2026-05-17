@@ -61,15 +61,17 @@ export async function safeFetch(
 
   const res = await fetch(url, { ...init, redirect: 'follow' });
 
-  // Post-redirect revalidation: hostname + DNS check on the final URL
+  // Post-redirect revalidation: hostname + DNS check on the final URL.
+  // Always re-resolve, even when the hostname matches the initial one — DNS
+  // for an allowed host can TTL-flip to a private IP between the pre-flight
+  // resolution and the redirect's connection, and a same-hostname redirect
+  // would otherwise skip the second lookup entirely.
   const final = new URL(res.url);
   if (!isDomainAllowed(final.hostname)) {
     logger.warn('safe_fetch_redirect_blocked', { initial_host: initial.hostname, final_host: final.hostname });
     throw new Error(`Redirect target domain not allowed: ${final.hostname}`);
   }
-  if (final.hostname !== initial.hostname) {
-    await assertNotPrivateHost(final.hostname);
-  }
+  await assertNotPrivateHost(final.hostname);
 
   return res;
 }

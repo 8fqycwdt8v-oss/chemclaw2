@@ -205,7 +205,17 @@ async function start() {
     logger.info('worker_shutdown_start', { component: 'fp-worker', active_procs: activeProcs.size });
     clearInterval(pollInterval);
     clearInterval(heartbeat);
-    for (const proc of activeProcs) proc.kill();
+    // SIGTERM first, then a grace window then SIGKILL — same escalation as
+    // callMcpTool's timeout. A Python child mid-RDKit C call ignores SIGTERM
+    // until the C frame returns, which can outlast the shutdown window.
+    for (const proc of activeProcs) {
+      try { proc.kill('SIGTERM'); } catch { /* already exited */ }
+    }
+    setTimeout(() => {
+      for (const proc of activeProcs) {
+        try { proc.kill('SIGKILL'); } catch { /* already exited */ }
+      }
+    }, 5_000).unref();
     await boss.stop();
     logger.info('worker_shutdown_complete', { component: 'fp-worker', duration_ms: Date.now() - shutdownStart });
     process.exit(0);

@@ -6,14 +6,15 @@ import {
   stripMarkdownForEmbedding,
 } from '@chemclaw2/agent-tools';
 import { logger } from '@chemclaw2/observability';
+import { webEnv } from './env';
 
 let client: OpenAI | undefined;
 
 function getClient() {
   if (!client) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error('OPENAI_API_KEY is required for embeddings');
-    client = new OpenAI({ apiKey });
+    const { OPENAI_API_KEY } = webEnv();
+    if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is required for embeddings');
+    client = new OpenAI({ apiKey: OPENAI_API_KEY });
   }
   return client;
 }

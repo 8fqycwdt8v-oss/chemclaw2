@@ -1,11 +1,10 @@
 import { UUID_RE } from '@/lib/validation';
-import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { replaySession } from '@chemclaw2/db';
-import { rateLimit } from '@/lib/rate-limit';
+import { requireUserWithRateLimit } from '@/lib/api-gate';
 import { withApiContext } from '@/lib/api-context';
 import { logger } from '@chemclaw2/observability';
 
@@ -19,17 +18,9 @@ const SKILL_NAME_RE = /^[a-z][a-z0-9-]{1,40}$/;
  */
 export async function POST(req: Request) {
   return withApiContext(async () => {
-    const { userId } = await auth();
-    if (!userId) {
-      logger.info('auth_denied', { route: 'skills' });
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const { limited } = await rateLimit(`skills:${userId}`, 10, 60_000);
-    if (limited) {
-      logger.warn('rate_limit_hit', { route: 'skills', user_id: userId });
-      return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
-    }
+    const gate = await requireUserWithRateLimit('skills', 10, 60_000);
+    if (gate instanceof NextResponse) return gate;
+    const { userId } = gate;
 
     let body: { sessionId?: unknown; name?: unknown; description?: unknown };
     try {
@@ -58,7 +49,6 @@ export async function POST(req: Request) {
     if (entries.length === 0) {
       return NextResponse.json({ error: 'session has no entries' }, { status: 404 });
     }
-    // Trim to last user→assistant pair (the "successful turn" being saved).
     const trimmed = entries.slice(-4);
 
     const dir = join(SKILLS_DIR, body.name);

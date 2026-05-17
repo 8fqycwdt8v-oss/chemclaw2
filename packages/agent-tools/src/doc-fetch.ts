@@ -69,10 +69,7 @@ export const docFetchTool: ToolDef<typeof docFetchSchema> = {
       totalBytes += value.byteLength;
       if (totalBytes >= MAX_BYTES) { reader.cancel().catch(() => {}); break; }
     }
-    const bytes = chunks.reduce(
-      (acc, c) => { const m = new Uint8Array(acc.length + c.length); m.set(acc); m.set(c, acc.length); return m; },
-      new Uint8Array(),
-    );
+    const bytes = Buffer.concat(chunks);
 
     if (format === 'bytes') {
       return { url: res.url, content_type: contentType, bytes_b64: Buffer.from(bytes).toString('base64') };
