@@ -151,24 +151,79 @@ async def get_wiki_page_citations(db: AsyncSession, page_id: str) -> list[dict[s
 _MIN_CHUNK_LENGTH = 50
 
 
-def chunk_text(text_body: str, chunk_size: int = 800, overlap: int = 100) -> list[str]:
-    """Split text into overlapping chunks for embedding.
+def _split_sentences(text: str) -> list[str]:
+    """Split on sentence-ending punctuation followed by whitespace."""
+    import re
+    parts = re.split(r'(?<=[.!?])\s+', text)
+    return [p.strip() for p in parts if p.strip()]
 
-    Chunks shorter than _MIN_CHUNK_LENGTH chars are dropped — single-character
-    tail slices produce near-zero-information vectors and waste embedding calls.
+
+def _split_words(text: str, max_size: int) -> list[str]:
+    """Greedy word-boundary split that never exceeds max_size."""
+    words = text.split()
+    chunks: list[str] = []
+    current = ""
+    for word in words:
+        candidate = (current + " " + word).strip() if current else word
+        if len(candidate) > max_size and current:
+            chunks.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def chunk_text(text_body: str, chunk_size: int = 400, overlap: int = 80) -> list[str]:
+    """Split text into overlapping semantic chunks for embedding.
+
+    Strategy (ported from TypeScript packages/db/src/queries/wiki.ts):
+    1. Split by paragraph boundaries (double newline).
+    2. If a paragraph exceeds chunk_size, split it by sentences.
+    3. If a sentence still exceeds chunk_size, split it by words.
+    4. Merge short segments into the previous chunk with overlap up to chunk_size.
+    5. Drop chunks shorter than _MIN_CHUNK_LENGTH chars.
+
+    Defaults (400 chars, 80 overlap) match the TypeScript implementation.
     """
     if not text_body.strip():
         return []
-    chunks = []
-    start = 0
-    while start < len(text_body):
-        end = start + chunk_size
-        chunk = text_body[start:end]
-        if len(chunk) >= _MIN_CHUNK_LENGTH:
-            chunks.append(chunk)
-        if end >= len(text_body):
-            break
-        start = end - overlap
+
+    import re
+    paragraphs = [p.strip() for p in re.split(r'\n\s*\n', text_body) if p.strip()]
+
+    # Expand each paragraph into sub-chunks no larger than chunk_size.
+    segments: list[str] = []
+    for para in paragraphs:
+        if len(para) <= chunk_size:
+            segments.append(para)
+        else:
+            sentences = _split_sentences(para)
+            for sent in sentences:
+                if len(sent) <= chunk_size:
+                    segments.append(sent)
+                else:
+                    segments.extend(_split_words(sent, chunk_size))
+
+    if not segments:
+        return []
+
+    # Merge segments into chunks of at most chunk_size, carrying overlap forward.
+    chunks: list[str] = []
+    current = segments[0]
+    for seg in segments[1:]:
+        candidate = current + " " + seg
+        if len(candidate) <= chunk_size:
+            current = candidate
+        else:
+            if len(current) >= _MIN_CHUNK_LENGTH:
+                chunks.append(current)
+            # Carry the tail of the previous chunk as overlap.
+            overlap_text = current[-overlap:] if len(current) > overlap else current
+            current = (overlap_text + " " + seg).strip()
+    if len(current) >= _MIN_CHUNK_LENGTH:
+        chunks.append(current)
     return chunks
 
 
@@ -245,15 +300,19 @@ async def upsert_wiki_page(
             {"pid": page_id},
         )
         if chunks:
+            # Batch insert all chunks in one statement instead of N round-trips.
+            rows = ",".join(
+                f"(:pid::uuid, {i}, :text_{i}, :emb_{i}::vector)"
+                for i in range(len(chunks))
+            )
+            batch_params: dict[str, Any] = {"pid": page_id}
             for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
-                vec_str = "[" + ",".join(map(str, emb)) + "]"
-                await db.execute(
-                    text("""
-                        INSERT INTO wiki_chunks (page_id, chunk_idx, text, embedding)
-                        VALUES (:page_id::uuid, :idx, :text, :emb::vector)
-                    """),
-                    {"page_id": page_id, "idx": i, "text": chunk, "emb": vec_str},
-                )
+                batch_params[f"text_{i}"] = chunk
+                batch_params[f"emb_{i}"] = "[" + ",".join(map(str, emb)) + "]"
+            await db.execute(
+                text(f"INSERT INTO wiki_chunks (page_id, chunk_idx, text, embedding) VALUES {rows}"),
+                batch_params,
+            )
 
     # Always replace citations
     await db.execute(

@@ -19,15 +19,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Optional: run fingerprint worker in-process (controlled by env var).
     # For production, prefer running `python -m api.workers.fp_worker` as a
     # separate process so its restart cycle doesn't affect the web server.
-    worker_task: asyncio.Task | None = None
+    fp_task: asyncio.Task | None = None
+    campaign_task: asyncio.Task | None = None
     if os.environ.get("RUN_WORKER_IN_PROCESS") == "1":
         from api.db.connection import async_session_factory
-        from api.workers.fp_worker import run_worker
+        from api.workers.fp_worker import run_worker as run_fp_worker
+        from api.workers.campaign_worker import run_worker as run_campaign_worker
         if async_session_factory is not None:
-            worker_task = asyncio.create_task(run_worker(async_session_factory))
+            fp_task = asyncio.create_task(run_fp_worker(async_session_factory))
+            campaign_task = asyncio.create_task(run_campaign_worker(async_session_factory))
     yield
-    if worker_task is not None:
-        worker_task.cancel()
+    if fp_task is not None:
+        fp_task.cancel()
+    if campaign_task is not None:
+        campaign_task.cancel()
     from api.db.connection import engine
     if engine is not None:
         await engine.dispose()

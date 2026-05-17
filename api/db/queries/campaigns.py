@@ -6,6 +6,7 @@ call db.commit() — wrap multi-step operations in `async with db.begin():`.
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 TERMINAL_STATUSES = ('complete', 'failed')
 NON_TERMINAL_STATUSES = ('planning', 'awaiting_input', 'running')
+MAX_STEP_RETRIES = 3
 
 
 async def create_campaign(
@@ -35,23 +37,29 @@ async def create_campaign(
 async def update_campaign_status(
     db: AsyncSession,
     campaign_id: str,
-    user_id: str,
     status: str,
+    user_id: str | None = None,
     plan: dict[str, Any] | None = None,
 ) -> None:
-    """Update campaign status. Only the campaign owner can update.
+    """Update campaign status.
+
+    When user_id is provided (user-facing calls), only the campaign owner can
+    update — the WHERE clause includes `created_by = :user_id`.
+    When user_id is None (system/worker calls), the ownership check is skipped.
 
     Does NOT commit — caller manages the transaction.
     Source-state predicate excludes terminal statuses to prevent
     double-transitions.
     """
     plan_clause = ", plan = :plan::jsonb" if plan is not None else ""
+    user_clause = "AND created_by = :user_id" if user_id is not None else ""
     params: dict[str, Any] = {
         "id": campaign_id,
-        "user_id": user_id,
         "status": status,
         "statuses": list(NON_TERMINAL_STATUSES),
     }
+    if user_id is not None:
+        params["user_id"] = user_id
     if plan is not None:
         params["plan"] = json.dumps(plan)
     await db.execute(
@@ -59,7 +67,7 @@ async def update_campaign_status(
             UPDATE synthesis_campaigns
             SET status = :status, updated_at = now(){plan_clause}
             WHERE id = :id::uuid
-              AND created_by = :user_id
+              {user_clause}
               AND status = ANY(:statuses)
         """),
         params,
@@ -130,3 +138,97 @@ async def get_pending_campaign_steps(
         {"campaign_id": campaign_id},
     )
     return [dict(r._mapping) for r in result]
+
+
+async def get_steps_for_retry(db: AsyncSession) -> list[dict[str, Any]]:
+    """Return failed steps that are eligible for retry.
+
+    Criteria (matching TypeScript campaign-worker.ts):
+    - status = 'failed'
+    - retry_count < MAX_STEP_RETRIES (3)
+    - next_retry_at <= NOW() (backoff has elapsed)
+    """
+    result = await db.execute(
+        text("""
+            SELECT cs.id::text, cs.campaign_id::text, cs.step_idx,
+                   cs.reaction_smiles, cs.conditions, cs.retry_count
+            FROM campaign_steps cs
+            WHERE cs.status = 'failed'
+              AND cs.retry_count < :max_retries
+              AND cs.next_retry_at <= now()
+        """),
+        {"max_retries": MAX_STEP_RETRIES},
+    )
+    return [dict(r._mapping) for r in result]
+
+
+async def mark_step_failed(
+    db: AsyncSession,
+    step_id: str,
+    retry_count: int,
+) -> None:
+    """Mark a step as failed and schedule its retry with exponential backoff.
+
+    next_retry_at = now() + 2^retry_count minutes (matches TypeScript).
+    Does NOT commit — caller manages the transaction.
+    """
+    backoff_minutes = 2 ** retry_count
+    await db.execute(
+        text("""
+            UPDATE campaign_steps
+            SET status        = 'failed',
+                retry_count   = :retry_count,
+                next_retry_at = now() + :backoff * interval '1 minute',
+                updated_at    = now()
+            WHERE id = :id::uuid
+        """),
+        {"id": step_id, "retry_count": retry_count, "backoff": backoff_minutes},
+    )
+
+
+async def mark_step_complete(
+    db: AsyncSession,
+    step_id: str,
+    result: dict[str, Any] | None = None,
+) -> None:
+    """Mark a step as complete, storing the optional result JSON.
+
+    Does NOT commit — caller manages the transaction.
+    """
+    await db.execute(
+        text("""
+            UPDATE campaign_steps
+            SET status     = 'complete',
+                result     = :result::jsonb,
+                updated_at = now()
+            WHERE id = :id::uuid
+        """),
+        {"id": step_id, "result": json.dumps(result) if result is not None else None},
+    )
+
+
+async def get_running_campaigns(db: AsyncSession) -> list[dict[str, Any]]:
+    """Return all campaigns currently in 'running' status."""
+    result = await db.execute(
+        text("""
+            SELECT id::text, session_id, created_by, target_smiles, plan
+            FROM synthesis_campaigns
+            WHERE status = 'running'
+            ORDER BY updated_at
+        """),
+    )
+    return [dict(r._mapping) for r in result]
+
+
+async def all_steps_complete(db: AsyncSession, campaign_id: str) -> bool:
+    """Return True if every step for the campaign is in 'complete' status."""
+    result = await db.execute(
+        text("""
+            SELECT count(*) FILTER (WHERE status != 'complete') AS incomplete
+            FROM campaign_steps
+            WHERE campaign_id = :campaign_id::uuid
+        """),
+        {"campaign_id": campaign_id},
+    )
+    row = result.one()
+    return row.incomplete == 0

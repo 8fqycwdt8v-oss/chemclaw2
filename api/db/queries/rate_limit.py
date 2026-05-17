@@ -1,6 +1,15 @@
 """Rate limiter — Python port of packages/db/src/queries/rate-limit.ts.
 
-Fixed-window, Postgres-backed. Fails CLOSED on DB error.
+Fixed-window, Postgres-backed.
+
+Failure mode: FAIL CLOSED (blocks requests on DB error).
+This differs from the TypeScript port which fails open (allows requests on DB
+error to prevent a DB outage from taking down the API). The Python backend
+chooses fail-closed because security (preventing abuse) takes precedence over
+availability — operators should resolve DB issues rather than silently
+bypassing rate limits. The error is always logged so a DB blip is visible in
+metrics. If you need fail-open behaviour, change the except clause to
+`return {"limited": False}` and document the reason at the call site.
 """
 from __future__ import annotations
 
