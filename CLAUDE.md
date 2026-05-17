@@ -30,19 +30,35 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 3. Touch only what you must. Investigate unfamiliar state before deleting.
 4. Log deferred work to `BACKLOG.md` — one bullet per item, prefixed by area, append-only.
 
-## Code rules — derived from past incidents
+## Code conventions
 
-1. **Before creating `packages/db/migrations/NNNN_*.sql`, run `git fetch origin main && ls packages/db/migrations/` and pick a number higher than every file on `main`.** Branches off a stale base silently collide on the slot and on `_journal.json`.
-2. **Parse every API route body through a Zod schema from `apps/web/lib/*-schemas.ts`** — never inline `typeof x === 'string'` or `as Foo` casts in `app/api/**/route.ts`.
-3. **Read env vars through `webEnv()` (`apps/web/lib/env.ts`) or `dbEnv()` (`packages/db/src/env.ts`), never `process.env.*` in routes, queries, or lib helpers.**
-4. **Use the env-var name the library expects** (e.g. `CLERK_WEBHOOK_SIGNING_SECRET`, `OPENAI_API_KEY`, `DATABASE_URL`); aliases break libraries that auto-read.
-5. **Branch on Zod issue `code` (`'too_big'`, `'invalid_type'`), not on `issue.message` text.**
-6. **Implement type guards as `XSchema.safeParse(v).success`, not hand-rolled walkers.** Tiptap, Clerk, and request bodies all have Zod schemas — reuse them.
-7. **Every devDep needs a matching script invocation in its own `package.json`;** when you remove a script, sweep the devDeps that only existed for it.
-8. **Before adding a new package, check whether an existing dep re-exports the feature** — `verifyWebhook` lives at `@clerk/nextjs/webhooks`, `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` ships with `@anthropic-ai/claude-agent-sdk`, etc.
-9. **Every new `app/api/**/route.ts` handler ships with a vitest covering auth-fail, validation-fail, and happy paths;** webhook routes additionally need a signature-fail test.
-10. **Module-load env reads (`const X = webEnv().Y` at file top) may only touch fields with defaults in the Zod schema;** anything required goes inside a handler/factory so a missing var fails at request time, not build time.
-11. **Gate API routes with `requireUserWithRateLimit(...)` from `apps/web/lib/api-gate.ts`** — never re-inline `auth()` + `rateLimit()` + the 401/429 NextResponse boilerplate in `app/api/**/route.ts`.
+- **Validate external input with a schema library.** No hand-rolled `typeof`/`instanceof` chains for nested object shapes — they drift and copy.
+- **Implement type guards as `XSchema.safeParse(v).success`, not hand-rolled walkers.** Tiptap, Clerk, and request bodies all have Zod schemas — reuse them.
+- **Branch on Zod issue `code` (`'too_big'`, `'invalid_type'`), not on `issue.message` text.** Message strings drift; codes are stable API.
+- **Extract on the third copy.** Same 3+ line block in three sibling files = a helper. Applies equally to route preludes, error formatters, custom types, and shared validators.
+- **Filter before map.** Don't materialize values you're about to discard.
+- **No defensive checks the language guarantees.** `Number.isFinite` after `parseInt`, `x ? true : false`, double-casts through primitives (`str(int(b))` on numpy 0/1) — drop them.
+- **Rate-limit responses always carry `Retry-After`.** Route 429s through the shared gate so the header is never missed.
+- **Next.js route handlers gate auth + rate-limit through one helper** (e.g. `requireUserWithRateLimit` in `apps/web/lib/api-gate.ts`). No inline `auth()` → `rateLimit()` → 401/429 prelude per route.
+- **Zod request body schemas live in `*-schemas.ts` modules** alongside a shared error formatter — route handlers `safeParse` the raw body and translate failures through it. No hand-rolled body validation inside the handler.
+- **Every new `app/api/**/route.ts` handler ships with a vitest covering auth-fail, validation-fail, and happy paths;** webhook routes additionally need a signature-fail test.
+- **Read env vars through `webEnv()` (`apps/web/lib/env.ts`) or `dbEnv()` (`packages/db/src/env.ts`), never `process.env.*` in routes, queries, or lib helpers.**
+- **Use the env-var name the library expects** (e.g. `CLERK_WEBHOOK_SIGNING_SECRET`, `OPENAI_API_KEY`, `DATABASE_URL`); aliases break libraries that auto-read.
+- **Module-load env reads (`const X = webEnv().Y` at file top) may only touch fields with defaults in the Zod schema;** required vars go inside a handler/factory so a missing var fails at request time, not build time.
+- **Before creating `packages/db/migrations/NNNN_*.sql`, run `git fetch origin main && ls packages/db/migrations/` and pick a number higher than every file on `main`.** Branches off a stale base silently collide on the slot and on `_journal.json`.
+- **Drizzle `customType` factories live in one shared module per package** (e.g. `packages/db/src/schema/custom-types.ts`). Don't redefine column type factories inside individual schema files.
+- **All server-side logging goes through `@chemclaw2/observability` `logger`.** No `console.*` calls in app/worker code; pass `err` as the third arg and the logger handles stringification.
+- **Wrap latency-critical work in `withSpan(name, attrs, fn)`** from `@chemclaw2/observability`. Don't call OTel `trace.getActiveSpan()?.addEvent()` directly for spans that should be measurable on their own.
+- **Security gates fail closed.** A `.catch` on a permissions or authz lookup returns the deny verdict, never the allow path — document any intentional fail-open next to the call site (the `getBudget` cache is the template).
+- **Owner-scope every per-user write.** Every `db.update` / `db.delete` against per-user data includes `eq(userId)` in WHERE — `sessionId` / `pageId` / `campaignId` alone is not enough; mirror the WHERE from the read that gated the write.
+- **Wrap multi-step state transitions in `db.transaction`.** A status flip plus its dependent inserts/updates commit together or roll back together. `await updateStatus(...); for (...) await insertChild(...)` is this rule firing.
+- **Repeat the source-state predicate on every transition UPDATE.** When a sibling function has `notInArray([terminal])` in WHERE, the new one needs it too — call sites can't be trusted to never invoke it post-completion.
+- **Don't short-circuit security checks on identifier equality.** Same hostname ≠ same IP; same id ≠ same trust level. Re-validate DNS, ownership, and signatures on every redirect / hop / retry.
+- **Guard `setInterval` polls against reentrancy.** An `inFlight` flag set on entry, cleared in `finally`; slow networks make poll N+1 fire before N's POST returns.
+- **Escalate child-process kills SIGTERM → SIGKILL.** Add an `.unref()`'d backstop timer (~2 s per-call, ~5 s shutdown). Python-in-C children (RDKit, DRFP) ignore SIGTERM until the C frame returns and leak as zombies otherwise.
+- **Enforce size invariants at the push site, not in fallback branches.** A helper that appends to a result is responsible for bounding its inputs; don't rely on a conditional branch at the call site to handle the oversized case.
+- **Every devDep needs a matching script invocation in its own `package.json`;** when you remove a script, sweep the devDeps that only existed for it.
+- **Before adding a new package, check whether an existing dep re-exports the feature** — `verifyWebhook` lives at `@clerk/nextjs/webhooks`, `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` ships with `@anthropic-ai/claude-agent-sdk`.
 
 ## Stack
 

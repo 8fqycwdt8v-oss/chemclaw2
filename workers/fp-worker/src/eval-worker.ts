@@ -1,4 +1,5 @@
 import PgBoss from 'pg-boss';
+import { logger } from '@chemclaw2/observability';
 import {
   db,
   sql,
@@ -102,10 +103,12 @@ export async function runEvalOnce(): Promise<{ total: number; passed: number; id
   const id = await insertEvalRun({ startedAt, finishedAt, scores });
   const passed = scores.filter((s) => s.passed).length;
   if (passed < scores.length) {
-    const failures = scores.filter((s) => !s.passed).map((s) => `${s.name}: ${s.error ?? '?'}`).join('; ');
-    console.error(`[eval-worker] ${scores.length - passed}/${scores.length} probes failed: ${failures}`);
+    for (const s of scores.filter((p) => !p.passed)) {
+      logger.error('eval_probe_failed', { probe: s.name, error: s.error ?? null, duration_ms: s.durationMs });
+    }
+    logger.error('eval_run_complete', { passed, total: scores.length, run_id: id, status: 'failed' });
   } else {
-    console.log(`[eval-worker] all ${scores.length} probes passed`);
+    logger.info('eval_run_complete', { passed, total: scores.length, run_id: id, status: 'passed' });
   }
   return { total: scores.length, passed, id };
 }

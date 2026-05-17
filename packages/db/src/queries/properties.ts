@@ -51,6 +51,7 @@ export async function insertProperty(
       createdBy,
     })
     .returning({ id: properties.id });
+  if (!row) throw new Error('insertProperty: insert returned no row');
   return row;
 }
 

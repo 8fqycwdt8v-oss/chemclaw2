@@ -21,6 +21,7 @@ export async function upsertFeedback(
       set: { score, reason },
     })
     .returning({ id: agentFeedback.id });
+  if (!row) throw new Error('upsertFeedback: insert returned no row');
   return row;
 }
 
@@ -41,5 +42,6 @@ export async function recordOverride(
     .insert(agentOverrides)
     .values({ sessionId, userId, gateName, justification, promptHash })
     .returning({ id: agentOverrides.id });
+  if (!row) throw new Error('recordOverride: insert returned no row');
   return row;
 }

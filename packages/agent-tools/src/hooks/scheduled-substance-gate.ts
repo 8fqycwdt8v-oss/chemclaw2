@@ -1,3 +1,5 @@
+import { logger } from '@chemclaw2/observability';
+
 // Shared list of controlled/scheduled substance names — kept in sync with redaction.ts
 export const CONTROLLED_SUBSTANCE_NAMES =
   /\b(fentanyl|carfentanil|acetylfentanyl|furanylfentanyl|nitazene|metonitazene|isotonitazene|protonitazene|methamphetamine|meth|amphetamine|heroin|mdma|ecstasy|molly|cocaine|crack|lsd|psilocybin|psilocin|dmt|mescaline|peyote|ghb|pcp|phencyclidine|ketamine|oxycodone|hydrocodone|hydromorphone|oxymorphone|morphine|codeine|buprenorphine|tramadol|tapentadol|mdpv|cathinone|mephedrone|ephedrine|pseudoephedrine|safrole)\b/i;
@@ -31,6 +33,9 @@ export function scheduledSubstanceGate(prompt: string): { blocked: boolean; reas
   const normalized = normalizeForGate(prompt);
   const matched = CONTROLLED_SUBSTANCE_NAMES.test(normalized) && SYNTHESIS_VERBS.test(normalized);
   if (matched) {
+    // Highest-severity security event in the app — explicit error level so
+    // alerting rules can fire on this specific signal.
+    logger.error('scheduled_substance_attempt', { prompt_len: prompt.length });
     return {
       blocked: true,
       matched: true,

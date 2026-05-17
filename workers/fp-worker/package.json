@@ -10,6 +10,7 @@
   "dependencies": {
     "@chemclaw2/agent-tools": "workspace:*",
     "@chemclaw2/db": "workspace:*",
+    "@chemclaw2/observability": "workspace:*",
     "@opentelemetry/api": "^1.9.1",
     "drizzle-orm": "^0.38.0",
     "openai": "^6.37.0",

@@ -91,7 +91,11 @@ export function ChatClient() {
       .then((data: { pages?: Array<{ slug: string }> } | null) => {
         if (data?.pages) setKnownSlugs(new Set(data.pages.map((p) => p.slug)));
       })
-      .catch(() => {});
+      .catch((err) => {
+        // Inline citation linking silently breaks if this fetch dies — log so
+        // ops can correlate "no citation links" with a bad /api/wiki response.
+        console.error('[chat] failed to load wiki slugs:', err);
+      });
   }, []);
 
   // Abort the in-flight SSE stream if the user navigates away mid-response.
@@ -102,8 +106,13 @@ export function ChatClient() {
   // GET is idempotent; we then POST campaign ids to mark them acknowledged.
   useEffect(() => {
     let cancelled = false;
+    // In-flight guard: on a slow network a poll can outlast the 30s tick,
+    // so without this two pollers overlap, see the same campaigns, and
+    // double-render toasts before the ACK round-trip completes.
+    let inFlight = false;
     const poll = async () => {
-      if (document.visibilityState !== 'visible') return;
+      if (document.visibilityState !== 'visible' || inFlight) return;
+      inFlight = true;
       try {
         const res = await fetch('/api/notifications');
         if (!res.ok || cancelled) return;
@@ -121,13 +130,19 @@ export function ChatClient() {
           ]);
         }
         // Acknowledge so the next poll doesn't re-surface the same events.
+        // Swallowed failure here means duplicate cards on the next tick — log
+        // so the ack-failure rate is visible.
         await fetch('/api/notifications', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ campaignIds: data.campaigns.map((c) => c.id) }),
-        }).catch(() => {});
+        }).catch((err) => {
+          console.error('[chat] failed to acknowledge notifications:', err);
+        });
       } catch {
         // network glitches are fine; the next tick will retry
+      } finally {
+        inFlight = false;
       }
     };
     const handle = setInterval(poll, 30_000);
@@ -208,8 +223,8 @@ export function ChatClient() {
           }
         }
       } catch (err) {
-        if ((err as Error).name !== 'AbortError') {
-          setMessages((m) => [...m, { role: 'error', text: (err as Error).message }]);
+        if (!(err instanceof Error && err.name === 'AbortError')) {
+          setMessages((m) => [...m, { role: 'error', text: err instanceof Error ? err.message : String(err) }]);
         }
       } finally {
         setStreaming(false);
@@ -370,7 +385,7 @@ export function ChatClient() {
       if (!res.ok) throw new Error(body?.error ?? `Save skill failed (${res.status})`);
       setMessages((m) => [...m, { role: 'error', text: `Skill saved: ${body?.path}. ${body?.note ?? ''}` }]);
     } catch (err) {
-      setMessages((m) => [...m, { role: 'error', text: (err as Error).message }]);
+      setMessages((m) => [...m, { role: 'error', text: err instanceof Error ? err.message : String(err) }]);
     }
   };
 
@@ -392,7 +407,7 @@ export function ChatClient() {
       });
       if (!res.ok) throw new Error(`Feedback failed (${res.status})`);
     } catch (err) {
-      setMessages((m) => [...m, { role: 'error', text: (err as Error).message }]);
+      setMessages((m) => [...m, { role: 'error', text: err instanceof Error ? err.message : String(err) }]);
     }
   };
 

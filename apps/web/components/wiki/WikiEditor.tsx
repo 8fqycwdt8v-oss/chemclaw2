@@ -44,8 +44,12 @@ export function WikiEditor({ initialContent, onSave, readOnly = false }: WikiEdi
     try {
       await onSave(editor.getJSON(), editor.getText());
       isDirtyRef.current = false;
-    } catch {
-      // dirty flag stays set so the user is warned on navigation after a failed save
+    } catch (err) {
+      // dirty flag stays set so the user is warned on navigation after a failed save.
+      // The wrapping component (e.g. WikiPageView) is responsible for surfacing
+      // the error to the user via its own error state; log here so the save
+      // failure rate is visible in browser consoles / Sentry-style collectors.
+      console.error('[WikiEditor] save failed:', err);
     }
   }, [editor, onSave]);
 

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ALLOWED_DOMAINS } from './doc-fetch';
 import { recordExternalFactSafe } from '@chemclaw2/db';
+import { logger } from '@chemclaw2/observability';
 import type { ToolDef } from './tool-def';
 
 const BRAVE_API = 'https://api.search.brave.com/res/v1/web/search';
@@ -49,17 +50,29 @@ export const webSearchTool: ToolDef<typeof webSearchSchema> = {
     // Raw fetch (not safeFetch) is intentional: BRAVE_API is a hardcoded constant
     // pointing at the Brave Search API, not a user-supplied URL — so the
     // SSRF allowlist that safeFetch enforces is not needed here (#21).
-    const res = await fetch(url, { headers: { 'X-Subscription-Token': apiKey, Accept: 'application/json' } });
-    if (!res.ok) return { results: [], error: `Brave API error: ${res.status}` };
+    const startMs = Date.now();
+    let res: Response;
+    try {
+      res = await fetch(url, { headers: { 'X-Subscription-Token': apiKey, Accept: 'application/json' } });
+    } catch (err) {
+      logger.error('brave_search_fetch_failed', { q_len: q.length, duration_ms: Date.now() - startMs }, err);
+      return { results: [], error: 'Brave API fetch failed' };
+    }
+    if (!res.ok) {
+      logger.warn('brave_search_http_error', { status: res.status, q_len: q.length, duration_ms: Date.now() - startMs });
+      return { results: [], error: `Brave API error: ${res.status}` };
+    }
     const MAX_BYTES = 500_000;
     const raw = await res.text();
     if (Buffer.byteLength(raw, 'utf8') > MAX_BYTES) {
+      logger.warn('brave_search_oversized', { bytes: Buffer.byteLength(raw, 'utf8'), max_bytes: MAX_BYTES });
       return { results: [], error: 'Brave API response exceeds size limit' };
     }
     let data: { web?: { results?: Array<{ title: string; url: string; description: string }> } };
     try {
       data = JSON.parse(raw) as typeof data;
-    } catch {
+    } catch (err) {
+      logger.warn('brave_search_json_parse_failed', { sample: raw.slice(0, 200), length: raw.length }, err);
       return { results: [], error: 'Brave API returned non-JSON response' };
     }
     const results = (data.web?.results ?? []).map((r) => ({
@@ -67,6 +80,7 @@ export const webSearchTool: ToolDef<typeof webSearchSchema> = {
       url: r.url,
       snippet: r.description,
     }));
+    logger.info('brave_search_complete', { q_len: q.length, result_count: results.length, duration_ms: Date.now() - startMs });
     return { results };
   },
 };

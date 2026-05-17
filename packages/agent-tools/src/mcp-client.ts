@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process';
-import { trace } from '@opentelemetry/api';
+import { logger } from '@chemclaw2/observability';
 
 const PYTHON = process.env.MCP_PYTHON_PATH ?? '/opt/venv/bin/python';
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -25,6 +25,7 @@ export function callMcpTool(
 ): Promise<Record<string, unknown>> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
+    const startMs = Date.now();
     // AbortSignal.timeout() + spawn's `signal` option auto-kills the child on
     // timeout (default SIGTERM) and surfaces an AbortError via proc.on('error').
     const signal = AbortSignal.timeout(timeoutMs);
@@ -33,15 +34,32 @@ export function callMcpTool(
       signal,
     });
     opts.activeProcs?.add(proc);
+    // SIGKILL backstop: spawn's `signal` option sends SIGTERM on timeout, but
+    // a Python child mid-RDKit/DRFP C call ignores SIGTERM until the C frame
+    // returns. Close stdin so the child sees EOF, then SIGKILL after a grace
+    // window.
+    signal.addEventListener('abort', () => {
+      try { proc.stdin.destroy(); } catch { /* already closed */ }
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* already exited */ } }, 2_000).unref();
+    }, { once: true });
 
     let buf = '';
     let initDone = false;
     let settled = false;
+    let droppedLines = 0;
 
-    const settle = (fn: () => void) => {
+    const settle = (fn: () => void, outcome: 'resolve' | 'reject' | 'timeout') => {
       if (settled) return;
       settled = true;
       opts.activeProcs?.delete(proc);
+      const duration_ms = Date.now() - startMs;
+      if (outcome === 'resolve') {
+        logger.info('mcp_call_complete', { tool: toolName, duration_ms, dropped_lines: droppedLines });
+      } else if (outcome === 'timeout') {
+        logger.warn('mcp_call_timeout', { tool: toolName, duration_ms, timeout_ms: timeoutMs, dropped_lines: droppedLines });
+      } else {
+        logger.warn('mcp_call_rejected', { tool: toolName, duration_ms, dropped_lines: droppedLines });
+      }
       fn();
     };
     const send = (msg: object) => proc.stdin.write(JSON.stringify(msg) + '\n');
@@ -63,10 +81,15 @@ export function callMcpTool(
         try {
           msg = JSON.parse(line) as Record<string, unknown>;
         } catch {
-          trace.getActiveSpan()?.addEvent('mcp.response_line_unparseable', {
-            tool: toolName,
-            sample: line.slice(0, 200),
-          });
+          droppedLines++;
+          // Log only the first to avoid flooding when a broken child sends
+          // every line as garbage; settle() includes the final cumulative count.
+          if (droppedLines === 1) {
+            logger.warn('mcp_response_line_unparseable', {
+              tool: toolName,
+              sample: line.slice(0, 200),
+            });
+          }
           continue;
         }
         if (!initDone && (msg as { id?: number }).id === INIT_ID) {
@@ -74,33 +97,47 @@ export function callMcpTool(
           send({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
           send({ jsonrpc: '2.0', id: TOOL_CALL_ID, method: 'tools/call', params: { name: toolName, arguments: args } });
         } else if ((msg as { id?: number }).id === TOOL_CALL_ID) {
-          proc.stdin.end();
+          // stdin.end() can throw if the stream is already closed (race vs.
+          // the child closing its side first). Swallow — it's best-effort
+          // cleanup — but it MUST not abort the settle() calls below, or the
+          // outer promise would hang forever.
+          try { proc.stdin.end(); } catch { /* already closed */ }
           const err = (msg as { error?: { message?: string } }).error;
           if (err) {
-            settle(() => reject(new Error(err.message ?? 'MCP tool error')));
+            settle(() => reject(new Error(err.message ?? 'MCP tool error')), 'reject');
             return;
           }
           const result = msg as { result?: { content?: Array<{ text?: string }> } };
           const text = result.result?.content?.[0]?.text;
           try {
             const parsed = text ? (JSON.parse(text) as Record<string, unknown>) : ((msg.result as Record<string, unknown>) ?? {});
-            settle(() => resolve(parsed));
-          } catch {
-            settle(() => reject(new Error(`Failed to parse MCP response for ${toolName}`)));
+            settle(() => resolve(parsed), 'resolve');
+          } catch (parseErr) {
+            logger.error('mcp_response_final_parse_failed', {
+              tool: toolName,
+              sample: text?.slice(0, 500) ?? '(no text)',
+            }, parseErr);
+            settle(() => reject(new Error(`Failed to parse MCP response for ${toolName}`)), 'reject');
           }
         }
       }
     });
+    let errorSeen = false;
     proc.on('error', (e) => {
+      errorSeen = true;
       if ((e as NodeJS.ErrnoException).name === 'AbortError') {
-        settle(() => reject(new Error(`MCP tool ${toolName} timed out after ${timeoutMs}ms`)));
+        settle(() => reject(new Error(`MCP tool ${toolName} timed out after ${timeoutMs}ms`)), 'timeout');
       } else {
-        settle(() => reject(e));
+        settle(() => reject(e), 'reject');
       }
     });
     proc.on('close', (code) => {
-      if (code !== 0) settle(() => reject(new Error(`MCP ${pythonModule} exited with code ${code}`)));
-      else settle(() => reject(new Error(`MCP ${pythonModule} closed before tool response`)));
+      // If 'error' already fired, its richer cause (ENOENT, EACCES, abort, …)
+      // wins. Without this guard a 'close' racing ahead of 'error' would
+      // mask the diagnosis behind a generic "exited with code N".
+      if (errorSeen) return;
+      if (code !== 0) settle(() => reject(new Error(`MCP ${pythonModule} exited with code ${code}`)), 'reject');
+      else settle(() => reject(new Error(`MCP ${pythonModule} closed before tool response`)), 'reject');
     });
   });
 }

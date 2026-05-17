@@ -1,4 +1,5 @@
 import type { SessionKey, SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk';
+import { withSpan } from '@chemclaw2/observability';
 import { db } from './client';
 import { agentSessions } from './schema/sessions';
 import { eq, and, sql, max } from 'drizzle-orm';
@@ -53,30 +54,39 @@ export const postgresSessionStore = {
     // The two-arg form composes 64 bits from two 32-bit hashes — collisions
     // between independent (projectKey, sessionId+subpath) pairs only occur if
     // BOTH halves hash-collide, vs. ~1e-9 per single-key hashtext alone.
-    await db.transaction(async (tx) => {
-      await tx.execute(sql`
-        SELECT pg_advisory_xact_lock(
-          hashtext(${key.projectKey}),
-          hashtext(${key.sessionId} || '::' || ${subpath})
-        )
-      `);
-      await tx
-        .insert(agentSessions)
-        .values({
-          projectKey: key.projectKey,
-          sessionId: key.sessionId,
-          subpath,
-          entries,
-          mtime: now,
-        })
-        .onConflictDoUpdate({
-          target: [agentSessions.projectKey, agentSessions.sessionId, agentSessions.subpath],
-          set: {
-            entries: sql`${agentSessions.entries} || excluded.entries`,
-            mtime: sql`GREATEST(${agentSessions.mtime}, excluded.mtime)`,
-          },
+    //
+    // Span carries the advisory-lock + insert path so contention spikes (the
+    // common cause of agent-stream latency tails) get attributed correctly.
+    await withSpan(
+      'session_store.append',
+      { entries_count: entries.length, serialized_bytes: serializedSize },
+      async () => {
+        await db.transaction(async (tx) => {
+          await tx.execute(sql`
+            SELECT pg_advisory_xact_lock(
+              hashtext(${key.projectKey}),
+              hashtext(${key.sessionId} || '::' || ${subpath})
+            )
+          `);
+          await tx
+            .insert(agentSessions)
+            .values({
+              projectKey: key.projectKey,
+              sessionId: key.sessionId,
+              subpath,
+              entries,
+              mtime: now,
+            })
+            .onConflictDoUpdate({
+              target: [agentSessions.projectKey, agentSessions.sessionId, agentSessions.subpath],
+              set: {
+                entries: sql`${agentSessions.entries} || excluded.entries`,
+                mtime: sql`GREATEST(${agentSessions.mtime}, excluded.mtime)`,
+              },
+            });
         });
-    });
+      },
+    );
   },
 
   async load(key: SessionKey): Promise<SessionStoreEntry[] | null> {

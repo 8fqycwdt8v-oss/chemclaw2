@@ -53,6 +53,7 @@ export async function upsertPaper(input: PaperInput, createdBy: string): Promise
       .values(values)
       .onConflictDoUpdate({ target: papers.doi, set })
       .returning({ id: papers.id });
+    if (!row) throw new Error('upsertPaper: insert returned no row (doi branch)');
     return row;
   }
   if (input.pubmedId) {
@@ -61,9 +62,11 @@ export async function upsertPaper(input: PaperInput, createdBy: string): Promise
       .values(values)
       .onConflictDoUpdate({ target: papers.pubmedId, set })
       .returning({ id: papers.id });
+    if (!row) throw new Error('upsertPaper: insert returned no row (pubmedId branch)');
     return row;
   }
   const [row] = await db.insert(papers).values(values).returning({ id: papers.id });
+  if (!row) throw new Error('upsertPaper: insert returned no row');
   return row;
 }
 

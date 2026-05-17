@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { safeFetch } from './safe-fetch';
 import { recordExternalFactSafe } from '@chemclaw2/db';
+import { logger } from '@chemclaw2/observability';
 import { toolError } from './tool-error';
 import type { ToolDef } from './tool-def';
 
@@ -35,14 +36,19 @@ export const docFetchTool: ToolDef<typeof docFetchSchema> = {
   async execute(input) {
     const format = input.format ?? 'markdown';
     let res: Response;
+    const startMs = Date.now();
     try {
       res = await safeFetch(input.url, ALLOWED_DOMAINS, {
         headers: { 'User-Agent': 'chemclaw2/1.0 (research assistant)' },
       });
     } catch (err) {
+      logger.warn('doc_fetch_failed', { url: input.url.slice(0, 200), format, duration_ms: Date.now() - startMs }, err);
       return toolError('fetch_document', err);
     }
-    if (!res.ok) return { error: `HTTP ${res.status}` };
+    if (!res.ok) {
+      logger.warn('doc_fetch_http_error', { url: input.url.slice(0, 200), status: res.status, duration_ms: Date.now() - startMs });
+      return { error: `HTTP ${res.status}` };
+    }
     const contentType = res.headers.get('content-type') ?? '';
     const MAX_BYTES = 500_000;
 
@@ -61,7 +67,13 @@ export const docFetchTool: ToolDef<typeof docFetchSchema> = {
       if (done || !value) break;
       chunks.push(value);
       totalBytes += value.byteLength;
-      if (totalBytes >= MAX_BYTES) { reader.cancel().catch(() => {}); break; }
+      if (totalBytes >= MAX_BYTES) {
+        // Cancel can reject (already closed, race with downstream). The stream
+        // is being abandoned anyway, so the rejection isn't actionable — warn
+        // so it's observable but doesn't pollute error counts.
+        reader.cancel().catch((err) => logger.warn('doc_fetch_reader_cancel_failed', { url: input.url.slice(0, 200) }, err));
+        break;
+      }
     }
     const bytes = Buffer.concat(chunks);
 

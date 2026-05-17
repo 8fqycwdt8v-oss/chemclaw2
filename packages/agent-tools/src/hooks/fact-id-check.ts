@@ -1,6 +1,11 @@
 import { db, compounds } from '@chemclaw2/db';
 import { inArray } from 'drizzle-orm';
-import { trace } from '@opentelemetry/api';
+import { logger } from '@chemclaw2/observability';
+
+// Suppress duplicate fact_id_check fail-open events during a DB outage.
+// We still keep the running count so a final summary can be emitted.
+let consecutiveFailures = 0;
+const STORM_THRESHOLD = 10;
 
 // CAS numbers: 2-7 digits, hyphen, 2 digits, hyphen, 1 check digit.
 // The pre-v1.6.1 range of 2-10 false-matched ISO dates like 2024-01-05.
@@ -21,22 +26,30 @@ export async function checkToolOutput(
       .from(compounds)
       .where(inArray(compounds.casNumber, casNumbers));
     known = new Set(rows.map((r) => r.casNumber));
+    if (consecutiveFailures > 0) {
+      logger.info('fact_id_check_db_recovered', { prior_failures: consecutiveFailures });
+      consecutiveFailures = 0;
+    }
   } catch (err) {
-    // #22: emit an OTel event so Langfuse + the trace pipeline surface the
-    // fail-open path. Logging alone is invisible in production dashboards.
-    trace.getActiveSpan()?.addEvent('fact_id_check_db_error', {
-      tool_name: toolName,
-      cas_count: casNumbers.length,
-      message: err instanceof Error ? err.message : String(err),
-    });
-    console.warn('[fact-id-check] DB query failed — compliance check skipped:', err instanceof Error ? err.message : err);
+    consecutiveFailures++;
+    // Suppress duplicate logs when the DB is down — emit only the first N
+    // and one summary line after the threshold to avoid flooding the pipeline.
+    if (consecutiveFailures <= STORM_THRESHOLD) {
+      logger.warn(
+        'fact_id_check_db_error',
+        { tool: toolName, cas_count: casNumbers.length, consecutive_failures: consecutiveFailures },
+        err,
+      );
+    } else if (consecutiveFailures === STORM_THRESHOLD + 1) {
+      logger.error('fact_id_check_storm', { threshold: STORM_THRESHOLD });
+    }
     return { warnings: [] };
   }
 
   const unverified = casNumbers.filter((c) => !known.has(c));
   if (unverified.length > 0) {
-    trace.getActiveSpan()?.addEvent('unverified_cas_numbers', {
-      tool_name: toolName,
+    logger.info('unverified_cas_numbers', {
+      tool: toolName,
       cas_numbers: unverified.join(','),
       count: unverified.length,
     });

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { auth } from '@clerk/nextjs/server';
 import { getWikiPage, getWikiPageCitations, listWikiRevisions, isSubscribed } from '@chemclaw2/db';
+import { logger } from '@chemclaw2/observability';
 import { WikiPageView } from '@/components/wiki/WikiPageView';
 
 type Props = { params: Promise<{ slug: string }> };
@@ -15,10 +16,21 @@ export default async function WikiSlugPage({ params }: Props) {
   if (!page) notFound();
 
   const { userId } = await auth();
+  // Fail open on the secondary reads so a missing revisions / subscriptions
+  // table doesn't 500 the whole page. Log so the silent fallbacks are
+  // distinguishable from genuinely empty results.
   const [citations, revisions, subscribed] = await Promise.all([
     getWikiPageCitations(page.id),
-    listWikiRevisions(page.id, 10).catch(() => []),
-    userId ? isSubscribed(userId, page.id).catch(() => false) : Promise.resolve(false),
+    listWikiRevisions(page.id, 10).catch((err) => {
+      logger.error('wiki_list_revisions_failed', { page_id: page.id, slug: page.slug }, err);
+      return [];
+    }),
+    userId
+      ? isSubscribed(userId, page.id).catch((err) => {
+          logger.error('wiki_is_subscribed_failed', { page_id: page.id, user_id: userId }, err);
+          return false;
+        })
+      : Promise.resolve(false),
   ]);
 
   return (

@@ -8,6 +8,7 @@ import {
   incrementSpend,
   type BudgetWithSpend,
 } from '@chemclaw2/db';
+import { logger } from '@chemclaw2/observability';
 import { buildInProcessMcpServer, subagentToolNames } from './sdk-tools';
 import { DEEP_RESEARCH_PROMPT, CONTRADICTION_RESOLVER_PROMPT } from './subagent-prompts';
 import { webEnv } from './env';
@@ -100,7 +101,7 @@ export function buildQueryOptions(
   const getBudget = (): Promise<BudgetWithSpend | null> => {
     if (!budgetCache) {
       budgetCache = getBudgetWithSpend(projectKey).catch((err) => {
-        console.error('[agent] budget lookup failed:', err);
+        logger.error('budget_lookup_failed', { project_key: projectKey, user_id: userId }, err);
         return null;
       });
     }
@@ -163,7 +164,7 @@ export function buildQueryOptions(
           hooks: [
             async (input) => {
               if (input.hook_event_name !== 'SessionStart') return {};
-              console.log('[agent] session start', {
+              logger.info('agent_session_start', {
                 session_id: input.session_id,
                 source: input.source,
                 model: input.model,
@@ -179,7 +180,7 @@ export function buildQueryOptions(
           hooks: [
             async (input) => {
               if (input.hook_event_name !== 'SessionEnd') return {};
-              console.log('[agent] session end', {
+              logger.info('agent_session_end', {
                 session_id: input.session_id,
                 reason: input.reason,
                 user_id: userId,
@@ -203,6 +204,12 @@ export function buildQueryOptions(
               if (input.hook_event_name !== 'UserPromptSubmit') return {};
               const verdict = checkUserPrompt(input.prompt);
               if (verdict.action === 'block') {
+                logger.warn('user_prompt_blocked', {
+                  session_id: input.session_id,
+                  user_id: userId,
+                  reason: verdict.reason,
+                  prompt_len: input.prompt.length,
+                });
                 return {
                   decision: 'block',
                   reason: verdict.reason,
@@ -252,6 +259,15 @@ export function buildQueryOptions(
                   exceeded = { kind: 'tokens', cap: budget.tokensCap, current: spend.tokens };
                 }
                 if (exceeded) {
+                  logger.warn('budget_cap_exceeded', {
+                    session_id: input.session_id,
+                    user_id: userId,
+                    project_key: projectKey,
+                    kind: exceeded.kind,
+                    cap: exceeded.cap,
+                    current: exceeded.current,
+                    tool: input.tool_name,
+                  });
                   const reason =
                     `Budget cap reached: ${exceeded.kind} (${exceeded.current}/${exceeded.cap}). ` +
                     `Wait for the period to roll over or ask an admin to raise the cap.`;
@@ -269,9 +285,18 @@ export function buildQueryOptions(
 
               // J2: per-tool authorization. The deny path short-circuits before
               // the redaction check runs — saves the redaction work on a tool
-              // we'd never allow anyway.
-              const mode = await resolveToolMode(input.tool_name, userId).catch(() => 'allow' as const);
+              // we'd never allow anyway. Fail CLOSED on lookup error: a DB
+              // blip must not silently grant tools the user has been denied.
+              const mode = await resolveToolMode(input.tool_name, userId).catch((err) => {
+                logger.error('resolve_tool_mode_failed', { tool: input.tool_name, user_id: userId }, err);
+                return 'deny' as const;
+              });
               if (mode === 'deny') {
+                logger.warn('tool_permission_denied', {
+                  session_id: input.session_id,
+                  user_id: userId,
+                  tool: input.tool_name,
+                });
                 const reason = `Tool '${input.tool_name}' is denied for this user by tool_permissions.`;
                 return {
                   decision: 'block',
@@ -301,6 +326,12 @@ export function buildQueryOptions(
                 (input.tool_input ?? {}) as Record<string, unknown>,
               );
               if (res.action === 'block') {
+                logger.warn('tool_input_blocked', {
+                  session_id: input.session_id,
+                  user_id: userId,
+                  tool: input.tool_name,
+                  reason: res.reason,
+                });
                 return {
                   decision: 'block',
                   reason: res.reason,
@@ -345,7 +376,13 @@ export function buildQueryOptions(
                   toolCalls: 1,
                   experiments: isExperiment ? 1 : 0,
                 }).catch((err) => {
-                  console.error('[agent] incrementSpend failed:', err);
+                  logger.error('increment_spend_failed', {
+                    project_key: projectKey,
+                    period: budgetInfo.budget.period,
+                    tool: input.tool_name,
+                    is_experiment: isExperiment,
+                    user_id: userId,
+                  }, err);
                 });
               }
 

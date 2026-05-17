@@ -2,18 +2,16 @@ import PgBoss from 'pg-boss';
 import type { ChildProcess } from 'child_process';
 import { db, compounds, reactions } from '@chemclaw2/db';
 import { eq, sql } from 'drizzle-orm';
-import { trace } from '@opentelemetry/api';
+import { logger, installProcessHandlers } from '@chemclaw2/observability';
 import { callMcpTool } from '@chemclaw2/agent-tools';
 import { startCampaignWorker } from './campaign-worker';
 import { startEvalWorker } from './eval-worker';
-import { errorMessage } from './errors';
+
+installProcessHandlers('fp-worker');
 
 function logEnqueueFailure(queue: string, id: string) {
   return (err: unknown) => {
-    trace.getActiveSpan()?.addEvent('fp.enqueue_failed', {
-      queue, target_id: id,
-      error: errorMessage(err),
-    });
+    logger.warn('fp_enqueue_failed', { queue, target_id: id }, err);
   };
 }
 
@@ -23,7 +21,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
 
 const boss = new PgBoss(DATABASE_URL);
-boss.on('error', (err) => console.error('[pg-boss]', err));
+boss.on('error', (err) => logger.error('pg_boss_error', {}, err));
 
 async function start() {
   await boss.start();
@@ -38,6 +36,7 @@ async function start() {
     async (jobs) => {
       for (const job of jobs) {
         const { id } = job.data;
+        const startMs = Date.now();
         try {
           const [compound] = await db.select().from(compounds).where(eq(compounds.id, id));
           if (!compound || compound.morganFp) continue;
@@ -46,6 +45,13 @@ async function start() {
 
           const bits = result.fingerprint_bits;
           if (typeof bits !== 'string' || !/^[01]{2048}$/.test(bits)) {
+            logger.error('fp_invalid_output', {
+              kind: 'morgan',
+              compound_id: id,
+              expected_len: 2048,
+              actual_len: typeof bits === 'string' ? bits.length : -1,
+              actual_type: typeof bits,
+            });
             throw new Error(`Invalid fingerprint_bits from MCP: expected 2048-char bit string, got ${typeof bits === 'string' ? `length ${bits.length}` : typeof bits}`);
           }
 
@@ -56,8 +62,9 @@ async function start() {
               fpComputedAt: new Date(),
             })
             .where(eq(compounds.id, id));
+          logger.info('fp_computed', { kind: 'morgan', compound_id: id, duration_ms: Date.now() - startMs });
         } catch (err) {
-          console.error(`[fp-worker] compute-morgan-fp failed for ${id}:`, err);
+          logger.error('fp_compute_failed', { kind: 'morgan', compound_id: id, duration_ms: Date.now() - startMs }, err);
           throw err; // pg-boss will retry
         }
       }
@@ -70,6 +77,7 @@ async function start() {
     async (jobs) => {
       for (const job of jobs) {
         const { id } = job.data;
+        const startMs = Date.now();
         try {
           const [reaction] = await db.select().from(reactions).where(eq(reactions.id, id));
           if (!reaction || reaction.drfp) continue;
@@ -78,6 +86,13 @@ async function start() {
 
           const bits = result.fingerprint_bits;
           if (typeof bits !== 'string' || !/^[01]{2048}$/.test(bits)) {
+            logger.error('fp_invalid_output', {
+              kind: 'drfp',
+              reaction_id: id,
+              expected_len: 2048,
+              actual_len: typeof bits === 'string' ? bits.length : -1,
+              actual_type: typeof bits,
+            });
             throw new Error(`Invalid fingerprint_bits from MCP: expected 2048-char bit string, got ${typeof bits === 'string' ? `length ${bits.length}` : typeof bits}`);
           }
 
@@ -88,8 +103,9 @@ async function start() {
               fpComputedAt: new Date(),
             })
             .where(eq(reactions.id, id));
+          logger.info('fp_computed', { kind: 'drfp', reaction_id: id, duration_ms: Date.now() - startMs });
         } catch (err) {
-          console.error(`[fp-worker] compute-drfp failed for ${id}:`, err);
+          logger.error('fp_compute_failed', { kind: 'drfp', reaction_id: id, duration_ms: Date.now() - startMs }, err);
           throw err;
         }
       }
@@ -107,7 +123,10 @@ async function start() {
   await boss.schedule('sweep-rate-limits', '17 * * * *');
   await boss.work('sweep-rate-limits', async () => {
     const cutoff = Date.now() - 2 * 60 * 60 * 1000;
-    await db.execute(sql`DELETE FROM rate_limits WHERE window_start < ${cutoff}`);
+    const rows = await db.execute(sql`DELETE FROM rate_limits WHERE window_start < ${cutoff}`);
+    // postgres-js exposes the affected count via the `count` property on the
+    // result; expose it so a silently-no-op cron is visible.
+    logger.info('sweep_rate_limits_complete', { deleted: (rows as unknown as { count?: number }).count ?? 0, cutoff_ms: cutoff });
   });
 
   // v2.1-A2: prune feedback older than the 1-year retention window. The trigger
@@ -118,10 +137,13 @@ async function start() {
   await boss.createQueue('sweep-feedback', { policy: PgBoss.policies.stately } as PgBoss.Queue);
   await boss.schedule('sweep-feedback', '23 3 * * *');
   await boss.work('sweep-feedback', async () => {
-    await db.execute(sql`DELETE FROM agent_feedback WHERE created_at < NOW() - INTERVAL '1 year'`);
+    const rows = await db.execute(sql`DELETE FROM agent_feedback WHERE created_at < NOW() - INTERVAL '1 year'`);
+    logger.info('sweep_feedback_complete', { deleted: (rows as unknown as { count?: number }).count ?? 0 });
   });
 
   // Catches rows inserted before the worker started or that lost a job to a crash.
+  let lastPendingTotal = 0;
+  let monotonicTicks = 0;
   async function pollMissingFingerprints() {
     const pendingCompounds = await db
       .select({ id: compounds.id })
@@ -142,25 +164,74 @@ async function start() {
     for (const { id } of pendingReactions) {
       await boss.send('compute-drfp', { id }, { singletonKey: id }).catch(logEnqueueFailure('compute-drfp', id));
     }
+
+    const pendingTotal = pendingCompounds.length + pendingReactions.length;
+    logger.info('fp_poll_tick', {
+      pending_compounds: pendingCompounds.length,
+      pending_reactions: pendingReactions.length,
+    });
+    // Flag a stuck queue: 5 consecutive ticks (~2.5 min) where the backlog
+    // failed to decrease, plus at least one job present. A healthy queue
+    // drains; monotonic growth means an MCP child is hung or the worker is
+    // blocked on something.
+    if (pendingTotal > 0 && pendingTotal >= lastPendingTotal) {
+      monotonicTicks++;
+      if (monotonicTicks === 5) {
+        logger.warn('fp_backlog_not_draining', { ticks: monotonicTicks, pending_total: pendingTotal });
+      }
+    } else {
+      monotonicTicks = 0;
+    }
+    lastPendingTotal = pendingTotal;
   }
 
   await pollMissingFingerprints();
-  const pollInterval = setInterval(
-    () => pollMissingFingerprints().catch((err) => console.error('[fp-worker] pollMissingFingerprints error:', err)),
-    30_000,
-  );
+  // Wrap the async call so a synchronous throw before the first `await`
+  // inside pollMissingFingerprints is also caught — a bare `.catch()` on the
+  // returned promise misses sync throws and they bubble up as unhandled
+  // rejections that may kill the worker (Node ≥15).
+  const pollInterval = setInterval(() => {
+    void (async () => {
+      try {
+        await pollMissingFingerprints();
+      } catch (err) {
+        logger.error('fp_poll_tick_failed', {}, err);
+      }
+    })();
+  }, 30_000);
 
-  console.log('[fp-worker] ready — processing compute-morgan-fp and compute-drfp jobs');
+  // Liveness heartbeat. A worker that is alive but stuck (blocked on a hung
+  // MCP child, deadlocked on a transaction) was previously indistinguishable
+  // from a healthy one; this gives oncall a positive signal.
+  const heartbeat = setInterval(() => {
+    logger.info('worker_alive', { component: 'fp-worker', active_procs: activeProcs.size });
+  }, 60_000);
+
+  logger.info('worker_ready', { component: 'fp-worker' });
 
   process.on('SIGTERM', async () => {
+    const shutdownStart = Date.now();
+    logger.info('worker_shutdown_start', { component: 'fp-worker', active_procs: activeProcs.size });
     clearInterval(pollInterval);
-    for (const proc of activeProcs) proc.kill();
+    clearInterval(heartbeat);
+    // SIGTERM first, then a grace window then SIGKILL — same escalation as
+    // callMcpTool's timeout. A Python child mid-RDKit C call ignores SIGTERM
+    // until the C frame returns, which can outlast the shutdown window.
+    for (const proc of activeProcs) {
+      try { proc.kill('SIGTERM'); } catch { /* already exited */ }
+    }
+    setTimeout(() => {
+      for (const proc of activeProcs) {
+        try { proc.kill('SIGKILL'); } catch { /* already exited */ }
+      }
+    }, 5_000).unref();
     await boss.stop();
+    logger.info('worker_shutdown_complete', { component: 'fp-worker', duration_ms: Date.now() - shutdownStart });
     process.exit(0);
   });
 }
 
 start().catch((err) => {
-  console.error('[fp-worker] startup failed:', err);
+  logger.error('worker_startup_failed', { component: 'fp-worker' }, err);
   process.exit(1);
 });
