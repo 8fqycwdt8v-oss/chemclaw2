@@ -30,6 +30,19 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 3. Touch only what you must. Investigate unfamiliar state before deleting.
 4. Log deferred work to `BACKLOG.md` — one bullet per item, prefixed by area, append-only.
 
+## Code rules — derived from past incidents
+
+1. **Before creating `packages/db/migrations/NNNN_*.sql`, run `git fetch origin main && ls packages/db/migrations/` and pick a number higher than every file on `main`.** Branches off a stale base silently collide on the slot and on `_journal.json`.
+2. **Parse every API route body through a Zod schema from `apps/web/lib/*-schemas.ts`** — never inline `typeof x === 'string'` or `as Foo` casts in `app/api/**/route.ts`.
+3. **Read env vars through `webEnv()` (`apps/web/lib/env.ts`) or `dbEnv()` (`packages/db/src/env.ts`), never `process.env.*` in routes, queries, or lib helpers.**
+4. **Use the env-var name the library expects** (e.g. `CLERK_WEBHOOK_SIGNING_SECRET`, `OPENAI_API_KEY`, `DATABASE_URL`); aliases break libraries that auto-read.
+5. **Branch on Zod issue `code` (`'too_big'`, `'invalid_type'`), not on `issue.message` text.**
+6. **Implement type guards as `XSchema.safeParse(v).success`, not hand-rolled walkers.** Tiptap, Clerk, and request bodies all have Zod schemas — reuse them.
+7. **Every devDep needs a matching script invocation in its own `package.json`;** when you remove a script, sweep the devDeps that only existed for it.
+8. **Before adding a new package, check whether an existing dep re-exports the feature** — `verifyWebhook` lives at `@clerk/nextjs/webhooks`, `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` ships with `@anthropic-ai/claude-agent-sdk`, etc.
+9. **Every new `app/api/**/route.ts` handler ships with a vitest covering auth-fail, validation-fail, and happy paths;** webhook routes additionally need a signature-fail test.
+10. **Module-load env reads (`const X = webEnv().Y` at file top) may only touch fields with defaults in the Zod schema;** anything required goes inside a handler/factory so a missing var fails at request time, not build time.
+
 ## Stack
 
 | Layer | Technology |
