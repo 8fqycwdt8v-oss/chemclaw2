@@ -1,9 +1,5 @@
-import { customType, pgTable, text, timestamp, uuid, integer } from 'drizzle-orm/pg-core';
-
-// pgvector 0.7+ supports HNSW on bit(N) — no 2000-dim cap for bit type
-const bit2048 = customType<{ data: string }>({
-  dataType: () => 'bit(2048)',
-});
+import { pgTable, text, timestamp, uuid, integer } from 'drizzle-orm/pg-core';
+import { bit2048 } from './custom-types';
 
 export const compounds = pgTable('compounds', {
   id: uuid('id').primaryKey().defaultRandom(),

@@ -1,19 +1,14 @@
 import { UUID_RE } from '@/lib/validation';
-import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { upsertFeedback } from '@chemclaw2/db';
-import { rateLimit } from '@/lib/rate-limit';
+import { requireUserWithRateLimit } from '@/lib/api-gate';
 
 const MAX_REASON_LEN = 1000;
 
 export async function POST(req: Request) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const { limited } = await rateLimit(`feedback:${userId}`, 60, 60_000);
-  if (limited) {
-    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
-  }
+  const gate = await requireUserWithRateLimit('feedback', 60, 60_000);
+  if (gate instanceof NextResponse) return gate;
+  const { userId } = gate;
 
   let body: { sessionId?: unknown; turnIndex?: unknown; score?: unknown; reason?: unknown };
   try {

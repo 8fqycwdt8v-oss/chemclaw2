@@ -1,12 +1,11 @@
 import { z } from 'zod';
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@clerk/nextjs/server';
 import { buildQueryOptions } from '@/lib/agent';
 import { agentToStream } from '@/lib/streaming';
 import { scheduledSubstanceGate, MAX_PROMPT_BYTES } from '@chemclaw2/agent-tools';
 import { recordOverride, getProjectBudget, incrementSpend } from '@chemclaw2/db';
 import { randomUUID } from 'crypto';
-import { rateLimit } from '@/lib/rate-limit';
+import { requireUserWithRateLimit } from '@/lib/api-gate';
 
 const MAX_JUSTIFICATION_LEN = 2000;
 const RATE_LIMIT_REQUESTS = 20;
@@ -28,18 +27,12 @@ const BodySchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const { limited } = await rateLimit(`chat:${userId}`, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS);
-  if (limited) {
-    return NextResponse.json(
-      { error: 'Too many requests — please wait before sending another message' },
-      { status: 429, headers: { 'Retry-After': '60' } },
-    );
-  }
+  const apiGate = await requireUserWithRateLimit(
+    'chat', RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS,
+    'Too many requests — please wait before sending another message',
+  );
+  if (apiGate instanceof NextResponse) return apiGate;
+  const { userId } = apiGate;
 
   let raw: unknown;
   try {

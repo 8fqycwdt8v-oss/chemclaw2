@@ -1,14 +1,12 @@
-import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { getWikiPage, subscribeToWikiPage, unsubscribeFromWikiPage } from '@chemclaw2/db';
-import { rateLimit } from '@/lib/rate-limit';
+import { requireUserWithRateLimit } from '@/lib/api-gate';
 import { isValidSlug } from '@/lib/validation';
 
 export async function POST(_req: Request, { params }: { params: Promise<{ slug: string }> }) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const { limited } = await rateLimit(`wiki:${userId}`, 20, 60_000);
-  if (limited) return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
+  const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
+  if (gate instanceof NextResponse) return gate;
+  const { userId } = gate;
 
   const { slug } = await params;
   if (!isValidSlug(slug)) return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });
@@ -20,10 +18,9 @@ export async function POST(_req: Request, { params }: { params: Promise<{ slug: 
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ slug: string }> }) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const { limited } = await rateLimit(`wiki:${userId}`, 20, 60_000);
-  if (limited) return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
+  const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
+  if (gate instanceof NextResponse) return gate;
+  const { userId } = gate;
 
   const { slug } = await params;
   if (!isValidSlug(slug)) return NextResponse.json({ error: 'Invalid slug' }, { status: 400 });

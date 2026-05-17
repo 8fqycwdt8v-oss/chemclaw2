@@ -140,7 +140,7 @@ export const postgresSessionStore = {
           eq(agentSessions.sessionId, key.sessionId),
         ),
       );
-    return rows.map((r) => r.subpath).filter((s) => s !== '');
+    return rows.filter((r) => r.subpath !== '').map((r) => r.subpath);
   },
 } satisfies {
   append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void>;

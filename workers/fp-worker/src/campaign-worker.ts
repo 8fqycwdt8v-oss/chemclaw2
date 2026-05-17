@@ -2,6 +2,7 @@ import PgBoss from 'pg-boss';
 import OpenAI from 'openai';
 import { ne, eq, and, lt, inArray, notInArray, sql } from 'drizzle-orm';
 import { trace } from '@opentelemetry/api';
+import { errorMessage } from './errors';
 import { db } from '@chemclaw2/db';
 import { campaignSteps, synthesisCampaigns, reactions } from '@chemclaw2/db';
 import { upsertWikiPage, findSimilarReactions } from '@chemclaw2/db';
@@ -91,7 +92,7 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
     for (const { id } of pending) {
       await boss.send('run-campaign-step', { stepId: id }, { singletonKey: id }).catch((err) => {
         trace.getActiveSpan()?.addEvent('campaign.enqueue_failed', {
-          queue: 'run-campaign-step', step_id: id, error: err instanceof Error ? err.message : String(err),
+          queue: 'run-campaign-step', step_id: id, error: errorMessage(err),
         });
       });
     }
@@ -123,7 +124,7 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
     for (const { id } of stepsToRetry) {
       await boss.send('run-campaign-step', { stepId: id }, { singletonKey: id }).catch((err) => {
         trace.getActiveSpan()?.addEvent('campaign.enqueue_failed', {
-          queue: 'run-campaign-step', step_id: id, error: err instanceof Error ? err.message : String(err),
+          queue: 'run-campaign-step', step_id: id, error: errorMessage(err),
         });
       });
     }
@@ -167,7 +168,7 @@ export async function startCampaignWorker(boss: PgBoss): Promise<void> {
             if (updated.length > 0) {
               await boss.send('create-campaign-wiki', { campaignId: campaign.id }, { singletonKey: campaign.id }).catch((err) => {
                 trace.getActiveSpan()?.addEvent('campaign.enqueue_failed', {
-                  queue: 'create-campaign-wiki', campaign_id: campaign.id, error: err instanceof Error ? err.message : String(err),
+                  queue: 'create-campaign-wiki', campaign_id: campaign.id, error: errorMessage(err),
                 });
               });
             }

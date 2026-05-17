@@ -1,17 +1,14 @@
-import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { getWikiPage, setCitationDisputed } from '@chemclaw2/db';
-import { rateLimit } from '@/lib/rate-limit';
+import { requireUserWithRateLimit } from '@/lib/api-gate';
 import { isValidSlug } from '@/lib/validation';
 
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ slug: string; cid: string }> },
 ) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const { limited } = await rateLimit(`wiki:${userId}`, 20, 60_000);
-  if (limited) return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
+  const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
+  if (gate instanceof NextResponse) return gate;
 
   const { slug, cid } = await params;
   if (!isValidSlug(slug) || cid.length === 0 || cid.length > 200) {

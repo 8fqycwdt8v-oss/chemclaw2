@@ -1,23 +1,18 @@
-import { auth, currentUser } from '@clerk/nextjs/server';
+import { currentUser } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import {
   getWikiPage, getWikiPageCitations, upsertWikiPage, updateWikiMetadata, pointInTimeWiki,
 } from '@chemclaw2/db';
 import { embedTexts } from '../../../../lib/embeddings';
-import { rateLimit } from '@/lib/rate-limit';
+import { requireUserWithRateLimit } from '@/lib/api-gate';
 import { SlugSchema, WikiPutBodySchema, WikiPatchBodySchema, zodErrorResponse } from '@/lib/wiki-schemas';
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const { limited } = await rateLimit(`wiki-read:${userId}`, 60, 60_000);
-  if (limited) {
-    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
-  }
+  const gate = await requireUserWithRateLimit('wiki-read', 60, 60_000);
+  if (gate instanceof NextResponse) return gate;
 
   const { slug } = await params;
   if (!SlugSchema.safeParse(slug).success) {
@@ -48,13 +43,9 @@ export async function PUT(
   req: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const { limited } = await rateLimit(`wiki:${userId}`, 20, 60_000);
-  if (limited) {
-    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
-  }
+  const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
+  if (gate instanceof NextResponse) return gate;
+  const { userId } = gate;
 
   const { slug } = await params;
   if (!SlugSchema.safeParse(slug).success) {
@@ -99,13 +90,9 @@ export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const { limited } = await rateLimit(`wiki:${userId}`, 20, 60_000);
-  if (limited) {
-    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
-  }
+  const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
+  if (gate instanceof NextResponse) return gate;
+  const { userId } = gate;
 
   const { slug } = await params;
   if (!SlugSchema.safeParse(slug).success) {

@@ -6,12 +6,13 @@ import { trace } from '@opentelemetry/api';
 import { callMcpTool } from '@chemclaw2/agent-tools';
 import { startCampaignWorker } from './campaign-worker';
 import { startEvalWorker } from './eval-worker';
+import { errorMessage } from './errors';
 
 function logEnqueueFailure(queue: string, id: string) {
   return (err: unknown) => {
     trace.getActiveSpan()?.addEvent('fp.enqueue_failed', {
       queue, target_id: id,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     });
   };
 }

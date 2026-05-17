@@ -1,20 +1,14 @@
-import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { upsertWikiPage, listWikiPages, listWikiProjects, searchWikiByFTS } from '@chemclaw2/db';
 import type { WikiPageCursor } from '@chemclaw2/db';
 import { embedTexts } from '../../../lib/embeddings';
-import { rateLimit } from '@/lib/rate-limit';
+import { requireUserWithRateLimit } from '@/lib/api-gate';
 import { SlugSchema, WikiPostBodySchema, zodErrorResponse } from '@/lib/wiki-schemas';
 import { UUID_RE } from '@chemclaw2/agent-tools';
 
 export async function GET(req: Request) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const { limited } = await rateLimit(`wiki-read:${userId}`, 60, 60_000);
-  if (limited) {
-    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
-  }
+  const gate = await requireUserWithRateLimit('wiki-read', 60, 60_000);
+  if (gate instanceof NextResponse) return gate;
 
   const url = new URL(req.url);
 
@@ -55,13 +49,9 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const { limited } = await rateLimit(`wiki:${userId}`, 20, 60_000);
-  if (limited) {
-    return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': '60' } });
-  }
+  const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
+  if (gate instanceof NextResponse) return gate;
+  const { userId } = gate;
 
   let raw: unknown;
   try {
