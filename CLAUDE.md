@@ -51,6 +51,17 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 - **Escalate child-process kills SIGTERM → SIGKILL.** Add an `.unref()`'d backstop timer (~2 s per-call, ~5 s shutdown). Python-in-C children (RDKit, DRFP) ignore SIGTERM until the C frame returns and leak as zombies otherwise.
 - **Enforce size invariants at the push site, not in fallback branches.** A helper that appends to a result is responsible for bounding its inputs; don't rely on a conditional branch at the call site to handle the oversized case.
 
+## Observability rules
+
+1. Use `@chemclaw2/observability`'s `logger`; never bare `console.*`. Trace IDs and request context attach automatically.
+2. Every `catch` either logs or rethrows. A swallowed error is a production blind spot.
+3. Log 401, 429, 4xx denials, and security-hook blocks at info/warn before returning. Denials are signals, not noise.
+4. Wrap every external boundary call (DB, MCP, `fetch`, embeddings) with timing + outcome. The log line is often the only diagnostic.
+5. A fail-open path must emit an error before returning the fallback. Silent fail-open ≡ no enforcement.
+6. Health endpoints reflect downstream state. Don't return 200 to unauthenticated probes while a critical dependency is down.
+7. Post-response background work (onResult callbacks, fire-and-forget writes) logs its own outcomes. No caller will surface its failure.
+8. Workers emit startup, heartbeat, and shutdown events; cron sweeps log what they deleted. Silence is not healthy.
+
 ## Stack
 
 | Layer | Technology |
