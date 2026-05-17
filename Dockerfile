@@ -1,72 +1,47 @@
-FROM node:22-alpine AS base
-RUN corepack enable pnpm
-
-# Install dependencies only when needed
-FROM base AS deps
+FROM python:3.11-slim AS builder
 WORKDIR /app
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
-COPY apps/web/package.json apps/web/
-COPY packages/db/package.json packages/db/
-COPY packages/agent-tools/package.json packages/agent-tools/
-COPY workers/fp-worker/package.json workers/fp-worker/
-RUN pnpm install --frozen-lockfile
 
-# Build the application
-FROM base AS builder
+# Install system dependencies needed to build asyncpg, cryptography, etc.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies in a virtual env (cached layer).
+COPY pyproject.toml .
+RUN python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir -e "." && \
+    /opt/venv/bin/pip install --no-cache-dir \
+        packages/mcp-servers/mcp_molfp \
+        packages/mcp-servers/mcp_rxnfp
+
+# Copy application code after deps are cached.
+COPY api/ ./api/
+COPY packages/mcp-servers/ ./packages/mcp-servers/
+COPY .claude/skills ./.claude/skills
+
+# ── Runtime image ─────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS runner
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-RUN pnpm turbo build --filter=@chemclaw2/web
 
-# Python + chemistry deps for the MCP fingerprinting servers
-# (spawned per request by /api/fingerprint and by the worker process).
-FROM base AS runner
-WORKDIR /app
-ENV NODE_ENV=production
+# Runtime system libs only (no compilers).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/* \
+    && addgroup --system --gid 1001 appuser \
+    && adduser --system --uid 1001 --ingroup appuser appuser
 
-RUN apk add --no-cache python3 py3-pip
+COPY --from=builder --chown=appuser:appuser /opt/venv /opt/venv
+COPY --from=builder --chown=appuser:appuser /app/api ./api
+COPY --from=builder --chown=appuser:appuser /app/packages ./packages
+COPY --from=builder --chown=appuser:appuser /app/.claude ./.claude
+
 ENV PATH="/opt/venv/bin:$PATH"
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
-# Web app standalone bundle
-COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.next/static
-COPY --from=builder --chown=nextjs:nodejs /app/apps/web/public ./apps/web/public 2>/dev/null || true
-
-# Worker source + workspace deps (tsx runs the worker; ESM resolution in Node
-# without .js extensions across workspaces is fragile, so we keep TS source).
-COPY --from=builder --chown=nextjs:nodejs /app/workers/fp-worker ./workers/fp-worker
-COPY --from=builder --chown=nextjs:nodejs /app/packages ./packages
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
-
-# Skill packs (SKILL.md with YAML frontmatter) — discovered by the Agent SDK
-# under .claude/skills/<name>/SKILL.md. Without this, the seed skills are
-# missing in production and the agent has no skill listing.
-# Scoped to .claude/skills/ so dev-only contents under .claude/ (agents,
-# commands, settings.json) don't accidentally get baked into prod.
-COPY --from=builder --chown=nextjs:nodejs /app/.claude/skills ./.claude/skills
-
-# Python venv + MCP servers (spawned per request by /api/fingerprint and by the worker).
-# chown the venv to nextjs:nodejs so the unprivileged USER below can exec python and
-# import RDKit/drfp from site-packages.
-RUN python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir rdkit drfp mcp && \
-    /opt/venv/bin/pip install --no-cache-dir -e ./packages/mcp-servers/mcp_molfp \
-                                              -e ./packages/mcp-servers/mcp_rxnfp && \
-    chown -R nextjs:nodejs /opt/venv
-
-USER nextjs
-EXPOSE 3000
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
-# Pin the project root so the Agent SDK finds .claude/skills/ under it
-# regardless of what cwd Next launches server.js from, and so the POST
-# /api/skills endpoint writes new SKILL.md files to the same location.
+ENV PYTHONUNBUFFERED=1
 ENV PROJECT_ROOT=/app
 ENV SKILLS_DIR=/app/.claude/skills
 
-# Process selected by Fly via [processes] in fly.toml.
-# Default to the web app for local docker run.
-CMD ["node", "apps/web/server.js"]
+USER appuser
+EXPOSE 8080
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8080"]

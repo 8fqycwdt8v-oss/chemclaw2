@@ -32,91 +32,71 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 
 ## Code conventions
 
-- **Validate external input with a schema library.** No hand-rolled `typeof`/`instanceof` chains for nested object shapes — they drift and copy.
-- **Implement type guards as `XSchema.safeParse(v).success`, not hand-rolled walkers.** Tiptap, Clerk, and request bodies all have Zod schemas — reuse them.
-- **Branch on Zod issue `code` (`'too_big'`, `'invalid_type'`), not on `issue.message` text.** Message strings drift; codes are stable API.
-- **Extract on the third copy.** Same 3+ line block in three sibling files = a helper. Applies equally to route preludes, error formatters, custom types, and shared validators.
-- **Filter before map.** Don't materialize values you're about to discard.
-- **No defensive checks the language guarantees.** `Number.isFinite` after `parseInt`, `x ? true : false`, double-casts through primitives (`str(int(b))` on numpy 0/1) — drop them.
-- **Rate-limit responses always carry `Retry-After`.** Route 429s through the shared gate so the header is never missed.
-- **Next.js route handlers gate auth + rate-limit through one helper** (e.g. `requireUserWithRateLimit` in `apps/web/lib/api-gate.ts`). No inline `auth()` → `rateLimit()` → 401/429 prelude per route.
-- **Zod request body schemas live in `*-schemas.ts` modules** alongside a shared error formatter — route handlers `safeParse` the raw body and translate failures through it. No hand-rolled body validation inside the handler.
-- **Every new `app/api/**/route.ts` handler ships with a vitest covering auth-fail, validation-fail, and happy paths;** webhook routes additionally need a signature-fail test.
-- **Read env vars through `webEnv()` (`apps/web/lib/env.ts`) or `dbEnv()` (`packages/db/src/env.ts`), never `process.env.*` in routes, queries, or lib helpers.**
-- **Use the env-var name the library expects** (e.g. `CLERK_WEBHOOK_SIGNING_SECRET`, `OPENAI_API_KEY`, `DATABASE_URL`); aliases break libraries that auto-read.
-- **Module-load env reads (`const X = webEnv().Y` at file top) may only touch fields with defaults in the Zod schema;** required vars go inside a handler/factory so a missing var fails at request time, not build time.
-- **Before creating `packages/db/migrations/NNNN_*.sql`, run `git fetch origin main && ls packages/db/migrations/` and pick a number higher than every file on `main`.** Branches off a stale base silently collide on the slot and on `_journal.json`.
-- **Drizzle `customType` factories live in one shared module per package** (e.g. `packages/db/src/schema/custom-types.ts`). Don't redefine column type factories inside individual schema files.
-- **All server-side logging goes through `@chemclaw2/observability` `logger`.** No `console.*` calls in app/worker code; pass `err` as the third arg and the logger handles stringification.
-- **Wrap latency-critical work in `withSpan(name, attrs, fn)`** from `@chemclaw2/observability`. Don't call OTel `trace.getActiveSpan()?.addEvent()` directly for spans that should be measurable on their own.
-- **Security gates fail closed.** A `.catch` on a permissions or authz lookup returns the deny verdict, never the allow path — document any intentional fail-open next to the call site (the `getBudget` cache is the template).
-- **Owner-scope every per-user write.** Every `db.update` / `db.delete` against per-user data includes `eq(userId)` in WHERE — `sessionId` / `pageId` / `campaignId` alone is not enough; mirror the WHERE from the read that gated the write.
-- **Wrap multi-step state transitions in `db.transaction`.** A status flip plus its dependent inserts/updates commit together or roll back together. `await updateStatus(...); for (...) await insertChild(...)` is this rule firing.
-- **Repeat the source-state predicate on every transition UPDATE.** When a sibling function has `notInArray([terminal])` in WHERE, the new one needs it too — call sites can't be trusted to never invoke it post-completion.
-- **Don't short-circuit security checks on identifier equality.** Same hostname ≠ same IP; same id ≠ same trust level. Re-validate DNS, ownership, and signatures on every redirect / hop / retry.
-- **Guard `setInterval` polls against reentrancy.** An `inFlight` flag set on entry, cleared in `finally`; slow networks make poll N+1 fire before N's POST returns.
-- **Escalate child-process kills SIGTERM → SIGKILL.** Add an `.unref()`'d backstop timer (~2 s per-call, ~5 s shutdown). Python-in-C children (RDKit, DRFP) ignore SIGTERM until the C frame returns and leak as zombies otherwise.
-- **Enforce size invariants at the push site, not in fallback branches.** A helper that appends to a result is responsible for bounding its inputs; don't rely on a conditional branch at the call site to handle the oversized case.
-- **Every devDep needs a matching script invocation in its own `package.json`;** when you remove a script, sweep the devDeps that only existed for it.
-- **Before adding a new package, check whether an existing dep re-exports the feature** — `verifyWebhook` lives at `@clerk/nextjs/webhooks`, `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` ships with `@anthropic-ai/claude-agent-sdk`.
-- **Every `app/api/**/route.ts` handler is wired through `withRoute` / `withRouteParams` (`apps/web/lib/api-gate.ts`).** The wrapper owns auth, rate-limit, JSON parsing, Zod body validation, the `errorResponse` envelope, and `withApiContext` for request-id propagation — all from one config object. Don't inline pieces of the prelude; if `withRoute` is missing what your route needs, extend the wrapper instead of bypassing it.
-- **Only `packages/db/src/queries/*` imports drizzle-orm primitives.** Routes, agent tools, hooks, and workers call exported query functions. Importing `db`, `sql`, `eq`, `inArray`, or schema tables from `@chemclaw2/db` outside the queries folder bypasses the layer that owns transactions, owner-scoping, and source-state predicates — if the query you need doesn't exist, add it.
-- **Multi-step orchestration with compensating rollback lives in the queries layer, not the route.** A claim → validate → upsert → link sequence with try/catch + rollback at every failure site is one query function (template: `applyProposedEdit`). The route supplies validators and the publish closure; the query owns the state machine.
-- **All API error returns go through `errorResponse(message, status, extras?, headers?)`.** Routes that need richer envelopes (override hints, dispute reasons) attach them via `extras` — no bespoke `NextResponse.json({ error, my_custom_field })` shapes. One envelope, one place to add cross-cutting fields.
-- **Constants that mirror DB schema (vector dimensions, enum values, column length caps) live in `packages/db` and are re-exported by sibling packages that need them.** `EMBED_DIM` belongs next to the `vector(1536)` columns in `packages/db/src/embedding-constants.ts`; `agent-tools` re-exports. "Mirrors X in the other package" comments are a regression signal — fold the duplicate.
-- **Each pluggable surface (agent tools, sub-agent allow-lists, experiment classification) reads from one registry module.** Adding a new tool is a single edit to `apps/web/lib/tool-registry.ts`, not three coordinated edits across `sdk-tools.ts` + `agent.ts` + a hardcoded subagent whitelist. Silent "forgot to register" failures aren't caught by typecheck, so don't create surfaces where they can hide.
-- **Split a queries module past ~400 lines, and lift hook/callback bodies > ~100 lines out of the assembly file.** `wiki-chunks` / `wiki-search` / `wiki-citations` is the pattern: one concern per file, re-export from the original module if back-compat matters. Hooks extract to `<module>-hooks.ts` exporting `buildHooks(deps)` so the assembly file stays config-shaped and the bodies become unit-testable in isolation.
-- **After resolving merge conflicts, run `git status` and verify every "modified" file is staged before `git commit`.** `git add <conflicted-path>` doesn't catch files you edited while resolving (e.g. porting an improvement into a moved module). Unstaged modifications ship as a silent regression in the merge commit — caught only by re-reading the diff against `origin/main` post-merge.
+- **Validate external input with Pydantic.** No hand-rolled `isinstance`/`type()` chains for request bodies or nested objects — define a `BaseModel` and let Pydantic raise `422`.
+- **Only `api/db/queries/*` imports SQLAlchemy primitives.** Routes, agent tools, hooks, and workers call exported async query functions. Importing `select`, `insert`, or model classes outside the queries layer bypasses owner-scoping and transaction logic — add the query function instead.
+- **Wrap multi-step state transitions in `async with session.begin()`.** A status flip plus its dependent inserts commit together or roll back. Sequential awaits outside a transaction are this rule firing.
+- **Repeat the source-state predicate on every transition UPDATE.** When one function excludes terminal statuses in WHERE, every sibling that touches the same state machine must do the same.
+- **Owner-scope every per-user write.** Every `UPDATE`/`DELETE` against per-user rows includes `user_id = :uid` in WHERE — `session_id`/`page_id` alone is not access control.
+- **Read env vars through `os.environ` inside factory/startup functions, never at module import time for required vars.** Module-level reads of required vars fail at import (killing all routes), not at request time. Vars with defaults are fine at module level.
+- **Use the env-var name the library expects** (`DATABASE_URL`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). Aliases break libraries that auto-read.
+- **Before adding a migration, run `git fetch origin main && ls migrations/` and pick a number higher than every file on `main`.** Stale-base branches silently collide on the slot.
+- **Extract on the third copy.** Same 3+ line block across three sibling files = a helper in `api/db/queries/` or a shared utility.
+- **Filter before materialize.** Don't build a list you're about to discard.
+- **No defensive checks the language guarantees.** `str(int(b))` on a value already known to be `int`, `x if x else None` on a value already `Optional` — drop them.
+- **Security gates fail closed.** An `except` on a permissions or authz lookup returns the deny verdict, never the allow path — document any intentional fail-open next to the call site.
+- **Don't short-circuit security checks on identifier equality.** Same hostname ≠ same IP. Re-validate DNS, ownership, and signatures on every redirect / hop / retry.
+- **Guard asyncio polling loops against reentrancy.** An `in_flight` flag set on entry, cleared in `finally`; slow DB calls make the next poll fire before the previous one returns.
+- **MCP subprocess kills: SIGTERM then SIGKILL.** Python-in-C children (RDKit, DRFP) may ignore SIGTERM until the C frame returns; add a 2 s backstop with `asyncio.wait_for`.
+- **Split a queries module past ~400 lines.** One concern per file; re-export from the original if back-compat matters.
+- **After resolving merge conflicts, `git status` to verify every modified file is staged before committing.** Unstaged resolutions ship as a silent regression.
 
 ## Observability rules
 
-1. Use `@chemclaw2/observability`'s `logger`; never bare `console.*`. Trace IDs and request context attach automatically.
-2. Every `catch` either logs or rethrows. A swallowed error is a production blind spot.
-3. Log 401, 429, 4xx denials, and security-hook blocks at info/warn before returning. Denials are signals, not noise.
-4. Wrap every external boundary call (DB, MCP, `fetch`, embeddings) with timing + outcome. The log line is often the only diagnostic.
-5. A fail-open path must emit an error before returning the fallback. Silent fail-open ≡ no enforcement.
-6. Health endpoints reflect downstream state. Don't return 200 to unauthenticated probes while a critical dependency is down.
-7. Post-response background work (onResult callbacks, fire-and-forget writes) logs its own outcomes. No caller will surface its failure.
-8. Workers emit startup, heartbeat, and shutdown events; cron sweeps log what they deleted. Silence is not healthy.
+1. Use Python `logging` (`logger = logging.getLogger(__name__)`); never bare `print`. Log at appropriate levels.
+2. Every `except` either logs or re-raises. A swallowed exception is a production blind spot.
+3. Log 401, 429, 4xx denials, and security-hook blocks at info/warning before returning. Denials are signals, not noise.
+4. Wrap every external boundary call (DB, MCP subprocess, httpx, embeddings) so failures are distinguishable in logs.
+5. A fail-open path must log an error before returning the fallback. Silent fail-open ≡ no enforcement.
+6. Health endpoints reflect downstream state.
+7. Workers emit startup, heartbeat, and shutdown log events. Silence is not healthy.
 
 ### Error handling
 
-- **Every `.catch()` and `catch {}` must log the error.** Server-side use `@chemclaw2/observability`'s `logger.error('event_name', {fields}, err)`; client-side use `console.error`. `.catch(() => 0)` / `.catch(() => [])` / `.catch(() => null)` without a log is indistinguishable from a genuine empty result.
-- **Narrow caught errors with `err instanceof Error ? err.message : String(err)`. Never `(err as Error).message`.** Non-Error rejections (string throws, third-party SDKs rejecting with `{code, message}`) crash with `TypeError` or print `undefined`.
-- **Guard `.returning()` destructuring before dereferencing.** After `const [row] = await db.insert(...).returning(...)`, write `if (!row) throw new Error('...: insert returned no row')` before touching `row.<field>`. Drizzle returns `[]` on RLS / schema mismatch / race-on-conflict failures.
-- **In pg-boss worker handlers, re-throw after logging the failure.** A swallowed exception makes the queue mark a failed job as done, so retry policy never fires and the row stalls forever.
-- **Wrap async `setInterval`/`setTimeout` callbacks in `try/catch`, not `.catch()` on the returned promise.** Sync throws before the first `await` slip past `.catch()` and become process-killing unhandled rejections (Node ≥15).
-- **Guard child-process cleanup methods with `try/catch`.** `proc.kill()`, `proc.stdin.end()`, `reader.cancel()` all throw on already-closed handles, and a throw inside a settle/timer callback orphans the surrounding promise.
-- **When listening to both `'error'` and `'close'` on a child process, short-circuit `'close'` if `'error'` already fired.** Set an `errorSeen` flag in the error handler. Otherwise a `close` racing ahead of `error` masks the real cause (ENOENT, EACCES, AbortError) behind a generic `exited with code N`.
-- **Best-effort persistence wrappers must signal success/failure to callers.** Return `{ ok, error? }`, not `Promise<void>` — a void return makes "logged the failure and dropped it" look identical to "persisted".
-- **In Next.js App Router, parse JSON as `await req.json()` inside `try/catch` — never `req.body ? await req.json() : {}`.** `req.body` is a stream; its truthiness doesn't tell you whether the body is safe to read.
+- **Every `except` block must log the error or re-raise.** `except Exception: return []` without a log is indistinguishable from a genuine empty result.
+- **Best-effort persistence wrappers must signal success/failure.** Return `{"ok": bool, "error": ...}`, not bare `None` — a `None` return makes "logged and dropped" look identical to "persisted".
+- **Guard asyncio subprocess cleanup with `try/except`.** `proc.kill()`, `proc.stdin.close()`, `proc.communicate()` all raise on already-closed handles; a raise inside a `finally` block cancels the outer coroutine.
+- **`asyncio.create_subprocess_exec`, not `subprocess.run` or `shell=True`, for MCP stdio.** No shell injection risk, compatible with the event loop.
 
 ## Security rules
 
-1. **Rate limiters, SSRF guards, and role checks fail closed.** `pgRateLimit`'s catch returns `limited:true`; `safeFetch`'s DNS lookup throws on resolution failure; `requireAdmin*` returns 403 when role lookup errors. Fail-open at any of these is a security-relevant bypass — the only legitimate fail-open is a non-security budget cache, documented at the call site.
-2. **Don't enable RLS without per-tenant predicates.** `ALTER TABLE … ENABLE ROW LEVEL SECURITY` with `USING (true)` is footgun, not policy — it looks protected to `\d+` but isolates nothing. Either land `created_by = current_setting('app.current_user_id')`-style predicates with the `SET LOCAL` plumbing, or leave RLS off so the schema reflects reality.
-3. **Anything the Agent SDK auto-loads is admin-write.** `.claude/skills/`, `.claude/settings.json`, and other SDK-discovery paths become prompt context for every subsequent session of every user. Endpoints that write to those paths use `requireAdminWithRateLimit`, never `requireUserWithRateLimit`.
-4. **Don't echo internal error messages to clients.** `errorResponse((err as Error).message, 502)` leaks MCP process paths, SQL fragments, Bearer-token prefixes embedded in stack frames. Surface a correlation id + generic status; the real error goes to `logger.error(event, fields, err)` server-side.
-5. **All outbound HTTP routes through `safeFetch` or an undici `Agent` with a connect-time `lookup` IP-range check.** A pre-flight `dns.lookup()` followed by native `fetch()` leaves a DNS-rebinding TOCTOU window. The dispatcher pattern in `packages/agent-tools/src/safe-fetch.ts` and `eln-fetch.ts` is the template — copy it for every new external integration, especially when the request carries a bearer token.
-6. **Mutations on shared state require creator-or-admin; verify referenced ids before inserting rows that point at them.** Routes that overwrite shared resources (wiki PUT, page metadata) check `existing.createdBy === userId || role === 'admin'` before writing. Routes that take an opaque id in the body (`sessionId`, `pageId`, `campaignId`) verify it belongs to the caller before inserting rows that reference it — FK constraints are not access control.
-7. **Idempotent endpoints return the success shape for missing resources.** Subscribe / unsubscribe / dispute / set-state no-op + return `{subscribed:true}` (or equivalent) when the slug or id doesn't exist. `404 vs 200` lets an attacker enumerate slugs within the rate-limit budget; a normalized response forces them to spend full requests for zero signal.
-8. **Strip secrets and PII at the seams where the LLM, OTel, and tool inputs cross.** `packages/agent-tools/src/hooks/redaction.ts` runs on every tool call and must catch API keys (`sk-…`, `pk_…`), bearer tokens, AWS/GitHub credentials, and SSNs — extend `SECRET_PATTERNS`, not one-off scans. `getNodeAutoInstrumentations({ '@opentelemetry/instrumentation-http': { requestHook } })` redacts `authorization`/`cookie`/`x-api-key` headers; `instrumentation-pg` runs with `enhancedDatabaseReporting: false` so parameter values stay off-span.
+1. **Rate limiters, SSRF guards, and role checks fail closed.** `pg_rate_limit`'s `except` returns `limited:True`; `_assert_not_private`'s DNS lookup raises on resolution failure. Fail-open at any of these is a security-relevant bypass — the only legitimate fail-open is a non-security budget cache, documented at the call site.
+2. **Don't enable RLS without per-tenant predicates.** `ALTER TABLE … ENABLE ROW LEVEL SECURITY` with `USING (true)` is footgun, not policy. Either land real predicates or leave RLS off so the schema reflects reality.
+3. **Anything the Agent SDK auto-loads is admin-write.** `.claude/skills/`, `.claude/settings.json`, and other SDK-discovery paths become prompt context for every user. Endpoints that write to those paths require admin auth.
+4. **Don't echo internal error messages to clients.** Leaked MCP process paths, SQL fragments, and bearer-token prefixes in stack frames are OWASP A05. Surface a generic message; log the real error server-side.
+5. **All outbound HTTP goes through `httpx.AsyncClient` with a pre-connect SSRF check (`_assert_not_private`).** A pre-flight `socket.getaddrinfo()` followed by separate `httpx.get()` leaves a DNS-rebinding TOCTOU window — resolve once and bind the resolved IP. The pattern in `api/agent/tools.py` is the template.
+6. **Mutations on shared state require creator-or-admin; verify referenced ids before inserting rows that point at them.** FK constraints are not access control.
+7. **Strip secrets and PII at the tool boundary.** `api/agent/hooks.py` pre-tool hook must catch API keys (`sk-…`, `pk_…`), bearer tokens, and SSNs — extend `_SECRET_PATTERNS`, not one-off scans.
 
 ## Stack
 
 | Layer | Technology |
 |---|---|
-| Agent runtime | Claude Agent SDK (TypeScript) |
+| Agent runtime | Claude Agent SDK (Python, `claude-agent-sdk`) |
 | LLM | Anthropic models direct |
-| Web app | Next.js (App Router) + RSC |
-| Editor | Tiptap |
+| Web framework | FastAPI + Uvicorn |
+| DB ORM | SQLAlchemy 2.0 async + asyncpg |
 | DB | Postgres (Neon/Supabase/RDS) + pgvector |
-| Molecule fingerprints | RDKit Morgan/ECFP4 via MCP server |
-| Reaction fingerprints | DRFP via MCP server |
-| Job queue | pg-boss (Postgres-backed) |
-| Auth | Microsoft Entra ID / Auth0 / Clerk |
-| Observability | OpenTelemetry → Langfuse + Better Stack/Axiom |
+| Molecule fingerprints | RDKit Morgan/ECFP4 via MCP server (`mcp_molfp`) |
+| Reaction fingerprints | DRFP via MCP server (`mcp_rxnfp`) |
+| Job queue | asyncio polling worker + Postgres advisory locks |
+| Auth | Clerk (PyJWT + JWKS) |
+| Embeddings | OpenAI Python SDK (`text-embedding-3-small`) |
 | CI/CD | GitHub Actions |
+
+## Branch note
+
+`typescript_old` is a permanent archive of the original Next.js/TypeScript monorepo.
+**Never merge, rebase, or delete it.** Reference only.
 
 ## Operating principles (non-negotiable)
 

@@ -25,21 +25,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
-      - name: Install Python MCP servers
+      - name: Install Python dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Install MCP servers
         run: |
           pip install packages/mcp-servers/mcp_molfp packages/mcp-servers/mcp_rxnfp
 
@@ -53,28 +47,17 @@ jobs:
           "
 
       - name: Run migrations
-        run: pnpm --filter @chemclaw2/db migrate
+        run: |
+          for f in migrations/*.sql; do
+            psql "$DATABASE_URL" -f "$f"
+          done
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/chemclaw2_test
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Lint
-        run: pnpm lint
 
       - name: Test
-        run: pnpm test
+        run: pytest api/ -v
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chemclaw2_test
-
-      - name: Build
-        run: pnpm build
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chemclaw2_test
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsubG9jYWxob3N0JA==
-          CLERK_SECRET_KEY: sk_test_placeholder
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chemclaw2_test
           ANTHROPIC_API_KEY: sk-ant-placeholder
-          LANGFUSE_PUBLIC_KEY: pk-lf-placeholder
-          LANGFUSE_SECRET_KEY: sk-lf-placeholder
           OPENAI_API_KEY: sk-placeholder
+          CLERK_SECRET_KEY: sk_test_placeholder

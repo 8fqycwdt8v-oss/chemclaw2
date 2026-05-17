@@ -4,18 +4,14 @@ primary_region = "fra"
 [build]
 
 [env]
-  PORT = "3000"
-  NEXT_TELEMETRY_DISABLED = "1"
+  PORT = "8080"
 
-# Two processes share the image: the Next.js web app and the fp-worker
-# (fingerprinting + campaign step queue). Without the worker, compounds and
-# reactions sit with NULL fingerprints and similarity search returns nothing.
 [processes]
-  web = "node apps/web/server.js"
-  worker = "pnpm --filter @chemclaw2/fp-worker start"
+  web = "uvicorn api.main:app --host 0.0.0.0 --port 8080"
+  worker = "python -m api.workers.fp_worker"
 
 [http_service]
-  internal_port = 3000
+  internal_port = 8080
   force_https = true
   auto_stop_machines = "stop"
   auto_start_machines = true
