@@ -108,3 +108,15 @@ async def get_optional_user(authorization: str | None = Header(None)) -> str | N
         return await get_current_user(authorization)
     except HTTPException:
         return None
+
+
+async def get_admin_user(authorization: str | None = Header(None)) -> str:
+    """Dependency that requires the caller to be in ADMIN_USER_IDS env var."""
+    import os
+    user_id = await get_current_user(authorization)
+    raw = os.environ.get("ADMIN_USER_IDS", "")
+    admin_ids = {x.strip() for x in raw.split(",") if x.strip()}
+    if user_id not in admin_ids:
+        logger.warning("admin_access_denied: user=%s", user_id)
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user_id
