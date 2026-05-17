@@ -1,5 +1,4 @@
-import { db, compounds } from '@chemclaw2/db';
-import { inArray } from 'drizzle-orm';
+import { knownCasNumbers } from '@chemclaw2/db';
 import { logger } from '@chemclaw2/observability';
 
 // Suppress duplicate fact_id_check fail-open events during a DB outage.
@@ -21,11 +20,7 @@ export async function checkToolOutput(
   // Fail open on DB errors: a compliance flag should not break the agent response.
   let known: Set<string | null>;
   try {
-    const rows = await db
-      .select({ casNumber: compounds.casNumber })
-      .from(compounds)
-      .where(inArray(compounds.casNumber, casNumbers));
-    known = new Set(rows.map((r) => r.casNumber));
+    known = await knownCasNumbers(casNumbers);
     if (consecutiveFailures > 0) {
       logger.info('fact_id_check_db_recovered', { prior_failures: consecutiveFailures });
       consecutiveFailures = 0;
@@ -55,6 +50,8 @@ export async function checkToolOutput(
     });
   }
   return {
-    warnings: unverified.map((c) => `CAS ${c} found in tool output is not in the compound registry — verify accuracy`),
+    warnings: unverified.map((c) =>
+      `CAS ${c} found in tool output is not in the compound registry — verify accuracy`,
+    ),
   };
 }

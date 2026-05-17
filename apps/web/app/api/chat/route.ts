@@ -1,18 +1,17 @@
 import { z } from 'zod';
-import { NextRequest, NextResponse } from 'next/server';
 import { buildQueryOptions } from '@/lib/agent';
 import { agentToStream } from '@/lib/streaming';
-import { withApiContext } from '@/lib/api-context';
 import { scheduledSubstanceGate, MAX_PROMPT_BYTES } from '@chemclaw2/agent-tools';
 import { recordOverride, getProjectBudget, incrementSpend } from '@chemclaw2/db';
-import { logger } from '@chemclaw2/observability';
 import { randomUUID } from 'crypto';
-import { requireUserWithRateLimit } from '@/lib/api-gate';
+import { withRoute, errorResponse } from '@/lib/api-gate';
 
 const MAX_JUSTIFICATION_LEN = 2000;
 const RATE_LIMIT_REQUESTS = 20;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
+// `.catch(undefined)` on optional fields keeps a malformed but non-mandatory
+// field from 400'ing the whole request.
 const BodySchema = z.object({
   prompt: z.string().trim().min(1).refine(
     (s) => Buffer.byteLength(s, 'utf8') <= MAX_PROMPT_BYTES,
@@ -23,54 +22,34 @@ const BodySchema = z.object({
   plan_mode: z.boolean().optional().catch(undefined),
 });
 
-export async function POST(req: NextRequest) {
-  return withApiContext(async () => {
-    const apiGate = await requireUserWithRateLimit(
-      'chat', RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_MS,
-      'Too many requests — please wait before sending another message',
-    );
-    if (apiGate instanceof NextResponse) return apiGate;
-    const { userId } = apiGate;
-
-    let raw: unknown;
-    try {
-      raw = await req.json();
-    } catch (err) {
-      logger.warn('json_parse_failed', { route: 'chat' }, err);
-      return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
-    }
-
-    const parsed = BodySchema.safeParse(raw);
-    if (!parsed.success) {
-      const first = parsed.error.issues[0];
-      const isSize = first?.message === 'prompt too large';
-      logger.info('validation_rejected', { route: 'chat', reason: first?.message ?? 'unknown', oversize: isSize });
-      return NextResponse.json(
-        { error: first?.message ?? 'invalid request body' },
-        { status: isSize ? 413 : 400 },
-      );
-    }
-    const body = parsed.data;
-
+export const POST = withRoute(
+  {
+    rateLimit: {
+      key: 'chat',
+      max: RATE_LIMIT_REQUESTS,
+      windowMs: RATE_LIMIT_WINDOW_MS,
+      message: 'Too many requests — please wait before sending another message',
+    },
+    body: BodySchema,
+  },
+  async ({ userId, body }) => {
     const prompt = body.prompt;
     const sessionId = body.sessionId ?? randomUUID();
 
+    // Scheduled-substance gate: blocks by default. The user may supply
+    // override_justification (≥20 chars) to bypass; justification + prompt
+    // hash are recorded BEFORE the agent runs (append-only).
     const gate = scheduledSubstanceGate(prompt);
     if (gate.blocked) {
       const justification = body.override_justification?.trim();
       if (!justification) {
-        return NextResponse.json({
-          error: gate.reason,
+        return errorResponse(gate.reason ?? 'Request blocked by scheduled-substance gate', 403, {
           override_available: true,
-          override_hint: 'Provide override_justification (20-2000 chars) to proceed with this request.',
-        }, { status: 403 });
+          override_hint:
+            'Provide override_justification (20-2000 chars) to proceed with this request.',
+        });
       }
-      try {
-        await recordOverride(sessionId, userId, 'scheduled_substance', justification, prompt);
-      } catch (err) {
-        logger.error('record_override_failed', { session_id: sessionId, user_id: userId }, err);
-        throw err;
-      }
+      await recordOverride(sessionId, userId, 'scheduled_substance', justification, prompt);
     }
 
     const planMode = body.plan_mode === true;
@@ -81,12 +60,12 @@ export async function POST(req: NextRequest) {
         const tokens = result.inputTokens + result.outputTokens;
         if (tokens === 0) return;
         const budget = await getProjectBudget(projectKey).catch((err) => {
-          logger.error('get_project_budget_failed', { session_id: sessionId, user_id: userId, project_key: projectKey, tokens }, err);
+          console.error('[chat] getProjectBudget failed:', err);
           return null;
         });
         if (!budget) return;
         await incrementSpend(projectKey, budget.period, { tokens }).catch((err) => {
-          logger.error('increment_spend_tokens_failed', { session_id: sessionId, user_id: userId, project_key: projectKey, period: budget.period, tokens }, err);
+          console.error('[chat] incrementSpend(tokens) failed:', err);
         });
       },
     });
@@ -99,5 +78,5 @@ export async function POST(req: NextRequest) {
         'X-Accel-Buffering': 'no',
       },
     });
-  });
-}
+  },
+);

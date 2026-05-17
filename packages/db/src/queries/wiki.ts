@@ -1,192 +1,30 @@
-import { sql, eq, lt, desc, or, and, type SQL } from 'drizzle-orm';
+import { sql, eq, lt, desc, or, and } from 'drizzle-orm';
 import { trace } from '@opentelemetry/api';
 import { db } from '../client';
 import { wikiPages, wikiChunks, wikiCitations, wikiSubscriptions } from '../schema/wiki';
 import { wikiTables } from '../schema/wiki-tables';
-import { extractMarkdownTables, TABLE_DIVIDER_RE } from './wiki-tables';
+import { extractMarkdownTables } from './wiki-tables';
+import { chunkText } from './wiki-chunks';
 
 const tracer = trace.getTracer('@chemclaw2/db');
 
-// Dimension of OpenAI text-embedding-3-small; mirrors EMBED_DIM in
-// @chemclaw2/agent-tools (kept local to avoid a reverse package import).
-const EMBED_DIM = 1536;
+// Re-export so existing call sites that imported from `./wiki` keep working.
+export { chunkText } from './wiki-chunks';
+export {
+  getWikiPageCitations,
+  setCitationDisputed,
+  getCitationPair,
+  findChunksContainingCitationMarker,
+  recordContradiction,
+} from './wiki-citations';
+export {
+  searchWikiByFTS,
+  listWikiRevisions,
+  semanticSearchWiki,
+  type SemanticSearchOptions,
+  type SemanticSearchResult,
+} from './wiki-search';
 
-// Defends `chunkText` against pathological inputs that would amplify the
-// table-divider regex into catastrophic backtracking, or that would consume
-// gigabytes of memory during paragraph/sentence splitting.
-const MAX_CHUNK_INPUT_CHARS = 1_000_000;
-
-// Split text into semantically coherent chunks for embedding.
-// Strategy (in order of preference):
-//   1. Markdown tables — emit each table as a single chunk so row↔column
-//      semantics survive embedding (Wave-2c B4). Without this, header and
-//      data rows land in different chunks and a query for "yield" loses
-//      the corresponding catalyst/temperature context.
-//   2. Paragraph boundaries (\n\n) — best context for chemistry prose
-//   3. Sentence boundaries (. ! ? followed by whitespace) — for long paragraphs
-//   4. Word boundaries — final fallback for run-on sentences that exceed maxSize
-//
-// 1200/200 is sized so chunks carry enough surrounding context for retrieval
-// (chemistry text is dense; 400-char chunks under-utilize the embedding model).
-// Adjacent chunks share an `overlap`-char prefix taken from the previous chunk
-// so queries that straddle a paragraph boundary still hit at least one chunk.
-//
-// Note: the sentence splitter fires on abbreviations like "Dr." and "Fig." —
-// short resulting fragments are discarded by the length > 10 guard.
-
-/**
- * Split a markdown body into table blocks and non-table fragments. Each
- * fragment is either `{ kind: 'table', text }` (preserved verbatim) or
- * `{ kind: 'prose', text }` (handed to the paragraph/sentence splitter).
- * The chunker emits tables as single chunks and shards prose fragments
- * normally.
- *
- * Wave-3h: shares TABLE_DIVIDER_RE with extractMarkdownTables (was duplicated),
- * tracks fenced code blocks (so pipe-tables in code examples don't get
- * parsed as real tables), and stops table parsing when the inner loop
- * encounters another divider row (adjacent tables now split cleanly).
- */
-const FENCE_RE = /^\s*```/;
-
-function splitOnTables(md: string): Array<{ kind: 'table' | 'prose'; text: string }> {
-  const lines = md.replace(/\r\n/g, '\n').split('\n');
-  const out: Array<{ kind: 'table' | 'prose'; text: string }> = [];
-  let proseBuf: string[] = [];
-  let inFence = false;
-  const flushProse = () => {
-    if (proseBuf.length === 0) return;
-    const joined = proseBuf.join('\n');
-    if (joined.trim().length > 0) out.push({ kind: 'prose', text: joined });
-    proseBuf = [];
-  };
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (FENCE_RE.test(line)) {
-      inFence = !inFence;
-      proseBuf.push(line);
-      continue;
-    }
-    if (inFence) {
-      proseBuf.push(line);
-      continue;
-    }
-    const next = lines[i + 1];
-    if (line.includes('|') && next && TABLE_DIVIDER_RE.test(next.trim())) {
-      flushProse();
-      const tableLines: string[] = [line, next];
-      let j = i + 2;
-      while (j < lines.length) {
-        const rowLine = lines[j];
-        if (!rowLine.includes('|') || rowLine.trim().length === 0) break;
-        if (TABLE_DIVIDER_RE.test(rowLine.trim())) break; // adjacent table's divider
-        const peek = lines[j + 1];
-        if (peek && TABLE_DIVIDER_RE.test(peek.trim())) break; // adjacent table's header
-        tableLines.push(rowLine);
-        j++;
-      }
-      out.push({ kind: 'table', text: tableLines.join('\n') });
-      i = j - 1;
-      continue;
-    }
-    proseBuf.push(line);
-  }
-  flushProse();
-  return out;
-}
-
-export function chunkText(text: string, maxSize = 1200, overlap = 200): string[] {
-  if (text.length > MAX_CHUNK_INPUT_CHARS) {
-    throw new Error(`chunkText: input exceeds ${MAX_CHUNK_INPUT_CHARS} chars (got ${text.length})`);
-  }
-  // Wave-2c B4: table-aware. Tables are emitted whole; only prose between
-  // tables is paragraph/sentence/word-split.
-  const segments = splitOnTables(text);
-  const out: string[] = [];
-  for (const seg of segments) {
-    if (seg.kind === 'table') {
-      const t = seg.text.trim();
-      if (t.length > 10) out.push(t);
-      continue;
-    }
-    out.push(...chunkProse(seg.text, maxSize, overlap));
-  }
-  return out;
-}
-
-function chunkProse(text: string, maxSize: number, overlap: number): string[] {
-  const paragraphs = text.split(/\n{2,}/).map((p) => p.trim()).filter((p) => p.length > 0);
-  const result: string[] = [];
-
-  // Word-split helper: any chunk handed to pushWithOverlap that's still
-  // bigger than maxSize gets word-split here first. Previously the word-
-  // boundary fallback only ran on the trailing `current` after the sentence
-  // loop, so an intermediate sentence > maxSize was pushed verbatim and
-  // could blow past the embedding model's per-input token limit.
-  const splitToMaxSize = (chunk: string): string[] => {
-    if (chunk.length <= maxSize) return [chunk];
-    const words = chunk.split(/\s+/);
-    const subs: string[] = [];
-    let sub = '';
-    for (const word of words) {
-      if ((sub + ' ' + word).trim().length <= maxSize) {
-        sub = sub ? sub + ' ' + word : word;
-      } else {
-        if (sub.length > 0) subs.push(sub);
-        sub = word;
-      }
-    }
-    if (sub.length > 0) subs.push(sub);
-    return subs;
-  };
-
-  const pushWithOverlap = (chunk: string, prependPrevTail: boolean) => {
-    const t = chunk.trim();
-    if (t.length <= 10) return;
-    let prepend = prependPrevTail;
-    for (const part of splitToMaxSize(t)) {
-      if (part.length <= 10) continue;
-      if (prepend && result.length > 0) {
-        const prev = result[result.length - 1];
-        const tail = prev.length > overlap ? prev.slice(-overlap) : prev;
-        result.push(`${tail} ${part}`);
-      } else {
-        result.push(part);
-      }
-      prepend = true; // subsequent word-split pieces always carry the prior tail
-    }
-  };
-
-  for (const para of paragraphs) {
-    if (para.length <= maxSize) {
-      pushWithOverlap(para, true);
-      continue;
-    }
-    // Paragraph too long — split on sentence boundaries
-    const sentences = para.split(/(?<=[.!?])\s+/).filter((s) => s.length > 0);
-    let current = '';
-    let firstInPara = true;
-    for (const sentence of sentences) {
-      if ((current + ' ' + sentence).trim().length <= maxSize) {
-        current = current ? current + ' ' + sentence : sentence;
-      } else {
-        if (current.length > 10) {
-          // First sub-chunk of a long paragraph inherits the previous paragraph's
-          // tail; subsequent sub-chunks already include intra-paragraph overlap
-          // via the `current = overlapText + sentence` reassignment below.
-          pushWithOverlap(current.trim(), firstInPara);
-          firstInPara = false;
-        }
-        const overlapText = current.length > overlap ? current.slice(-overlap) : current;
-        current = overlapText + ' ' + sentence;
-      }
-    }
-    if (current.trim().length > 10) {
-      pushWithOverlap(current.trim(), firstInPara);
-    }
-  }
-
-  return result;
-}
 
 /**
  * Optional metadata applied at upsert time. Distinct from PATCH-only fields
@@ -199,24 +37,20 @@ export type UpsertWikiMetadata = {
 };
 
 /**
- * Upsert a wiki page: page row, chunk embeddings, citations.
+ * Upsert a wiki page: page row, chunk embeddings, tables, citations.
  *
  * Embeddings are computed BEFORE opening the transaction so the OpenAI
  * round-trip does not hold a Postgres connection open. The transaction
- * covers only the fast DB writes (upsert page, replace chunks, replace citations).
+ * covers only the fast DB writes.
  *
- * The pre-flight read of existing `content_text` lets us skip the chunk
- * delete-insert + embedding API call when the body hasn't changed. Title-only
- * edits, metadata-only writes, and idempotent retries all become near-free.
+ * The pre-flight read of existing `content_text` skips the chunk
+ * delete-insert + embedding API call when the body hasn't changed. Title-
+ * only edits, metadata-only writes, and idempotent retries become near-free.
  * Citations are always replaced — they can change independently of body text.
  *
- * Concurrency note: the pre-flight read is outside the transaction. If a
- * concurrent writer commits between our read and our transaction, we may
- * either re-embed unnecessarily (benign) or skip re-embed while writing the
- * same content back (also benign — both writers agree on content). This is
- * the same race tolerated by every prior version of this function.
- *
- * embedFn receives all chunks in one call so callers can batch the API request.
+ * Concurrency note: the pre-flight read is outside the transaction. A
+ * concurrent writer landing between read and transaction may cause a benign
+ * re-embed or a benign re-write of identical content.
  */
 export async function upsertWikiPage(
   slug: string,
@@ -237,11 +71,6 @@ export async function upsertWikiPage(
       span.setAttribute('wiki.content_text.length', contentText.length);
       span.setAttribute('wiki.citations.count', citations.length);
 
-      // Pre-flight: skip embedding work when content_text is unchanged.
-      // Concurrency note: the read is outside the transaction; a concurrent
-      // writer landing between read and transaction may cause a benign re-embed
-      // or a benign re-write of identical content. Same race as every prior
-      // version of this function.
       const [existing] = await db
         .select({ contentText: wikiPages.contentText })
         .from(wikiPages)
@@ -281,11 +110,8 @@ export async function upsertWikiPage(
         ...(metadata.needsReview !== undefined ? { needsReview: metadata.needsReview } : {}),
       };
 
-      // Wave-2c B2: extract markdown tables from the body. Only re-run on
-      // content change; the rows mirror page state, so a body-unchanged
-      // upsert leaves wiki_tables alone. Header embeddings are deferred to
-      // a future pass (we'd need to bundle table-header strings into the
-      // single embedFn call to avoid an extra OpenAI round-trip per table).
+      // Extract markdown tables from the body. Only re-run on content change;
+      // the rows mirror page state.
       const extractedTables = contentChanged ? extractMarkdownTables(contentText) : [];
 
       const pageId = await db.transaction(async (tx) => {
@@ -302,8 +128,6 @@ export async function upsertWikiPage(
               chunks.map((text, i) => ({ pageId: page.id, chunkIdx: i, text, embedding: embeddings[i] })),
             );
           }
-          // Tables track page content: replace whenever the body changes,
-          // including the empty-tables case (delete then no-insert).
           await tx.delete(wikiTables).where(eq(wikiTables.pageId, page.id));
           if (extractedTables.length > 0) {
             await tx.insert(wikiTables).values(extractedTables.map((t) => ({
@@ -335,19 +159,6 @@ export async function upsertWikiPage(
 export async function getWikiPage(slug: string) {
   const [page] = await db.select().from(wikiPages).where(eq(wikiPages.slug, slug));
   return page ?? null;
-}
-
-export async function getWikiPageCitations(pageId: string) {
-  return db
-    .select({
-      citationId: wikiCitations.citationId,
-      sourceType: wikiCitations.sourceType,
-      sourceId: wikiCitations.sourceId,
-      label: wikiCitations.label,
-      disputed: wikiCitations.disputed,
-    })
-    .from(wikiCitations)
-    .where(eq(wikiCitations.pageId, pageId));
 }
 
 // Cursor shape for listWikiPages pagination: encodes (updatedAt, id) so pages
@@ -391,7 +202,7 @@ export async function listWikiPages(limit = 50, cursor?: WikiPageCursor, filters
 
 /**
  * Distinct project tags across non-archived wiki pages, for filter chips in the
- * list page. Cheap because wiki_pages.project is indexed (migration 0013).
+ * list page. Cheap because wiki_pages.project is indexed.
  */
 export async function listWikiProjects(): Promise<string[]> {
   const rows = await db.execute<{ project: string }>(
@@ -426,31 +237,13 @@ export async function updateWikiMetadata(
 }
 
 /**
- * Mark a single citation as disputed (or undisputed). The citation row remains —
- * audit + reader trace are preserved; UI strikes it through.
- */
-export async function setCitationDisputed(
-  pageId: string,
-  citationId: string,
-  disputed: boolean,
-): Promise<{ found: boolean }> {
-  const rows = await db
-    .update(wikiCitations)
-    .set({ disputed })
-    .where(and(eq(wikiCitations.pageId, pageId), eq(wikiCitations.citationId, citationId)))
-    .returning({ id: wikiCitations.id });
-  return { found: rows.length > 0 };
-}
-
-/**
  * Reproduce a wiki page as of a given timestamp.
  *
  * The snapshot trigger fires on UPDATE and writes the PRE-edit content into
- * wiki_revisions stamped with the moment that version became current. Querying
- * revisions first would return the second-to-last version for an `asof` after
- * the most recent edit. Check the current row first: if its `updated_at <=
- * asof`, return it. Otherwise look up the latest revision that does. Pages
- * that didn't exist at `asof` return null.
+ * wiki_revisions stamped with the moment that version became current. Check
+ * the current row first: if its `updated_at <= asof`, return it. Otherwise
+ * look up the latest revision that does. Pages that didn't exist at `asof`
+ * return null.
  */
 export async function pointInTimeWiki(slug: string, asof: Date) {
   const asofIso = asof.toISOString();
@@ -529,113 +322,4 @@ export async function countUnreadSubscriptions(userId: string): Promise<number> 
     WHERE s.user_id = ${userId} AND p.version > s.last_seen_version
   `);
   return rows[0]?.count ?? 0;
-}
-
-export async function searchWikiByFTS(query: string, limit = 20, includeArchived = false) {
-  const predicates: SQL[] = [
-    sql`to_tsvector('english', coalesce(content_text, '')) @@ plainto_tsquery('english', ${query})`,
-  ];
-  if (!includeArchived) predicates.push(sql`archived = false`);
-  return db
-    .select({
-      id: wikiPages.id,
-      slug: wikiPages.slug,
-      title: wikiPages.title,
-      contentText: wikiPages.contentText,
-      maturity: wikiPages.maturity,
-    })
-    .from(wikiPages)
-    .where(sql.join(predicates, sql` AND `))
-    .limit(Math.min(limit, 200));
-}
-
-export async function listWikiRevisions(pageId: string, limit = 10) {
-  const rows = await db.execute<{ version: number; updated_at: string; updated_by: string | null }>(
-    sql`SELECT version, updated_at, updated_by FROM wiki_revisions
-        WHERE page_id = ${pageId}::uuid
-        ORDER BY version DESC
-        LIMIT ${Math.min(limit, 100)}`,
-  );
-  return rows.map((r) => ({ version: r.version, updatedAt: r.updated_at, updatedBy: r.updated_by }));
-}
-
-export type SemanticSearchOptions = {
-  /** Maximum cosine distance to accept (0 = identical, 2 = opposite). Default 0.5. */
-  maxDistance?: number;
-  /** Maximum chunks returned from any single page. Default 2. */
-  maxChunksPerPage?: number;
-  /** Include archived pages. Default false. */
-  includeArchived?: boolean;
-};
-
-export type SemanticSearchResult = {
-  pageId: string;
-  slug: string;
-  title: string;
-  maturity: string;
-  text: string;
-  distance: number;
-};
-
-/**
- * Vector-similarity search over wiki_chunks. JOINs wiki_pages so the caller
- * gets renderable identifiers (slug, title, maturity) without a second round-trip.
- *
- * Filters:
- * - archived pages excluded by default (deprecated content stays out of results)
- * - distance threshold: chunks beyond maxDistance are dropped (irrelevant matches
- *   would otherwise surface as "top results" for queries the wiki doesn't cover)
- * - per-page cap: at most maxChunksPerPage chunks from a single page (a long
- *   page can otherwise fill all slots, starving the agent of complementary sources)
- *
- * Over-fetches by 4x to leave headroom for the per-page cap.
- */
-export async function semanticSearchWiki(
-  embedding: number[],
-  limit = 5,
-  opts: SemanticSearchOptions = {},
-): Promise<SemanticSearchResult[]> {
-  if (embedding.length !== EMBED_DIM) {
-    throw new Error(`embedding must have ${EMBED_DIM} dimensions, got ${embedding.length}`);
-  }
-  if (embedding.some((v) => !Number.isFinite(v))) {
-    throw new Error('embedding contains non-finite values');
-  }
-  const safeLimit = Math.min(Math.max(1, limit), 50);
-  const maxDistance = opts.maxDistance ?? 0.5;
-  const maxChunksPerPage = Math.max(1, opts.maxChunksPerPage ?? 2);
-  const includeArchived = opts.includeArchived ?? false;
-
-  const vecStr = `[${embedding.join(',')}]`;
-  const distExpr = sql<number>`wiki_chunks.embedding <=> ${sql.param(vecStr)}::vector(${sql.raw(String(EMBED_DIM))})`;
-
-  const predicates: SQL[] = [sql`wiki_chunks.embedding IS NOT NULL`];
-  if (!includeArchived) predicates.push(sql`wiki_pages.archived = false`);
-
-  const rows = await db
-    .select({
-      pageId: wikiChunks.pageId,
-      slug: wikiPages.slug,
-      title: wikiPages.title,
-      maturity: wikiPages.maturity,
-      text: wikiChunks.text,
-      distance: distExpr,
-    })
-    .from(wikiChunks)
-    .innerJoin(wikiPages, eq(wikiPages.id, wikiChunks.pageId))
-    .where(sql.join(predicates, sql` AND `))
-    .orderBy(distExpr)
-    .limit(safeLimit * 4);
-
-  const perPage = new Map<string, number>();
-  const out: SemanticSearchResult[] = [];
-  for (const r of rows) {
-    if (r.distance > maxDistance) continue;
-    const seen = perPage.get(r.pageId) ?? 0;
-    if (seen >= maxChunksPerPage) continue;
-    perPage.set(r.pageId, seen + 1);
-    out.push(r);
-    if (out.length >= safeLimit) break;
-  }
-  return out;
 }

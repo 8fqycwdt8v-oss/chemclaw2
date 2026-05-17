@@ -1,8 +1,11 @@
 import { z } from 'zod';
 import {
-  db, getWikiPage, wikiCitations, wikiContradictions, wikiChunks, setCitationDisputed,
+  getWikiPage,
+  setCitationDisputed,
+  getCitationPair,
+  findChunksContainingCitationMarker,
+  recordContradiction,
 } from '@chemclaw2/db';
-import { eq, and, inArray, sql } from 'drizzle-orm';
 import type { ToolDef } from './tool-def';
 
 const readTwoSchema = {
@@ -36,35 +39,6 @@ const recordSchema = {
  * Both operations are wrapped here as separate tools.
  */
 
-const MAX_CONTEXT_CHARS = 800;
-
-/**
- * Escape LIKE-pattern metacharacters (`%`, `_`, `\`) so a literal-text needle
- * matches only itself. The wiki_citations.citation_id column is free-text from
- * past upserts, so we can't trust it to be clean.
- */
-function escapeLikePattern(s: string): string {
-  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
-}
-
-async function findChunksContainingMarker(pageId: string, marker: string) {
-  // [marker] is used in the body text — search wiki_chunks.text for it.
-  const needle = `%[${escapeLikePattern(marker)}]%`;
-  const rows = await db
-    .select({ chunkIdx: wikiChunks.chunkIdx, text: wikiChunks.text })
-    .from(wikiChunks)
-    .where(and(
-      eq(wikiChunks.pageId, pageId),
-      sql`${wikiChunks.text} LIKE ${needle} ESCAPE '\\'`,
-    ))
-    .orderBy(wikiChunks.chunkIdx)
-    .limit(3);
-  return rows.map((r) => ({
-    chunkIdx: r.chunkIdx,
-    text: r.text.length > MAX_CONTEXT_CHARS ? r.text.slice(0, MAX_CONTEXT_CHARS) + '…' : r.text,
-  }));
-}
-
 export function createContradictionTools(userId: string): {
   readTwo: ToolDef<typeof readTwoSchema>;
   record: ToolDef<typeof recordSchema>;
@@ -81,20 +55,14 @@ export function createContradictionTools(userId: string): {
     async execute(input) {
       const page = await getWikiPage(input.slug);
       if (!page) return { error: 'page not found' };
-      const rows = await db
-        .select()
-        .from(wikiCitations)
-        .where(and(
-          eq(wikiCitations.pageId, page.id),
-          inArray(wikiCitations.citationId, [input.citation_a, input.citation_b]),
-        ));
+      const rows = await getCitationPair(page.id, input.citation_a, input.citation_b);
       const a = rows.find((r) => r.citationId === input.citation_a);
       const b = rows.find((r) => r.citationId === input.citation_b);
       if (!a || !b) return { error: 'one or both citations not found on this page' };
 
       const [contextA, contextB] = await Promise.all([
-        findChunksContainingMarker(page.id, a.citationId),
-        findChunksContainingMarker(page.id, b.citationId),
+        findChunksContainingCitationMarker(page.id, a.citationId),
+        findChunksContainingCitationMarker(page.id, b.citationId),
       ]);
 
       return {
@@ -133,17 +101,14 @@ export function createContradictionTools(userId: string): {
       }
       const page = await getWikiPage(input.slug);
       if (!page) return { error: 'page not found' };
-      const [row] = await db
-        .insert(wikiContradictions)
-        .values({
-          pageId: page.id,
-          citationA: input.citation_a,
-          citationB: input.citation_b,
-          proposedWinner: input.winner,
-          reason: input.reason,
-          resolvedBy: userId,
-        })
-        .returning({ id: wikiContradictions.id });
+      const { id } = await recordContradiction({
+        pageId: page.id,
+        citationA: input.citation_a,
+        citationB: input.citation_b,
+        proposedWinner: input.winner,
+        reason: input.reason,
+        resolvedBy: userId,
+      });
 
       let disputedMarked: string | null = null;
       if (input.winner === 'a' || input.winner === 'b') {
@@ -151,7 +116,7 @@ export function createContradictionTools(userId: string): {
         const { found } = await setCitationDisputed(page.id, loser, true);
         if (found) disputedMarked = loser;
       }
-      return { id: row.id, winner: input.winner, disputed_citation: disputedMarked };
+      return { id, winner: input.winner, disputed_citation: disputedMarked };
     },
   };
 

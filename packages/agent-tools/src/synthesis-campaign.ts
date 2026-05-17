@@ -6,8 +6,7 @@ import {
   getCampaignWithStepsForUser,
   confirmCampaignPlanForUser,
   replaceSessionTodos,
-  db,
-  sql,
+  startPendingStepsForUser,
 } from '@chemclaw2/db';
 import { logger } from '@chemclaw2/observability';
 import { UUID_RE } from './uuid';
@@ -67,7 +66,6 @@ export function createSynthesisCampaignTools(userId: string): {
       if (!UUID_RE.test(input.campaign_id)) {
         return { error: 'campaign_id must be a UUID' };
       }
-      // Validate step count before writing to DB — avoids leaving campaign stuck in awaiting_input
       const MAX_STEPS = 20;
       const allSteps = Array.isArray(input.plan.steps) ? input.plan.steps as Array<Record<string, unknown>> : [];
       if (allSteps.length > MAX_STEPS) {
@@ -109,30 +107,15 @@ export function createSynthesisCampaignTools(userId: string): {
       }
       const { found } = await updateCampaignStatusForUser(input.campaign_id, userId, 'running');
       if (!found) return { error: 'Campaign not found, not owned by you, or already terminal' };
-      // Re-check ownership in the raw SQL too — defence-in-depth so a race
-      // window between the status update and these UPDATEs can't be used to
-      // mutate steps on someone else's campaign.
-      await db.execute(
-        sql`UPDATE campaign_steps SET next_retry_at = NOW()
-            WHERE campaign_id = ${input.campaign_id}::uuid
-              AND status = 'pending'
-              AND campaign_id IN (SELECT id FROM synthesis_campaigns WHERE created_by = ${userId})`,
-      );
-      if (input.approval === 'per_step') {
-        await db.execute(
-          sql`UPDATE campaign_steps SET requires_approval = true
-              WHERE campaign_id = ${input.campaign_id}::uuid
-                AND step_idx > 0
-                AND campaign_id IN (SELECT id FROM synthesis_campaigns WHERE created_by = ${userId})`,
-        );
-      }
+      // Owner-scoped step updates run via the db layer rather than inline SQL
+      // so the campaign queries module owns the predicate.
+      await startPendingStepsForUser(input.campaign_id, userId, {
+        perStepApproval: input.approval === 'per_step',
+      });
 
-      // BACKLOG #45: seed agent_todos so the campaign's step list surfaces in
-      // the chat UI todo panel alongside deep-research checklists. One todo
-      // per step, ordered by stepIdx; text mirrors the campaign_step row
-      // (reactionSmiles, then conditions, then a placeholder for empty steps).
-      // Best-effort: a persistence failure here must not block the kickoff
-      // itself, mirroring deep-research's handling.
+      // Seed agent_todos so the campaign's step list surfaces in the chat UI
+      // todo panel alongside deep-research checklists. Best-effort: a
+      // persistence failure here must not block the kickoff itself.
       const owned = await getCampaignWithStepsForUser(input.campaign_id, userId).catch((err) => {
         logger.error('get_campaign_with_steps_failed', { campaign_id: input.campaign_id, user_id: userId }, err);
         return null;

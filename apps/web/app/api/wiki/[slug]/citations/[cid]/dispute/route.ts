@@ -1,46 +1,24 @@
+import { z } from 'zod';
 import { NextResponse } from 'next/server';
 import { getWikiPage, setCitationDisputed } from '@chemclaw2/db';
-import { requireUserWithRateLimit } from '@/lib/api-gate';
+import { withRouteParams, errorResponse } from '@/lib/api-gate';
 import { isValidSlug } from '@/lib/validation';
-import { withApiContext } from '@/lib/api-context';
-import { logger } from '@chemclaw2/observability';
 
-export async function POST(
-  req: Request,
-  { params }: { params: Promise<{ slug: string; cid: string }> },
-) {
-  return withApiContext(async () => {
-    const gate = await requireUserWithRateLimit('wiki', 20, 60_000);
-    if (gate instanceof NextResponse) return gate;
+const DisputeBody = z.object({
+  disputed: z.boolean({ message: 'disputed (boolean) is required' }),
+});
 
-    const { slug, cid } = await params;
-    if (!isValidSlug(slug) || cid.length === 0 || cid.length > 200) {
-      logger.info('validation_rejected', { route: 'citation_dispute', field: 'slug_or_cid', reason: 'shape' });
-      return NextResponse.json({ error: 'Invalid slug or citation id' }, { status: 400 });
+export const POST = withRouteParams<{ slug: string; cid: string }, typeof DisputeBody>(
+  { rateLimit: { key: 'wiki', max: 20, windowMs: 60_000 }, body: DisputeBody },
+  async ({ params, body }) => {
+    if (!isValidSlug(params.slug) || params.cid.length === 0 || params.cid.length > 200) {
+      return errorResponse('Invalid slug or citation id', 400);
     }
-    const page = await getWikiPage(slug).catch((err) => {
-      logger.error('get_wiki_page_failed', { slug, op: 'citation_dispute' }, err);
-      throw err;
-    });
-    if (!page) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    const page = await getWikiPage(params.slug);
+    if (!page) return errorResponse('Not found', 404);
 
-    let body: { disputed?: unknown };
-    try {
-      body = (await req.json()) as typeof body;
-    } catch (err) {
-      logger.warn('json_parse_failed', { route: 'citation_dispute' }, err);
-      return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
-    }
-    if (typeof body.disputed !== 'boolean') {
-      logger.info('validation_rejected', { route: 'citation_dispute', field: 'disputed', reason: 'type' });
-      return NextResponse.json({ error: 'disputed (boolean) is required' }, { status: 400 });
-    }
-
-    const { found } = await setCitationDisputed(page.id, cid, body.disputed).catch((err) => {
-      logger.error('set_citation_disputed_failed', { slug, page_id: page.id, citation_id: cid, disputed: body.disputed }, err);
-      throw err;
-    });
-    if (!found) return NextResponse.json({ error: 'Citation not found' }, { status: 404 });
+    const { found } = await setCitationDisputed(page.id, params.cid, body.disputed);
+    if (!found) return errorResponse('Citation not found', 404);
     return NextResponse.json({ disputed: body.disputed });
-  });
-}
+  },
+);
