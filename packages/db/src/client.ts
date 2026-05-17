@@ -21,7 +21,7 @@ function getDb() {
       // Surface socket / pool errors so OTel + Langfuse see them instead of
       // silently dropping queries on transient network issues.
       onclose: (connId) => {
-        trace.getActiveSpan()?.addEvent('db_connection_closed', { conn_id: String(connId) });
+        trace.getActiveSpan()?.addEvent('db.connection_closed', { conn_id: String(connId) });
       },
     });
     _db = drizzle(_sql, { schema });

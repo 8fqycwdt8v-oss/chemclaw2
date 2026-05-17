@@ -1,4 +1,4 @@
-import { UUID_RE } from '@/lib/validation';
+import { UUID_RE, isValidTiptapDoc } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 import {
   upsertWikiPage,
@@ -60,15 +60,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     );
   }
 
-  // 2. Re-validate citations on the staged content. Defence-in-depth.
+  // 2. Re-validate citations + Tiptap shape on the staged content.
+  // Defence-in-depth: today only propose_wiki_edit writes the row, but the
+  // apply route is the canonical trust boundary for what lands in
+  // wiki_pages.content.
   const citations = proposal.citations as CitationInput[];
   const v = validateCitations(proposal.contentText, citations);
   if (!v.ok) {
-    // Bad citations on a row that was already claimed. Roll back so the
-    // proposal is visible to another admin (or the proposer) to fix.
     await rollbackApplyClaim(id);
     return NextResponse.json(
       { error: `Citation validation failed: ${v.reason}` },
+      { status: 400 },
+    );
+  }
+  if (!isValidTiptapDoc(proposal.content)) {
+    await rollbackApplyClaim(id);
+    return NextResponse.json(
+      { error: 'Proposal content is not a valid Tiptap doc' },
       { status: 400 },
     );
   }
@@ -80,7 +88,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     pageId = await upsertWikiPage(
       proposal.slug,
       proposal.title,
-      proposal.content as Record<string, unknown>,
+      proposal.content,
       proposal.contentText,
       userId,
       citations,

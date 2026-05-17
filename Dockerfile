@@ -41,10 +41,12 @@ COPY --from=builder --chown=nextjs:nodejs /app/workers/fp-worker ./workers/fp-wo
 COPY --from=builder --chown=nextjs:nodejs /app/packages ./packages
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
 
-# Skill packs (filesystem markdown) — loaded by apps/web/lib/skills.ts at agent
-# boot. Without this, the seed skills are missing in production and the agent
-# prompt loses its skills section.
-COPY --from=builder --chown=nextjs:nodejs /app/skills ./skills
+# Skill packs (SKILL.md with YAML frontmatter) — discovered by the Agent SDK
+# under .claude/skills/<name>/SKILL.md. Without this, the seed skills are
+# missing in production and the agent has no skill listing.
+# Scoped to .claude/skills/ so dev-only contents under .claude/ (agents,
+# commands, settings.json) don't accidentally get baked into prod.
+COPY --from=builder --chown=nextjs:nodejs /app/.claude/skills ./.claude/skills
 
 # Python venv + MCP servers (spawned per request by /api/fingerprint and by the worker).
 # chown the venv to nextjs:nodejs so the unprivileged USER below can exec python and
@@ -59,9 +61,11 @@ USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
-# Followup #15: pin SKILLS_DIR so loadSkillsBlock() doesn't depend on what
-# cwd Next launches server.js from. The COPY above lands files at /app/skills.
-ENV SKILLS_DIR=/app/skills
+# Pin the project root so the Agent SDK finds .claude/skills/ under it
+# regardless of what cwd Next launches server.js from, and so the POST
+# /api/skills endpoint writes new SKILL.md files to the same location.
+ENV PROJECT_ROOT=/app
+ENV SKILLS_DIR=/app/.claude/skills
 
 # Process selected by Fly via [processes] in fly.toml.
 # Default to the web app for local docker run.

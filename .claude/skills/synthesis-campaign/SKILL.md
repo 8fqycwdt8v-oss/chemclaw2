@@ -1,3 +1,8 @@
+---
+name: synthesis-campaign
+description: Plan and execute a multi-step synthesis campaign for a target molecule. Use when the user asks to design or run a multi-step synthesis route, prepare a campaign for a target, or kick off an experimental sequence.
+---
+
 # synthesis-campaign
 
 Plan and execute a multi-step synthesis campaign for a target molecule.

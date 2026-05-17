@@ -1,5 +1,5 @@
+import path from 'node:path';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
-import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@anthropic-ai/claude-agent-sdk';
 import { scopedSessionStore } from '@chemclaw2/db/session-store';
 import { checkToolInput, checkToolOutput, checkUserPrompt } from '@chemclaw2/agent-tools';
 import {
@@ -9,9 +9,14 @@ import {
   type BudgetWithSpend,
 } from '@chemclaw2/db';
 import { buildInProcessMcpServer, subagentToolNames } from './sdk-tools';
-import { loadSkillsBlock } from './skills';
 import { DEEP_RESEARCH_PROMPT, CONTRADICTION_RESOLVER_PROMPT } from './subagent-prompts';
 import { webEnv } from './env';
+
+// Repo root containing .claude/skills/. Production cwd is /app (Dockerfile
+// WORKDIR); dev cwd is apps/web/, hence the two-level fallback. The SDK
+// auto-discovers SKILL.md files under <cwd>/.claude/skills/ when
+// settingSources includes 'project'.
+const PROJECT_ROOT = process.env.PROJECT_ROOT ?? path.resolve(process.cwd(), '..', '..');
 
 // v2.1-D: tools that count against the experiments_cap. Everything else only
 // counts against tool_calls_cap.
@@ -77,18 +82,10 @@ export function buildQueryOptions(
   userId: string,
   extras: QueryOptionsExtras = {},
 ): Options {
-  // Skills are loaded from disk per request so newly-saved skills are visible
-  // without a process restart (followup #10).
-  //
-  // Wave-1 A2: split systemPrompt across SYSTEM_PROMPT_DYNAMIC_BOUNDARY so the
-  // static base prefix is eligible for cross-session prompt caching on models
-  // that support it (Sonnet 4.6+). Skills change per user / per disk-edit, so
-  // they live AFTER the boundary. When no skills are loaded, pass the static
-  // string directly — no boundary needed and the whole prompt caches.
-  const skillsBlock = loadSkillsBlock();
-  const systemPrompt: Options['systemPrompt'] = skillsBlock
-    ? [BASE_SYSTEM_PROMPT, SYSTEM_PROMPT_DYNAMIC_BOUNDARY, skillsBlock]
-    : BASE_SYSTEM_PROMPT;
+  // Skills now load via the Agent SDK's native auto-discovery from
+  // .claude/skills/<name>/SKILL.md (see settingSources + skills + cwd below).
+  // The whole system prompt is static and cacheable end-to-end.
+  const systemPrompt: Options['systemPrompt'] = BASE_SYSTEM_PROMPT;
   // v2.1-D: budgets are keyed by the same projectKey the session store uses, so
   // per-user spend rolls up under the same identity as session ownership.
   const projectKey = `chemclaw2:${userId}`;
@@ -119,6 +116,17 @@ export function buildQueryOptions(
     resume: sessionId,
     model: DEFAULT_MODEL,
     maxTurns: DEFAULT_MAX_TURNS,
+    // Anchor cwd at the project root so the SDK discovers .claude/skills/
+    // there regardless of where Node was launched from (apps/web in dev,
+    // /app in the production container).
+    cwd: PROJECT_ROOT,
+    // Load project-scoped customizations (.claude/skills/, .claude/settings.json
+    // when we add one). 'project' is the source that backs SKILL.md discovery.
+    settingSources: ['project'],
+    // Expose every discovered SKILL.md to the model. Description matching +
+    // progressive disclosure means only the listing (not full bodies) sits
+    // in the per-turn context.
+    skills: 'all',
     // Wave-1 A1: native plan mode. Replaces the prompt-engineered
     // `[PLAN MODE]` prefix that ChatClient used to send. When true the SDK
     // blocks tool execution entirely; the agent must present a plan and the

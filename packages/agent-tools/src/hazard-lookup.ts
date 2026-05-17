@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { safeFetch } from './safe-fetch';
+import { toolError } from './tool-error';
 import type { ToolDef } from './tool-def';
 
 const ALLOWED = ['pubchem.ncbi.nlm.nih.gov'];
@@ -52,7 +53,7 @@ export const hazardLookupTool: ToolDef<typeof schema> = {
       }
       return { cid, ghs_raw: JSON.parse(raw) };
     } catch (err) {
-      return { error: err instanceof Error ? err.message : 'lookup_hazard failed' };
+      return toolError('lookup_hazard', err);
     }
   },
 };

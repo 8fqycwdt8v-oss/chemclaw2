@@ -10,7 +10,7 @@ type RevisionRef = { version: number; updatedAt: string; updatedBy: string };
 type Props = {
   slug: string;
   title: string;
-  content: Record<string, unknown>;
+  content: unknown;
   contentText: string;
   version: number;
   updatedAt: string;
