@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { safeFetch } from './safe-fetch';
 import { recordExternalFactSafe } from '@chemclaw2/db';
+import { toolError } from './tool-error';
 import type { ToolDef } from './tool-def';
 
 export const ALLOWED_DOMAINS = [
@@ -39,7 +40,7 @@ export const docFetchTool: ToolDef<typeof docFetchSchema> = {
         headers: { 'User-Agent': 'chemclaw2/1.0 (research assistant)' },
       });
     } catch (err) {
-      return { error: err instanceof Error ? err.message : 'Fetch failed' };
+      return toolError('fetch_document', err);
     }
     if (!res.ok) return { error: `HTTP ${res.status}` };
     const contentType = res.headers.get('content-type') ?? '';

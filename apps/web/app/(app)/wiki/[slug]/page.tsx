@@ -25,7 +25,7 @@ export default async function WikiSlugPage({ params }: Props) {
     <WikiPageView
       slug={page.slug}
       title={page.title}
-      content={page.content as Record<string, unknown>}
+      content={page.content}
       contentText={page.contentText}
       version={page.version}
       updatedAt={page.updatedAt.toISOString()}

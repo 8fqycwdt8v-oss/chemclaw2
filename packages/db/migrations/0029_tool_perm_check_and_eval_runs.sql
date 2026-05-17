@@ -10,6 +10,9 @@
 --                     literal 'org' (free-form until a projects table exists).
 --   scope='org'     → scope_id is the literal 'org' (the resolver hardcodes
 --                     this lookup; any other value would silently never match).
+-- Idempotent because this migration was missing from the drizzle journal
+-- until 2026-05; some environments may have hand-applied it.
+ALTER TABLE tool_permissions DROP CONSTRAINT IF EXISTS tool_permissions_scope_shape_chk;
 ALTER TABLE tool_permissions
   ADD CONSTRAINT tool_permissions_scope_shape_chk
   CHECK (
@@ -43,6 +46,7 @@ CREATE INDEX IF NOT EXISTS eval_runs_started_at_idx
   ON eval_runs (started_at DESC);
 
 ALTER TABLE eval_runs ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS eval_runs_all ON eval_runs;
 -- BACKLOG #49: ships permissive per v1 single-tenant convention; tighten
 -- once tenants > 1 alongside the other stub policies listed there.
 CREATE POLICY eval_runs_all ON eval_runs FOR ALL USING (true) WITH CHECK (true);
