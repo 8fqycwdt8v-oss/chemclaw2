@@ -1,7 +1,11 @@
-"""Campaign queries — Python port of packages/db/src/queries/campaigns.ts."""
+"""Campaign queries — Python port of packages/db/src/queries/campaigns.ts.
+
+Callers are responsible for transaction management. These functions do NOT
+call db.commit() — wrap multi-step operations in `async with db.begin():`.
+"""
 from __future__ import annotations
 
-import uuid
+import json
 from typing import Any
 
 from sqlalchemy import text
@@ -31,26 +35,35 @@ async def create_campaign(
 async def update_campaign_status(
     db: AsyncSession,
     campaign_id: str,
+    user_id: str,
     status: str,
     plan: dict[str, Any] | None = None,
 ) -> None:
+    """Update campaign status. Only the campaign owner can update.
+
+    Does NOT commit — caller manages the transaction.
+    Source-state predicate excludes terminal statuses to prevent
+    double-transitions.
+    """
     plan_clause = ", plan = :plan::jsonb" if plan is not None else ""
     params: dict[str, Any] = {
-        "id": campaign_id, "status": status,
+        "id": campaign_id,
+        "user_id": user_id,
+        "status": status,
         "statuses": list(NON_TERMINAL_STATUSES),
     }
     if plan is not None:
-        import json
         params["plan"] = json.dumps(plan)
     await db.execute(
         text(f"""
             UPDATE synthesis_campaigns
             SET status = :status, updated_at = now(){plan_clause}
-            WHERE id = :id::uuid AND status = ANY(:statuses)
+            WHERE id = :id::uuid
+              AND created_by = :user_id
+              AND status = ANY(:statuses)
         """),
         params,
     )
-    await db.commit()
 
 
 async def get_campaign_by_session(
@@ -82,6 +95,7 @@ async def add_campaign_step(
     reaction_smiles: str | None = None,
     conditions: str | None = None,
 ) -> str:
+    """Insert a campaign step. Does NOT commit — caller manages the transaction."""
     result = await db.execute(
         text("""
             INSERT INTO campaign_steps (campaign_id, step_idx, reaction_smiles, conditions)
@@ -98,7 +112,6 @@ async def add_campaign_step(
             "conditions": conditions,
         },
     )
-    await db.commit()
     return result.scalar_one()
 
 

@@ -129,13 +129,13 @@ async def run_agent_streaming(
                 for block in message.content:
                     if hasattr(block, 'text'):
                         yield f"data: {json.dumps({'type': 'text', 'text': block.text})}\n\n"
-                    elif hasattr(block, 'type') and block.get('type') == 'tool_use':
-                        yield f"data: {json.dumps({'type': 'tool_use', 'name': block.get('name', '')})}\n\n"
+                    elif getattr(block, 'type', None) == 'tool_use':
+                        yield f"data: {json.dumps({'type': 'tool_use', 'name': getattr(block, 'name', '')})}\n\n"
             elif isinstance(message, UserMessage):
                 # Tool results — surface to client so UI can show tool activity
                 pass
-    except Exception as e:
+    except Exception:
         logger.exception("agent_stream_error session=%s", session_id)
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'message': 'An internal error occurred'})}\n\n"
     finally:
         yield "data: [DONE]\n\n"

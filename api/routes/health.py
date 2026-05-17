@@ -1,9 +1,12 @@
+import logging
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from api.db.connection import get_db
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -23,10 +26,10 @@ async def health(db: AsyncSession = Depends(get_db)):
         pending_reactions = row.pending_reactions
         db_ok = True
     except Exception:
-        pass
+        logger.warning("health_db_check_failed", exc_info=True)
 
     return {
-        "ok": True,
+        "ok": db_ok,
         "db": db_ok,
         "fingerprint_backlog": {
             "compounds": pending_compounds,
