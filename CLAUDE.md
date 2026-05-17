@@ -42,6 +42,7 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 8. **Before adding a new package, check whether an existing dep re-exports the feature** — `verifyWebhook` lives at `@clerk/nextjs/webhooks`, `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` ships with `@anthropic-ai/claude-agent-sdk`, etc.
 9. **Every new `app/api/**/route.ts` handler ships with a vitest covering auth-fail, validation-fail, and happy paths;** webhook routes additionally need a signature-fail test.
 10. **Module-load env reads (`const X = webEnv().Y` at file top) may only touch fields with defaults in the Zod schema;** anything required goes inside a handler/factory so a missing var fails at request time, not build time.
+11. **Gate API routes with `requireUserWithRateLimit(...)` from `apps/web/lib/api-gate.ts`** — never re-inline `auth()` + `rateLimit()` + the 401/429 NextResponse boilerplate in `app/api/**/route.ts`.
 
 ## Stack
 
