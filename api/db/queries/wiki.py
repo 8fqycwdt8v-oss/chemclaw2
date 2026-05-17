@@ -119,14 +119,19 @@ async def list_wiki_projects(db: AsyncSession) -> list[str]:
     return [r.project for r in result]
 
 
-async def get_wiki_page(db: AsyncSession, slug: str) -> dict[str, Any] | None:
+async def get_wiki_page(
+    db: AsyncSession,
+    slug: str,
+    include_archived: bool = False,
+) -> dict[str, Any] | None:
+    archived_clause = "" if include_archived else "AND archived = false"
     result = await db.execute(
-        text("""
+        text(f"""
             SELECT id::text, slug, title, content, content_text, maturity, project,
                    created_by, updated_by, created_at, updated_at, version,
                    needs_review, archived, valid_from, valid_to
             FROM wiki_pages
-            WHERE slug = :slug
+            WHERE slug = :slug {archived_clause}
         """),
         {"slug": slug},
     )
@@ -269,72 +274,75 @@ async def upsert_wiki_page(
         meta_vals += ", :needs_review"
         meta_params["needs_review"] = needs_review
 
-    result = await db.execute(
-        text(f"""
-            INSERT INTO wiki_pages (slug, title, content, content_text, created_by, updated_by{meta_cols})
-            VALUES (:slug, :title, :content::jsonb, :content_text, :created_by, :updated_by{meta_vals})
-            ON CONFLICT (slug) DO UPDATE SET
-                title        = EXCLUDED.title,
-                content      = EXCLUDED.content,
-                content_text = EXCLUDED.content_text,
-                updated_by   = EXCLUDED.updated_by,
-                updated_at   = now(),
-                version      = wiki_pages.version + 1
-                {", project = EXCLUDED.project" if project is not None else ""}
-                {", needs_review = EXCLUDED.needs_review" if needs_review is not None else ""}
-            RETURNING id::text
-        """),
-        {
-            "slug": slug, "title": title,
-            "content": content if isinstance(content, str) else json.dumps(content),
-            "content_text": content_text,
-            "created_by": created_by, "updated_by": created_by,
-            **meta_params,
-        },
-    )
-    page_id = result.scalar_one()
-
-    if content_changed:
-        await db.execute(
-            text("DELETE FROM wiki_chunks WHERE page_id = :pid::uuid"),
-            {"pid": page_id},
-        )
-        if chunks:
-            # Batch insert all chunks in one statement instead of N round-trips.
-            rows = ",".join(
-                f"(:pid::uuid, {i}, :text_{i}, :emb_{i}::vector)"
-                for i in range(len(chunks))
-            )
-            batch_params: dict[str, Any] = {"pid": page_id}
-            for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
-                batch_params[f"text_{i}"] = chunk
-                batch_params[f"emb_{i}"] = "[" + ",".join(map(str, emb)) + "]"
-            await db.execute(
-                text(f"INSERT INTO wiki_chunks (page_id, chunk_idx, text, embedding) VALUES {rows}"),
-                batch_params,
-            )
-
-    # Always replace citations
-    await db.execute(
-        text("DELETE FROM wiki_citations WHERE page_id = :pid::uuid"),
-        {"pid": page_id},
-    )
-    for c in citations:
-        await db.execute(
-            text("""
-                INSERT INTO wiki_citations (page_id, citation_id, source_type, source_id, label)
-                VALUES (:page_id::uuid, :citation_id, :source_type, :source_id, :label)
+    # The pre-flight SELECT and embedding call happen outside the transaction so
+    # we don't hold an open transaction during the (potentially slow) OpenAI call.
+    # The write phase is wrapped in a single atomic begin() block below.
+    async with db.begin():
+        result = await db.execute(
+            text(f"""
+                INSERT INTO wiki_pages (slug, title, content, content_text, created_by, updated_by{meta_cols})
+                VALUES (:slug, :title, :content::jsonb, :content_text, :created_by, :updated_by{meta_vals})
+                ON CONFLICT (slug) DO UPDATE SET
+                    title        = EXCLUDED.title,
+                    content      = EXCLUDED.content,
+                    content_text = EXCLUDED.content_text,
+                    updated_by   = EXCLUDED.updated_by,
+                    updated_at   = now(),
+                    version      = wiki_pages.version + 1
+                    {", project = EXCLUDED.project" if project is not None else ""}
+                    {", needs_review = EXCLUDED.needs_review" if needs_review is not None else ""}
+                RETURNING id::text
             """),
             {
-                "page_id": page_id,
-                "citation_id": c["citationId"],
-                "source_type": c["sourceType"],
-                "source_id": c.get("sourceId"),
-                "label": c["label"],
+                "slug": slug, "title": title,
+                "content": content if isinstance(content, str) else json.dumps(content),
+                "content_text": content_text,
+                "created_by": created_by, "updated_by": created_by,
+                **meta_params,
             },
         )
+        page_id = result.scalar_one()
 
-    await db.commit()
+        if content_changed:
+            await db.execute(
+                text("DELETE FROM wiki_chunks WHERE page_id = :pid::uuid"),
+                {"pid": page_id},
+            )
+            if chunks:
+                # Batch insert all chunks in one statement instead of N round-trips.
+                rows = ",".join(
+                    f"(:pid::uuid, {i}, :text_{i}, :emb_{i}::vector)"
+                    for i in range(len(chunks))
+                )
+                batch_params: dict[str, Any] = {"pid": page_id}
+                for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
+                    batch_params[f"text_{i}"] = chunk
+                    batch_params[f"emb_{i}"] = "[" + ",".join(map(str, emb)) + "]"
+                await db.execute(
+                    text(f"INSERT INTO wiki_chunks (page_id, chunk_idx, text, embedding) VALUES {rows}"),
+                    batch_params,
+                )
+
+        # Always replace citations
+        await db.execute(
+            text("DELETE FROM wiki_citations WHERE page_id = :pid::uuid"),
+            {"pid": page_id},
+        )
+        for c in citations:
+            await db.execute(
+                text("""
+                    INSERT INTO wiki_citations (page_id, citation_id, source_type, source_id, label)
+                    VALUES (:page_id::uuid, :citation_id, :source_type, :source_id, :label)
+                """),
+                {
+                    "page_id": page_id,
+                    "citation_id": c.citation_id,
+                    "source_type": c.source_type,
+                    "source_id": c.source_id,
+                    "label": c.label,
+                },
+            )
+
     return page_id
 
 
@@ -371,9 +379,10 @@ async def patch_wiki_page(
 
     sets.append("updated_by = :updated_by")
     params["updated_by"] = updated_by
-    result = await db.execute(
-        text(f"UPDATE wiki_pages SET {', '.join(sets)} WHERE slug = :slug RETURNING id"),
-        params,
-    )
-    await db.commit()
-    return {"found": result.one_or_none() is not None, "updated": True}
+    async with db.begin():
+        result = await db.execute(
+            text(f"UPDATE wiki_pages SET {', '.join(sets)} WHERE slug = :slug RETURNING id"),
+            params,
+        )
+        found = result.one_or_none() is not None
+    return {"found": found, "updated": True}

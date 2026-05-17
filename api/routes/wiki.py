@@ -47,12 +47,19 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
     return [d.embedding for d in resp.data]
 
 
+class CitationIn(BaseModel):
+    citation_id: str
+    source_type: str
+    source_id: str | None = None
+    label: str
+
+
 class WikiPostBody(BaseModel):
     slug: str
     title: str
     content: Any = None
     content_text: str | None = None
-    citations: list[dict[str, Any]] | None = None
+    citations: list[CitationIn] | None = None
     project: str | None = None
     needs_review: bool | None = None
 
@@ -61,7 +68,7 @@ class WikiPutBody(BaseModel):
     title: str
     content: Any = None
     content_text: str | None = None
-    citations: list[dict[str, Any]] | None = None
+    citations: list[CitationIn] | None = None
     project: str | None = None
     needs_review: bool | None = None
 
@@ -133,6 +140,9 @@ async def create_wiki(
         raise HTTPException(status_code=429, detail="Too many requests")
     if not _SLUG_RE.match(body.slug):
         raise HTTPException(status_code=400, detail="Invalid slug: use lowercase letters, numbers, and hyphens only")
+    existing = await get_wiki_page(db, body.slug, include_archived=True)
+    if existing and existing["created_by"] != user_id:
+        raise HTTPException(status_code=403, detail="A page with this slug already exists and belongs to another user")
     page_id = await upsert_wiki_page(
         db,
         body.slug,
@@ -172,9 +182,11 @@ async def update_wiki(
     limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
-    existing = await get_wiki_page(db, slug)
+    existing = await get_wiki_page(db, slug, include_archived=True)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
+    if existing["created_by"] != user_id:
+        raise HTTPException(status_code=403, detail="You can only edit your own wiki pages")
     page_id = await upsert_wiki_page(
         db,
         slug,
@@ -197,6 +209,11 @@ async def patch_wiki(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
+    existing = await get_wiki_page(db, slug, include_archived=True)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
+    if existing["created_by"] != user_id:
+        raise HTTPException(status_code=403, detail="You can only edit your own wiki pages")
     result = await patch_wiki_page(
         db, slug, user_id,
         body.needs_review, body.archived, body.maturity, body.project,

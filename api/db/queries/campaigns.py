@@ -37,29 +37,27 @@ async def create_campaign(
 async def update_campaign_status(
     db: AsyncSession,
     campaign_id: str,
+    user_id: str,
     status: str,
-    user_id: str | None = None,
     plan: dict[str, Any] | None = None,
 ) -> None:
-    """Update campaign status.
+    """Update campaign status for the campaign owner.
 
-    When user_id is provided (user-facing calls), only the campaign owner can
-    update — the WHERE clause includes `created_by = :user_id`.
-    When user_id is None (system/worker calls), the ownership check is skipped.
+    Includes `created_by = :user_id` in the WHERE clause so a user can only
+    advance their own campaigns. For system/worker calls use
+    `system_advance_campaign()`.
 
     Does NOT commit — caller manages the transaction.
     Source-state predicate excludes terminal statuses to prevent
     double-transitions.
     """
     plan_clause = ", plan = :plan::jsonb" if plan is not None else ""
-    user_clause = "AND created_by = :user_id" if user_id is not None else ""
     params: dict[str, Any] = {
         "id": campaign_id,
+        "user_id": user_id,
         "status": status,
         "statuses": list(NON_TERMINAL_STATUSES),
     }
-    if user_id is not None:
-        params["user_id"] = user_id
     if plan is not None:
         params["plan"] = json.dumps(plan)
     await db.execute(
@@ -67,7 +65,37 @@ async def update_campaign_status(
             UPDATE synthesis_campaigns
             SET status = :status, updated_at = now(){plan_clause}
             WHERE id = :id::uuid
-              {user_clause}
+              AND created_by = :user_id
+              AND status = ANY(:statuses)
+        """),
+        params,
+    )
+
+
+async def system_advance_campaign(
+    db: AsyncSession,
+    campaign_id: str,
+    status: str,
+    plan: dict[str, Any] | None = None,
+) -> None:
+    """Advance a campaign status from a system/worker context (no ownership check).
+
+    Only callable from background workers. Never expose via HTTP routes.
+    Does NOT commit — caller manages the transaction.
+    """
+    plan_clause = ", plan = :plan::jsonb" if plan is not None else ""
+    params: dict[str, Any] = {
+        "id": campaign_id,
+        "status": status,
+        "statuses": list(NON_TERMINAL_STATUSES),
+    }
+    if plan is not None:
+        params["plan"] = json.dumps(plan)
+    await db.execute(
+        text(f"""
+            UPDATE synthesis_campaigns
+            SET status = :status, updated_at = now(){plan_clause}
+            WHERE id = :id::uuid
               AND status = ANY(:statuses)
         """),
         params,
@@ -221,14 +249,16 @@ async def get_running_campaigns(db: AsyncSession) -> list[dict[str, Any]]:
 
 
 async def all_steps_complete(db: AsyncSession, campaign_id: str) -> bool:
-    """Return True if every step for the campaign is in 'complete' status."""
+    """Return True if every step is complete AND the campaign has at least one step."""
     result = await db.execute(
         text("""
-            SELECT count(*) FILTER (WHERE status != 'complete') AS incomplete
+            SELECT
+                count(*) AS total,
+                count(*) FILTER (WHERE status != 'complete') AS incomplete
             FROM campaign_steps
             WHERE campaign_id = :campaign_id::uuid
         """),
         {"campaign_id": campaign_id},
     )
     row = result.one()
-    return row.incomplete == 0
+    return row.total > 0 and row.incomplete == 0

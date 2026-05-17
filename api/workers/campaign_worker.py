@@ -44,10 +44,14 @@ async def _execute_step(step: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _create_campaign_wiki(
-    db: AsyncSession,
     campaign: dict[str, Any],
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Create a wiki page summarising a completed synthesis campaign."""
+    """Create a wiki page summarising a completed synthesis campaign.
+
+    Opens its own session so it does not share transaction state with the
+    main worker loop session.
+    """
     from api.db.queries.wiki import upsert_wiki_page
 
     campaign_id = campaign["id"]
@@ -73,27 +77,30 @@ async def _create_campaign_wiki(
         f"## Synthesis Steps\n{steps_text or '(no steps recorded)'}\n"
     )
 
-    # embed_texts is imported lazily to avoid circular import at module load
     from api.routes.wiki import embed_texts
 
     try:
-        await upsert_wiki_page(
-            db,
-            slug=slug,
-            title=title,
-            content={"type": "doc", "content": []},
-            content_text=content_text,
-            created_by=campaign.get("created_by", "system"),
-            citations=[],
-            embed_fn=embed_texts,
-            project="synthesis-campaigns",
-        )
+        async with session_factory() as db:
+            await upsert_wiki_page(
+                db,
+                slug=slug,
+                title=title,
+                content={"type": "doc", "content": []},
+                content_text=content_text,
+                created_by=campaign.get("created_by", "system"),
+                citations=[],
+                embed_fn=embed_texts,
+                project="synthesis-campaigns",
+            )
         logger.info("campaign_wiki_created campaign=%s slug=%s", campaign_id, slug)
     except Exception:
         logger.exception("campaign_wiki_create_failed campaign=%s", campaign_id)
 
 
-async def process_running_campaigns(db: AsyncSession) -> int:
+async def process_running_campaigns(
+    db: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> int:
     """Drive all running campaigns one step forward. Returns number of updates."""
     from api.db.queries.campaigns import (
         all_steps_complete,
@@ -101,7 +108,7 @@ async def process_running_campaigns(db: AsyncSession) -> int:
         get_running_campaigns,
         mark_step_complete,
         mark_step_failed,
-        update_campaign_status,
+        system_advance_campaign,
     )
 
     campaigns = await get_running_campaigns(db)
@@ -133,9 +140,9 @@ async def process_running_campaigns(db: AsyncSession) -> int:
         if done:
             try:
                 async with db.begin():
-                    await update_campaign_status(db, campaign_id, "complete")
+                    await system_advance_campaign(db, campaign_id, "complete")
                 logger.info("campaign_complete campaign=%s", campaign_id)
-                await _create_campaign_wiki(db, campaign)
+                await _create_campaign_wiki(campaign, session_factory)
                 updates += 1
             except Exception:
                 logger.exception("campaign_complete_error campaign=%s", campaign_id)
@@ -181,7 +188,7 @@ async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
             try:
                 async with session_factory() as db:
                     retried = await process_retry_steps(db)
-                    updated = await process_running_campaigns(db)
+                    updated = await process_running_campaigns(db, session_factory)
                 if retried or updated:
                     logger.info(
                         "campaign_worker_cycle retried=%d updated=%d",

@@ -118,6 +118,13 @@ async def run_agent_streaming(
         },
     )
 
+    # Emit the session_id immediately so the client can persist it before any
+    # streaming tokens arrive. The session_id may be the one the client sent
+    # (resume) or a freshly generated one from chat.py — either way it's the
+    # authoritative id for this conversation turn.
+    if session_id:
+        yield f"data: {json.dumps({'type': 'session_start', 'session_id': session_id})}\n\n"
+
     result_session_id: str | None = None
     try:
         async for message in query(prompt=prompt, options=options):
