@@ -1,49 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Hoisted so vi.mock can reference them.
 const mocks = vi.hoisted(() => ({
   getWikiPage: vi.fn(),
   setCitationDisputed: vi.fn(),
-  selectFromQueue: [] as unknown[][],
-  returningQueue: [] as unknown[][],
+  getCitationPair: vi.fn(),
+  findChunksContainingCitationMarker: vi.fn(),
+  recordContradiction: vi.fn(),
 }));
 
-vi.mock('@chemclaw2/db', () => {
-  const buildSelectChain = () => {
-    const result = mocks.selectFromQueue.shift() ?? [];
-    const limitable = Object.assign(Promise.resolve(result), {
-      limit: () => Promise.resolve(result),
-    });
-    return {
-      from: () => ({
-        where: () => limitable,
-      }),
-    };
-  };
-  return {
-    db: {
-      select: () => buildSelectChain(),
-      insert: () => ({
-        values: () => ({
-          returning: () => Promise.resolve(mocks.returningQueue.shift() ?? []),
-        }),
-      }),
-    },
-    getWikiPage: mocks.getWikiPage,
-    setCitationDisputed: mocks.setCitationDisputed,
-    wikiCitations: {},
-    wikiContradictions: {},
-    wikiChunks: {},
-  };
-});
+vi.mock('@chemclaw2/db', () => ({
+  getWikiPage: mocks.getWikiPage,
+  setCitationDisputed: mocks.setCitationDisputed,
+  getCitationPair: mocks.getCitationPair,
+  findChunksContainingCitationMarker: mocks.findChunksContainingCitationMarker,
+  recordContradiction: mocks.recordContradiction,
+}));
 
 import { createContradictionTools } from '../resolve-contradiction';
 
 beforeEach(() => {
   mocks.getWikiPage.mockReset();
   mocks.setCitationDisputed.mockReset();
-  mocks.selectFromQueue.length = 0;
-  mocks.returningQueue.length = 0;
+  mocks.getCitationPair.mockReset();
+  mocks.findChunksContainingCitationMarker.mockReset();
+  mocks.recordContradiction.mockReset();
 });
 
 describe('createContradictionTools.record', () => {
@@ -87,7 +67,7 @@ describe('createContradictionTools.record', () => {
 
   it('persists and marks the loser disputed for winner=a', async () => {
     mocks.getWikiPage.mockResolvedValueOnce({ id: 'page-1' });
-    mocks.returningQueue.push([{ id: 'contradiction-1' }]);
+    mocks.recordContradiction.mockResolvedValueOnce({ id: 'contradiction-1' });
     mocks.setCitationDisputed.mockResolvedValueOnce({ found: true });
 
     const r = (await record.execute({
@@ -102,11 +82,20 @@ describe('createContradictionTools.record', () => {
     expect(r.winner).toBe('a');
     expect(r.disputed_citation).toBe('2');
     expect(mocks.setCitationDisputed).toHaveBeenCalledWith('page-1', '2', true);
+    expect(mocks.recordContradiction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pageId: 'page-1',
+        citationA: '1',
+        citationB: '2',
+        proposedWinner: 'a',
+        resolvedBy: 'user_test',
+      }),
+    );
   });
 
   it('does not mark anything disputed when winner=inconclusive', async () => {
     mocks.getWikiPage.mockResolvedValueOnce({ id: 'page-2' });
-    mocks.returningQueue.push([{ id: 'contradiction-2' }]);
+    mocks.recordContradiction.mockResolvedValueOnce({ id: 'contradiction-2' });
 
     const r = (await record.execute({
       slug: 'aspirin',
@@ -134,8 +123,8 @@ describe('createContradictionTools.readTwo', () => {
 
   it('returns an error when one or both citations are missing on the page', async () => {
     mocks.getWikiPage.mockResolvedValueOnce({ id: 'page-1' });
-    // db.select for wiki_citations → only one of the two citations exists
-    mocks.selectFromQueue.push([
+    // Only one of the two citations exists
+    mocks.getCitationPair.mockResolvedValueOnce([
       {
         citationId: '1',
         sourceType: 'doc',

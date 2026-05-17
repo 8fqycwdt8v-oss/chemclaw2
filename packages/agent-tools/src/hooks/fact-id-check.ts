@@ -1,5 +1,4 @@
-import { db, compounds } from '@chemclaw2/db';
-import { inArray } from 'drizzle-orm';
+import { knownCasNumbers } from '@chemclaw2/db';
 import { trace } from '@opentelemetry/api';
 
 // CAS numbers: 2-7 digits, hyphen, 2 digits, hyphen, 1 check digit.
@@ -16,20 +15,17 @@ export async function checkToolOutput(
   // Fail open on DB errors: a compliance flag should not break the agent response.
   let known: Set<string | null>;
   try {
-    const rows = await db
-      .select({ casNumber: compounds.casNumber })
-      .from(compounds)
-      .where(inArray(compounds.casNumber, casNumbers));
-    known = new Set(rows.map((r) => r.casNumber));
+    known = await knownCasNumbers(casNumbers);
   } catch (err) {
-    // #22: emit an OTel event so Langfuse + the trace pipeline surface the
-    // fail-open path. Logging alone is invisible in production dashboards.
     trace.getActiveSpan()?.addEvent('fact_id_check_db_error', {
       tool_name: toolName,
       cas_count: casNumbers.length,
       message: err instanceof Error ? err.message : String(err),
     });
-    console.warn('[fact-id-check] DB query failed — compliance check skipped:', err instanceof Error ? err.message : err);
+    console.warn(
+      '[fact-id-check] DB query failed — compliance check skipped:',
+      err instanceof Error ? err.message : err,
+    );
     return { warnings: [] };
   }
 
@@ -42,6 +38,8 @@ export async function checkToolOutput(
     });
   }
   return {
-    warnings: unverified.map((c) => `CAS ${c} found in tool output is not in the compound registry — verify accuracy`),
+    warnings: unverified.map((c) =>
+      `CAS ${c} found in tool output is not in the compound registry — verify accuracy`,
+    ),
   };
 }
