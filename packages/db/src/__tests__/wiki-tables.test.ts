@@ -85,4 +85,51 @@ describe('extractMarkdownTables', () => {
     ].join('\n');
     expect(extractMarkdownTables(md)).toEqual([]);
   });
+
+  it('does not absorb a second adjacent tables divider as data (Wave-3h)', () => {
+    const md = [
+      '| a | b |',
+      '|---|---|',
+      '| 1 | 2 |',
+      '| c | d |',
+      '|---|---|',
+      '| 3 | 4 |',
+    ].join('\n');
+    const tables = extractMarkdownTables(md);
+    expect(tables).toHaveLength(2);
+    // First table must NOT contain a row {a:'---', b:'---'} or {a:'c', b:'d'}
+    expect(tables[0].rows).toEqual([{ a: '1', b: '2' }]);
+    expect(tables[1].headers).toEqual(['c', 'd']);
+    expect(tables[1].rows).toEqual([{ c: '3', d: '4' }]);
+  });
+
+  it('ignores pipe-tables inside fenced code blocks (Wave-3h)', () => {
+    const md = [
+      'Documenting markdown:',
+      '',
+      '```',
+      '| a | b |',
+      '|---|---|',
+      '| 1 | 2 |',
+      '```',
+      '',
+      'Back to prose.',
+    ].join('\n');
+    expect(extractMarkdownTables(md)).toEqual([]);
+  });
+
+  it('still extracts a real table after a code block closes', () => {
+    const md = [
+      '```',
+      '| not | a | table |',
+      '```',
+      '',
+      '| yield | catalyst |',
+      '|---|---|',
+      '| 80% | Pd |',
+    ].join('\n');
+    const tables = extractMarkdownTables(md);
+    expect(tables).toHaveLength(1);
+    expect(tables[0].headers).toEqual(['yield', 'catalyst']);
+  });
 });

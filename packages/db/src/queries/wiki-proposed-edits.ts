@@ -100,6 +100,20 @@ export async function listPendingProposedEdits(limit = 50): Promise<ProposedEdit
   return rows as ProposedEditRow[];
 }
 
+/**
+ * Wave-3h perf: cheap COUNT(*) for the admin nav badge. The previous
+ * pattern (`listPendingProposedEdits(50).then(p => p.length)`) pulled the
+ * full row including content + contentText + citations JSONB on every
+ * layout render — potentially hundreds of KB. The partial index
+ * `wiki_proposed_edits_pending_idx` makes this an index-only scan.
+ */
+export async function countPendingProposedEdits(): Promise<number> {
+  const rows = await db.execute<{ count: string | number }>(sql`
+    SELECT COUNT(*)::int AS count FROM wiki_proposed_edits WHERE status = 'pending'
+  `);
+  return Number(rows[0]?.count ?? 0);
+}
+
 /** History for a single slug — every proposal, regardless of status. */
 export async function listProposedEditsForSlug(slug: string, limit = 50): Promise<ProposedEditRow[]> {
   const rows = await db
@@ -137,6 +151,87 @@ export async function markProposedEditApplied(
     .where(and(eq(wikiProposedEdits.id, id), eq(wikiProposedEdits.status, 'pending')))
     .returning({ id: wikiProposedEdits.id });
   return { found: rows.length > 0 };
+}
+
+/**
+ * Wave-3h fix for the security-audit-flagged TOCTOU between the apply
+ * route's status read and its wiki page write: claim the proposal
+ * atomically BEFORE issuing the wiki write. Acquires `SELECT … FOR UPDATE`
+ * on the proposal row and moves status to 'applied' inside the same
+ * transaction. A concurrent rejecter / second-apply attempt will block on
+ * the row lock and then see status='applied' on retry — guaranteed that
+ * exactly one reviewer wins.
+ *
+ * Returns the locked proposal so the caller can replay it through
+ * upsertWikiPage. The proposal is ALREADY MARKED APPLIED in the DB at
+ * this point; on a wiki-write failure the caller MUST call
+ * `rollbackApplyClaim` to restore status='pending' (so a retry is possible).
+ *
+ * `appliedPageId` is left null in this step — caller fills it in with
+ * `setAppliedPageId` once the wiki upsert succeeds.
+ */
+export async function tryClaimProposedEditForApply(
+  id: string,
+  reviewedBy: string,
+  comment?: string,
+): Promise<ProposedEditRow | null> {
+  return db.transaction(async (tx) => {
+    const rows = await tx.execute<ProposedEditRow>(sql`
+      SELECT id, slug, title, content,
+             content_text AS "contentText",
+             citations,
+             proposed_by AS "proposedBy",
+             rationale,
+             status,
+             previous_id AS "previousId",
+             reviewed_by AS "reviewedBy",
+             review_comment AS "reviewComment",
+             reviewed_at AS "reviewedAt",
+             applied_page_id AS "appliedPageId",
+             created_at AS "createdAt"
+      FROM wiki_proposed_edits
+      WHERE id = ${id} AND status = 'pending'
+      FOR UPDATE
+    `);
+    if (rows.length === 0) return null;
+    const proposal = rows[0];
+    await tx
+      .update(wikiProposedEdits)
+      .set({
+        status: 'applied',
+        reviewedBy,
+        reviewedAt: sql`NOW()`,
+        reviewComment: comment ?? null,
+      })
+      .where(eq(wikiProposedEdits.id, id));
+    return proposal;
+  });
+}
+
+/** Wave-3h: link the applied proposal to the wiki page after the upsert. */
+export async function setAppliedPageId(id: string, pageId: string): Promise<void> {
+  await db
+    .update(wikiProposedEdits)
+    .set({ appliedPageId: pageId })
+    .where(eq(wikiProposedEdits.id, id));
+}
+
+/**
+ * Wave-3h: roll back an apply claim when the wiki write fails after we've
+ * already moved the proposal to status='applied'. Restores status='pending'
+ * so a retry can succeed. The status check guards against rolling back a
+ * proposal that has since been touched by another path.
+ */
+export async function rollbackApplyClaim(id: string): Promise<void> {
+  await db
+    .update(wikiProposedEdits)
+    .set({
+      status: 'pending',
+      reviewedBy: null,
+      reviewedAt: null,
+      reviewComment: null,
+    })
+    .where(and(eq(wikiProposedEdits.id, id), eq(wikiProposedEdits.status, 'applied')));
 }
 
 /**

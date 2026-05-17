@@ -1,5 +1,9 @@
 import { CONTROLLED_SUBSTANCE_NAMES, normalizeForGate } from './scheduled-substance-gate';
 
+// Wave-3h security fix: also strip zero-width characters before SSN matching
+// so a prompt like "123​-45-6789" can't bypass the block. NFKC happens
+// inside normalizeForGate.
+
 // Pattern matches US Social Security Numbers (NNN-NN-NNNN).
 // Not a general PII scanner — only SSNs. CAS numbers (NN...-NN-N) do not match.
 // Non-global so .test() is stateless; replacement uses a per-call /g clone.
@@ -86,7 +90,10 @@ function extractStringValues(obj: unknown): string[] {
 export function checkUserPrompt(
   prompt: string,
 ): { action: 'allow' } | { action: 'block'; reason: string } {
-  if (SSN_RE.test(prompt)) {
+  // NFKC-normalize + zero-width-strip before pattern match so bypass attempts
+  // like "123​-45-6789" or NFKC-equivalent variants get caught the same as
+  // the canonical form. SSN_RE is non-global so .test() is stateless.
+  if (SSN_RE.test(normalizeForGate(prompt))) {
     return {
       action: 'block',
       reason: 'Prompt blocked: contains what looks like a Social Security Number. Remove the SSN and resubmit.',

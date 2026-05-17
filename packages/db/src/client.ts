@@ -8,14 +8,16 @@ import * as schema from './schema/index';
 let _sql: ReturnType<typeof postgres> | undefined;
 let _db: ReturnType<typeof drizzle<typeof schema>> | undefined;
 
-// Pool sizing: assumes a PgBouncer/Supavisor pooler in front of Postgres. In
-// transaction-pooling mode the per-process `max` is fine to raise; in session
-// mode the upstream pool grows. Tune via DB_POOL_MAX env (default 5).
+// Pool sizing: lifted from max:2 → max:15 (configurable via DB_POOL_MAX) to
+// match the v2.2 fan-out shape. lookup_knowledge alone issues up to 5
+// parallel queries; per-tool-call budget hooks add another DB write. 15 is
+// a defensible floor for a pgbouncer transaction-mode pooler; raise via env
+// if a bigger upstream demands.
 function poolMax(): number {
   const raw = process.env.DB_POOL_MAX;
-  if (!raw) return 5;
+  if (!raw) return 15;
   const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 && n <= 50 ? n : 5;
+  return Number.isFinite(n) && n > 0 && n <= 100 ? n : 15;
 }
 
 function getDb() {

@@ -152,4 +152,15 @@ describe('checkUserPrompt', () => {
     );
     expect(result.action).toBe('block');
   });
+
+  it('blocks SSN with zero-width spaces between digits (Wave-3h)', () => {
+    // ​ is zero-width space. Pre-Wave-3h this bypassed the regex.
+    const result = checkUserPrompt('123​-45-6789');
+    expect(result.action).toBe('block');
+  });
+
+  it('blocks SSN with zero-width joiner / non-joiner', () => {
+    expect(checkUserPrompt('123‌-45-6789').action).toBe('block');
+    expect(checkUserPrompt('123-45-67‍89').action).toBe('block');
+  });
 });
