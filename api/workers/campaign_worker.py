@@ -50,7 +50,7 @@ async def _create_campaign_wiki(
     Opens its own session so it does not share transaction state with the
     main worker loop session.
     """
-    from api.db.queries.wiki import upsert_wiki_page
+    from api.db.queries.wiki_write import upsert_wiki_page
 
     campaign_id = campaign["id"]
     target = campaign.get("target_smiles") or "unknown target"
@@ -75,7 +75,7 @@ async def _create_campaign_wiki(
         f"## Synthesis Steps\n{steps_text or '(no steps recorded)'}\n"
     )
 
-    from api.routes.wiki import embed_texts
+    from api.embeddings import embed_texts
 
     try:
         async with session_factory() as db:

@@ -144,12 +144,12 @@ def build_chemclaw_mcp_server(
     ) -> dict[str, Any]:
         """Look up wiki knowledge. Provide slug for a direct page fetch, or
         query for FTS/semantic search (mode='fts' or mode='semantic')."""
-        from api.db.queries.wiki import (
-            get_wiki_page,
-            get_wiki_page_citations,
-            search_wiki_by_fts,
-            semantic_search_wiki,
-        )
+        from api.db.queries.wiki_read import (
+    get_wiki_page,
+    get_wiki_page_citations,
+    search_wiki_by_fts,
+    semantic_search_wiki,
+)
         async with session_factory() as db:
             if slug:
                 page = await get_wiki_page(db, slug)
@@ -162,7 +162,7 @@ def build_chemclaw_mcp_server(
             if len(query) > 500:
                 return {"error": "query too long (max 500 chars)"}
             if mode == "semantic":
-                from api.routes.wiki import embed_texts
+                from api.embeddings import embed_texts
                 embeddings = await embed_texts([query])
                 results = await semantic_search_wiki(db, embeddings[0], limit=limit)
             else:
@@ -381,7 +381,7 @@ def build_chemclaw_mcp_server(
             return {"error": "query must be 1-500 chars"}
         active = set(sources) if sources else {"wiki", "papers", "properties", "facts"}
 
-        from api.db.queries.wiki import search_wiki_by_fts
+        from api.db.queries.wiki_read import search_wiki_by_fts
         from api.db.queries.knowledge import (
             search_papers,
             search_external_facts,
@@ -512,7 +512,7 @@ def build_chemclaw_mcp_server(
         """
         if proposed_winner not in ("a", "b", "inconclusive"):
             return {"error": "proposed_winner must be 'a', 'b', or 'inconclusive'"}
-        from api.db.queries.wiki import get_wiki_page
+        from api.db.queries.wiki_read import get_wiki_page
         from api.db.queries.contradictions import create_contradiction
         async with session_factory() as db:
             page = await get_wiki_page(db, page_slug)
