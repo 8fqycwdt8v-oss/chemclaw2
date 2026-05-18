@@ -69,37 +69,42 @@ async def patch_notifications(
 
 @router.get("/api/notifications/stream")
 async def notification_stream(
+    db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ) -> StreamingResponse:
+    limited = await pg_rate_limit(db, f"notifications-stream:{user_id}", 10, 60_000)
+    if limited["limited"]:
+        raise HTTPException(status_code=429, detail="Too many requests")
+
     from api.db.connection import async_session_factory
     import asyncio
 
     async def gen():
-        in_flight = False
-        while True:
-            if not in_flight and async_session_factory is not None:
-                in_flight = True
-                try:
-                    async with async_session_factory() as db:
-                        items = await list_notifications(db, user_id, unread_only=True, limit=20)
-                    serialized = [
-                        {
-                            **n,
-                            "created_at": (
-                                n["created_at"].isoformat()
-                                if hasattr(n["created_at"], "isoformat")
-                                else str(n["created_at"])
-                            ),
-                        }
-                        for n in items
-                    ]
-                    if serialized:
-                        yield f"data: {json.dumps({'type': 'notifications', 'items': serialized})}\n\n"
-                except Exception:
-                    logger.exception("notification_stream_error user=%s", user_id)
-                finally:
-                    in_flight = False
-            await asyncio.sleep(30)
+        try:
+            while True:
+                if async_session_factory is not None:
+                    try:
+                        async with async_session_factory() as poll_db:
+                            items = await list_notifications(poll_db, user_id, unread_only=True, limit=20)
+                        serialized = [
+                            {
+                                **n,
+                                "created_at": (
+                                    n["created_at"].isoformat()
+                                    if hasattr(n["created_at"], "isoformat")
+                                    else str(n["created_at"])
+                                ),
+                            }
+                            for n in items
+                        ]
+                        if serialized:
+                            yield f"data: {json.dumps({'type': 'notifications', 'items': serialized})}\n\n"
+                    except Exception:
+                        logger.exception("notification_stream_error user=%s", user_id)
+                yield ": keepalive\n\n"
+                await asyncio.sleep(30)
+        except (asyncio.CancelledError, GeneratorExit):
+            logger.info("notification_stream_closed user=%s", user_id)
 
     return StreamingResponse(
         gen(),

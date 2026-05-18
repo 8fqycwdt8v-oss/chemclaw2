@@ -5,7 +5,7 @@ import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user
@@ -31,9 +31,9 @@ def _check_ownership(project_key: str, user_id: str) -> None:
 
 class BudgetUpsertBody(BaseModel):
     period: Literal["day", "week", "month"]
-    tool_calls_cap: int | None = None
-    experiments_cap: int | None = None
-    tokens_cap: int | None = None
+    tool_calls_cap: int | None = Field(default=None, ge=0)
+    experiments_cap: int | None = Field(default=None, ge=0)
+    tokens_cap: int | None = Field(default=None, ge=0)
 
 
 @router.get("/api/budgets/{project_key}")

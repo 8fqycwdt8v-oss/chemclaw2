@@ -38,7 +38,7 @@ def _configure_logging() -> logging.Logger:
     return logging.getLogger("mcp_rxnfp")
 
 
-log = _configure_logging()
+log: logging.Logger = logging.getLogger("mcp_rxnfp")
 mcp = FastMCP("mcp-rxnfp")
 
 # Fixed at 2048 to match the BIT(2048) column in reactions.drfp. DRFP's library
@@ -58,13 +58,21 @@ def compute_drfp(reaction_smiles: str) -> dict:
     Returns fingerprint_bits (binary string of '0'/'1', length 2048) and n_bits.
     Compatible with Postgres BIT(2048) via $1::bit(2048) parameter cast.
     """
+    if not reaction_smiles or not reaction_smiles.strip():
+        raise ValueError("reaction_smiles is required and cannot be empty")
+    if ">>" not in reaction_smiles:
+        raise ValueError("reaction_smiles must contain '>>' separator (reactants>>products)")
     if len(reaction_smiles) > MAX_REACTION_SMILES_LEN:
         log.warning("rxn_smiles_oversize", extra={"length": len(reaction_smiles), "max": MAX_REACTION_SMILES_LEN})
         raise ValueError(
             f"reaction_smiles exceeds {MAX_REACTION_SMILES_LEN} chars (got {len(reaction_smiles)})"
         )
     t0 = time.monotonic()
-    fps = DrfpEncoder.encode([reaction_smiles], n_folded_length=_NBITS)
+    try:
+        fps = DrfpEncoder.encode([reaction_smiles], n_folded_length=_NBITS)
+    except Exception:
+        log.exception("drfp_encode_failed", extra={"smiles_len": len(reaction_smiles)})
+        raise ValueError("Failed to encode reaction SMILES") from None
     bit_arr = fps[0]
     # DrfpEncoder returns a numpy array of 0/1 ints
     bit_str = "".join(str(b) for b in bit_arr)
@@ -89,6 +97,8 @@ def compute_drfp(reaction_smiles: str) -> dict:
 
 
 def main():
+    global log
+    log = _configure_logging()
     log.info("mcp_server_starting", extra={"name": mcp.name, "pid": os.getpid()})
     try:
         mcp.run(transport="stdio")

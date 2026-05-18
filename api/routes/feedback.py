@@ -5,7 +5,7 @@ import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user
@@ -18,8 +18,8 @@ router = APIRouter()
 
 
 class FeedbackBody(BaseModel):
-    session_id: str
-    turn_index: int
+    session_id: str = Field(..., min_length=1)
+    turn_index: int = Field(..., ge=0)
     score: Literal[1, -1]
     reason: str | None = None
 

@@ -56,6 +56,9 @@ async def create_tool_permission(
     db: AsyncSession = Depends(get_db),
     admin_id: str = Depends(get_admin_user),
 ):
+    limited = await pg_rate_limit(db, f"admin-write:{admin_id}", 30, 60_000)
+    if limited["limited"]:
+        raise HTTPException(status_code=429, detail="Too many requests")
     permission_id = await upsert_tool_permission(
         db,
         scope=body.scope,
@@ -77,6 +80,9 @@ async def remove_tool_permission(
     db: AsyncSession = Depends(get_db),
     admin_id: str = Depends(get_admin_user),
 ):
+    limited = await pg_rate_limit(db, f"admin-write:{admin_id}", 30, 60_000)
+    if limited["limited"]:
+        raise HTTPException(status_code=429, detail="Too many requests")
     deleted = await delete_tool_permission(db, permission_id, updated_by=admin_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Permission not found")

@@ -209,6 +209,7 @@ async def mark_step_failed(
                 next_retry_at = now() + :backoff * interval '1 minute',
                 updated_at    = now()
             WHERE id = :id::uuid
+              AND status = 'pending'
         """),
         {"id": step_id, "retry_count": retry_count, "backoff": backoff_minutes},
     )
@@ -230,6 +231,7 @@ async def mark_step_complete(
                 result     = :result::jsonb,
                 updated_at = now()
             WHERE id = :id::uuid
+              AND status = 'pending'
         """),
         {"id": step_id, "result": json.dumps(result) if result is not None else None},
     )
@@ -325,6 +327,25 @@ async def get_campaign_with_steps(
         "campaign": dict(campaign_row._mapping),
         "steps": [dict(r._mapping) for r in steps_result],
     }
+
+
+async def reset_steps_for_retry(db: AsyncSession, step_ids: list[str]) -> None:
+    """Reset eligible failed steps back to 'pending' so they get re-executed.
+
+    Does NOT commit — caller manages the transaction.
+    Only resets steps currently in 'failed' status to prevent double-reset.
+    """
+    if not step_ids:
+        return
+    await db.execute(
+        text("""
+            UPDATE campaign_steps
+            SET status = 'pending', updated_at = now()
+            WHERE id = ANY(:ids::uuid[])
+              AND status = 'failed'
+        """),
+        {"ids": step_ids},
+    )
 
 
 async def cancel_campaign(

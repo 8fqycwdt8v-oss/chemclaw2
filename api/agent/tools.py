@@ -28,7 +28,7 @@ async def _assert_not_private(hostname: str) -> None:
     Uses run_in_executor so the blocking getaddrinfo call does not stall
     the event loop. Fails closed: a DNS resolution failure raises ValueError.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         infos = await loop.run_in_executor(None, socket.getaddrinfo, hostname, None)
     except OSError as e:
@@ -347,14 +347,19 @@ def build_chemclaw_mcp_server(
     # ── record feedback ───────────────────────────────────────────────────────
     @mcp.tool()
     async def record_feedback(
-        session_id: str,
         turn_index: int,
         score: int,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        """Record thumbs-up (score=1) or thumbs-down (score=-1) for a conversation turn."""
+        """Record thumbs-up (score=1) or thumbs-down (score=-1) for a conversation turn.
+
+        Always records feedback for the current session — session_id is bound at
+        tool-factory time to prevent IDOR via caller-supplied session identifiers.
+        """
         if score not in (1, -1):
             return {"ok": False, "error": "score must be 1 or -1"}
+        if not session_id:
+            return {"ok": False, "error": "No active session to record feedback for"}
         from api.db.queries.feedback import record_feedback as _record_feedback
         async with session_factory() as db:
             feedback_id = await _record_feedback(db, session_id, turn_index, score, user_id, reason)
@@ -513,9 +518,10 @@ def build_chemclaw_mcp_server(
             page = await get_wiki_page(db, page_slug)
             if not page:
                 return {"error": f"Wiki page '{page_slug}' not found"}
-            contradiction_id = await create_contradiction(
-                db, page["id"], citation_a, citation_b, proposed_winner, reason
-            )
+            async with db.begin():
+                contradiction_id = await create_contradiction(
+                    db, page["id"], citation_a, citation_b, proposed_winner, reason
+                )
         return {"id": contradiction_id}
 
     # ── lookup_regulatory_guidance ────────────────────────────────────────────
@@ -585,21 +591,33 @@ def build_chemclaw_mcp_server(
                     "cached": True,
                 }
 
-        # Fetch from ich.org
+        # Fetch from ich.org — follow redirects manually to re-validate each hop.
         url = _ICH_URLS.get(guideline_key, "https://www.ich.org/page/quality-guidelines")
         try:
-            parsed = urlparse(url)
-            hostname = parsed.hostname or ""
-            await _assert_not_private(hostname)
-            async with httpx.AsyncClient(
-                timeout=15.0,
-                follow_redirects=True,
-                headers={"User-Agent": "chemclaw2/1.0 (research assistant)"},
-            ) as client:
-                r = await client.get(url)
-            if not r.is_success:
-                return {"error": f"ICH fetch returned HTTP {r.status_code}", "guideline": guideline_key}
-            raw_text = _html_to_text(r.text)
+            current_url = url
+            raw_text = ""
+            for _ in range(5):
+                parsed = urlparse(current_url)
+                hostname = parsed.hostname or ""
+                await _assert_not_private(hostname)
+                async with httpx.AsyncClient(
+                    timeout=15.0,
+                    follow_redirects=False,
+                    headers={"User-Agent": "chemclaw2/1.0 (research assistant)"},
+                ) as client:
+                    r = await client.get(current_url)
+                if r.is_redirect:
+                    redir_loc = r.headers.get("location", "")
+                    if not redir_loc:
+                        return {"error": "Redirect with no Location header", "guideline": guideline_key}
+                    current_url = redir_loc
+                    continue
+                if not r.is_success:
+                    return {"error": f"ICH fetch returned HTTP {r.status_code}", "guideline": guideline_key}
+                raw_text = _html_to_text(r.text)
+                break
+            else:
+                return {"error": "Too many redirects", "guideline": guideline_key}
         except Exception as e:
             logger.warning("regulatory_fetch_failed guideline=%s: %s", guideline_key, e)
             return {"error": "Failed to fetch regulatory guidance", "guideline": guideline_key}

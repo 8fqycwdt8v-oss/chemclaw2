@@ -6,7 +6,7 @@ import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user
@@ -20,9 +20,9 @@ router = APIRouter()
 
 
 class TodoItem(BaseModel):
-    text: str
+    text: str = Field(..., min_length=1)
     status: Literal["pending", "done"]
-    position: int
+    position: int = Field(..., ge=0)
 
 
 class TodosPutBody(BaseModel):

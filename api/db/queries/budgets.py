@@ -63,19 +63,19 @@ async def increment_spend(
     tokens: int = 0,
 ) -> None:
     period_start = period_start_for(period)
-    await db.execute(
-        text("""
-            INSERT INTO project_budget_spend (project_key, period_start, tool_calls, experiments, tokens)
-            VALUES (:pk, :ps, :tc, :ex, :tok)
-            ON CONFLICT (project_key, period_start) DO UPDATE SET
-                tool_calls = project_budget_spend.tool_calls + EXCLUDED.tool_calls,
-                experiments = project_budget_spend.experiments + EXCLUDED.experiments,
-                tokens = project_budget_spend.tokens + EXCLUDED.tokens,
-                updated_at = now()
-        """),
-        {"pk": project_key, "ps": period_start, "tc": tool_calls, "ex": experiments, "tok": tokens},
-    )
-    await db.commit()
+    async with db.begin():
+        await db.execute(
+            text("""
+                INSERT INTO project_budget_spend (project_key, period_start, tool_calls, experiments, tokens)
+                VALUES (:pk, :ps, :tc, :ex, :tok)
+                ON CONFLICT (project_key, period_start) DO UPDATE SET
+                    tool_calls = project_budget_spend.tool_calls + EXCLUDED.tool_calls,
+                    experiments = project_budget_spend.experiments + EXCLUDED.experiments,
+                    tokens = project_budget_spend.tokens + EXCLUDED.tokens,
+                    updated_at = now()
+            """),
+            {"pk": project_key, "ps": period_start, "tc": tool_calls, "ex": experiments, "tok": tokens},
+        )
 
 
 async def record_override(
@@ -88,18 +88,18 @@ async def record_override(
 ) -> None:
     import hashlib
     prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
-    await db.execute(
-        text("""
-            INSERT INTO agent_overrides
-                (session_id, user_id, gate_name, justification, prompt_hash)
-            VALUES (:sid, :uid, :gate, :justification, :hash)
-        """),
-        {
-            "sid": session_id, "uid": user_id, "gate": gate_name,
-            "justification": justification, "hash": prompt_hash,
-        },
-    )
-    await db.commit()
+    async with db.begin():
+        await db.execute(
+            text("""
+                INSERT INTO agent_overrides
+                    (session_id, user_id, gate_name, justification, prompt_hash)
+                VALUES (:sid, :uid, :gate, :justification, :hash)
+            """),
+            {
+                "sid": session_id, "uid": user_id, "gate": gate_name,
+                "justification": justification, "hash": prompt_hash,
+            },
+        )
 
 
 async def upsert_project_budget(

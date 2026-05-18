@@ -39,8 +39,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
     if fp_task is not None:
         fp_task.cancel()
+        try:
+            await fp_task
+        except asyncio.CancelledError:
+            pass
     if campaign_task is not None:
         campaign_task.cancel()
+        try:
+            await campaign_task
+        except asyncio.CancelledError:
+            pass
     from api.db.connection import engine
     if engine is not None:
         await engine.dispose()

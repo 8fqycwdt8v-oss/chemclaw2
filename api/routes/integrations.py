@@ -41,17 +41,13 @@ async def eln_webhook(
     """Receive an ELN event and persist it as an external fact.
 
     Auth: HMAC-SHA256 of request body using ELN_WEBHOOK_SECRET.
-    Rate limit: 100 per 60 s keyed on "eln-webhook".
+    Rate limit applied AFTER signature verification so unauthenticated callers
+    cannot exhaust the rate-limit budget.
     """
-    limited = await pg_rate_limit(db, "eln-webhook", 100, 60_000)
-    if limited["limited"]:
-        logger.warning("eln_webhook_rate_limited")
-        raise HTTPException(status_code=429, detail="Too many requests")
-
     secret = os.environ.get("ELN_WEBHOOK_SECRET", "")
     if not secret:
         logger.warning("eln_webhook_not_configured")
-        raise HTTPException(status_code=400, detail="ELN webhook not configured")
+        raise HTTPException(status_code=503, detail="ELN webhook not configured")
 
     body_bytes = await request.body()
 
@@ -62,6 +58,11 @@ async def eln_webhook(
     if not hmac.compare_digest(expected_sig, sig_header):
         logger.warning("eln_webhook_invalid_signature")
         raise HTTPException(status_code=401, detail="Invalid signature")
+
+    limited = await pg_rate_limit(db, "eln-webhook", 100, 60_000)
+    if limited["limited"]:
+        logger.warning("eln_webhook_rate_limited")
+        raise HTTPException(status_code=429, detail="Too many requests")
 
     body = ELNWebhookBody.model_validate_json(body_bytes)
 
@@ -118,9 +119,22 @@ async def upload_document(
             detail=f"Unsupported file type '{content_type}'. Allowed: pdf, plain text, markdown.",
         )
 
-    content = await file.read()
-    if len(content) > _MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="File exceeds 10 MB limit")
+    # Read in chunks to enforce size limit before buffering the whole file.
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(65536)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > _MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="File exceeds 10 MB limit")
+        chunks.append(chunk)
+    content = b"".join(chunks)
+
+    # Validate magic bytes for PDFs — Content-Type header alone is attacker-controlled.
+    if content_type == "application/pdf" and not content.startswith(b"%PDF"):
+        raise HTTPException(status_code=415, detail="File does not appear to be a valid PDF")
 
     if content_type == "application/pdf":
         try:

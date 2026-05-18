@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -257,7 +260,11 @@ async def upsert_wiki_page(
     if content_changed:
         chunks = chunk_text(content_text)
         if chunks:
-            embeddings = await embed_fn(chunks)
+            try:
+                embeddings = await embed_fn(chunks)
+            except Exception:
+                logger.exception("wiki_embed_failed slug=%s", slug)
+                raise
             if len(embeddings) != len(chunks):
                 raise ValueError(f"embed_fn returned {len(embeddings)} vectors for {len(chunks)} chunks")
 
@@ -329,6 +336,17 @@ async def upsert_wiki_page(
             {"pid": page_id},
         )
         for c in citations:
+            # Support both Pydantic model instances and plain dicts.
+            if isinstance(c, dict):
+                cit_id = c["citation_id"]
+                src_type = c["source_type"]
+                src_id = c.get("source_id")
+                label = c.get("label")
+            else:
+                cit_id = c.citation_id
+                src_type = c.source_type
+                src_id = c.source_id
+                label = c.label
             await db.execute(
                 text("""
                     INSERT INTO wiki_citations (page_id, citation_id, source_type, source_id, label)
@@ -336,10 +354,10 @@ async def upsert_wiki_page(
                 """),
                 {
                     "page_id": page_id,
-                    "citation_id": c.citation_id,
-                    "source_type": c.source_type,
-                    "source_id": c.source_id,
-                    "label": c.label,
+                    "citation_id": cit_id,
+                    "source_type": src_type,
+                    "source_id": src_id,
+                    "label": label,
                 },
             )
 
@@ -457,7 +475,7 @@ async def get_wiki_page_at(
             {"pid": page["id"]},
         )
         earliest_row = earliest.one_or_none()
-        return dict(earliest_row._mapping) if earliest_row else page
+        return dict(earliest_row._mapping) if earliest_row else None
     return {**page, **dict(rev_row._mapping)}
 
 

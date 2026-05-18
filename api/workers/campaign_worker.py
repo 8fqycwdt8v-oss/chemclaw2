@@ -16,9 +16,7 @@ RUN_WORKER_IN_PROCESS=1 alongside fp_worker).
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import sys
 from typing import Any
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
@@ -160,25 +158,16 @@ async def process_running_campaigns(
 
 async def process_retry_steps(db: AsyncSession) -> int:
     """Reset eligible failed steps back to 'pending' so they get re-executed."""
-    from api.db.queries.campaigns import get_steps_for_retry
+    from api.db.queries.campaigns import get_steps_for_retry, reset_steps_for_retry
 
     steps = await get_steps_for_retry(db)
     if not steps:
         return 0
 
-    from sqlalchemy import text
     step_ids = [s["id"] for s in steps]
     try:
         async with db.begin():
-            await db.execute(
-                text("""
-                    UPDATE campaign_steps
-                    SET status = 'pending', updated_at = now()
-                    WHERE id = ANY(:ids::uuid[])
-                      AND status = 'failed'
-                """),
-                {"ids": step_ids},
-            )
+            await reset_steps_for_retry(db, step_ids)
     except Exception:
         logger.exception("campaign_retry_reset_error")
         return 0
@@ -190,12 +179,17 @@ async def process_retry_steps(db: AsyncSession) -> int:
 async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
     global _in_flight
     logger.info("campaign_worker_started")
-    while True:
-        if not _in_flight:
+    _cycle = 0
+    try:
+        while True:
+            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+            if _in_flight:
+                continue
             _in_flight = True
             try:
                 async with session_factory() as db:
                     retried = await process_retry_steps(db)
+                async with session_factory() as db:
                     updated = await process_running_campaigns(db, session_factory)
                 if retried or updated:
                     logger.info(
@@ -203,11 +197,15 @@ async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
                         retried,
                         updated,
                     )
+                _cycle += 1
+                if _cycle % 10 == 0:
+                    logger.info("campaign_worker_heartbeat cycle=%d", _cycle)
             except Exception:
                 logger.exception("campaign_worker_cycle_error")
             finally:
                 _in_flight = False
-        await asyncio.sleep(POLL_INTERVAL_SECONDS)
+    except asyncio.CancelledError:
+        logger.info("campaign_worker_shutdown")
 
 
 if __name__ == "__main__":

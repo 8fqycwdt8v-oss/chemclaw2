@@ -1,6 +1,7 @@
 """Chat route — POST /api/chat (SSE streaming agent)."""
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -14,6 +15,7 @@ from api.db.connection import get_db, async_session_factory
 from api.db.queries.rate_limit import pg_rate_limit
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 MAX_PROMPT_BYTES = 100_000
 MAX_JUSTIFICATION_LEN = 2000
@@ -84,6 +86,7 @@ async def chat(
 
     limited = await pg_rate_limit(db, f"chat:{user_id}", 20, 60_000)
     if limited["limited"]:
+        logger.warning("chat_rate_limited user=%s", user_id)
         return _error_stream("Too many requests — please wait before sending another message", 429)
 
     session_id = body.session_id or str(uuid.uuid4())

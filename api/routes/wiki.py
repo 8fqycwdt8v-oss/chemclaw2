@@ -1,6 +1,7 @@
 """Wiki routes — GET/POST /api/wiki, GET/PATCH /api/wiki/{slug}."""
 from __future__ import annotations
 
+import logging
 import os
 import re
 from datetime import datetime
@@ -39,6 +40,7 @@ from api.db.queries.contradictions import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9-]*[a-z0-9]$')
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
@@ -125,7 +127,8 @@ async def list_wiki(
     if q:
         if len(q) > 500:
             raise HTTPException(status_code=400, detail="Query too long")
-        return await search_wiki_by_fts(db, q)
+        results = await search_wiki_by_fts(db, q)
+        return {"pages": results, "nextCursor": None}
 
     cursor_updated_at: datetime | None = None
     cursor_id: str | None = None
@@ -202,6 +205,9 @@ async def get_wiki(
     db: AsyncSession = Depends(get_db),
     user_id: str | None = Depends(get_optional_user),
 ):
+    limited = await pg_rate_limit(db, f"wiki-read:{user_id or 'anon'}", 60, 60_000)
+    if limited["limited"]:
+        raise HTTPException(status_code=429, detail="Too many requests")
     if as_of:
         try:
             as_of_dt = datetime.fromisoformat(as_of)
@@ -256,6 +262,10 @@ async def patch_wiki(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
+    limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
+    if limited["limited"]:
+        logger.warning("wiki_patch_rate_limited user=%s", user_id)
+        raise HTTPException(status_code=429, detail="Too many requests")
     existing = await get_wiki_page(db, slug, include_archived=True)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
@@ -355,6 +365,8 @@ async def mark_wiki_seen(
     page = await get_wiki_page(db, slug)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
+    if body.version > page["version"]:
+        raise HTTPException(status_code=400, detail=f"version {body.version} exceeds current page version {page['version']}")
     await mark_seen(db, user_id, page["id"], body.version)
     return {"ok": True}
 
