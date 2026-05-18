@@ -2,20 +2,19 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from openai import AsyncOpenAI
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user, get_optional_user
 from api.db.connection import get_db
+from api.embeddings import embed_texts
 from api.db.queries.rate_limit import make_key, pg_rate_limit
-from api.db.queries.wiki import (
+from api.db.queries.wiki_read import (
     get_wiki_page,
     get_wiki_page_at,
     get_wiki_page_citations,
@@ -23,8 +22,10 @@ from api.db.queries.wiki import (
     list_wiki_pages,
     list_wiki_projects,
     list_wiki_revisions,
-    patch_wiki_page,
     search_wiki_by_fts,
+)
+from api.db.queries.wiki_write import (
+    patch_wiki_page,
     upsert_wiki_page,
 )
 from api.db.queries.subscriptions import (
@@ -44,23 +45,6 @@ logger = logging.getLogger(__name__)
 
 _SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9-]*[a-z0-9]$')
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
-
-_oai_client: AsyncOpenAI | None = None
-
-
-def _get_oai() -> AsyncOpenAI:
-    global _oai_client
-    if _oai_client is None:
-        _oai_client = AsyncOpenAI(
-            api_key=os.environ.get("OPENAI_API_KEY", ""),
-            base_url=os.environ.get("OPENAI_BASE_URL") or None,
-        )
-    return _oai_client
-
-
-async def embed_texts(texts: list[str]) -> list[list[float]]:
-    resp = await _get_oai().embeddings.create(model="text-embedding-3-small", input=texts)
-    return [d.embedding for d in resp.data]
 
 
 class CitationIn(BaseModel):

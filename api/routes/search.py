@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth import get_optional_user
 from api.db.connection import get_db
 from api.db.queries.rate_limit import make_key, pg_rate_limit
-from api.db.queries.wiki import search_wiki_by_fts
+from api.db.queries.wiki_read import search_wiki_by_fts
 
 router = APIRouter()
 
