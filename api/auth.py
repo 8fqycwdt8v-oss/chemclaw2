@@ -119,6 +119,7 @@ async def get_optional_user(authorization: str | None = Header(None)) -> str | N
     except HTTPException as exc:
         if exc.status_code != 401:
             logger.warning("get_optional_user_unexpected_error status=%d", exc.status_code)
+            raise
         return None
 
 
