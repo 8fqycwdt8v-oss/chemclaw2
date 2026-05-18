@@ -30,7 +30,7 @@ async def list_contradictions(
     params: dict[str, Any] = {"lim": limit}
     page_clause = ""
     if page_id is not None:
-        page_clause = "AND page_id = :pid::uuid"
+        page_clause = "AND page_id = CAST(:pid AS uuid)"
         params["pid"] = page_id
     resolved_clause = "AND resolved_by IS NULL" if not resolved else ""
     result = await db.execute(
@@ -68,7 +68,7 @@ async def create_contradiction(
             text("""
                 INSERT INTO wiki_contradictions
                     (page_id, citation_a, citation_b, proposed_winner, reason)
-                VALUES (:pid::uuid, :citation_a, :citation_b, :proposed_winner, :reason)
+                VALUES (CAST(:pid AS uuid), :citation_a, :citation_b, :proposed_winner, :reason)
                 RETURNING id::text
             """),
             {
@@ -94,7 +94,7 @@ async def resolve_contradiction(
     page_id narrows the update to prevent cross-page ID guessing attacks.
     Returns True if the row was updated.
     """
-    page_clause = "AND page_id = :pid::uuid" if page_id is not None else ""
+    page_clause = "AND page_id = CAST(:pid AS uuid)" if page_id is not None else ""
     params: dict[str, Any] = {"cid": contradiction_id, "uid": resolved_by}
     if page_id is not None:
         params["pid"] = page_id
@@ -103,7 +103,7 @@ async def resolve_contradiction(
             text(f"""
                 UPDATE wiki_contradictions
                 SET resolved_by = :uid
-                WHERE id = :cid::uuid AND resolved_by IS NULL {page_clause}
+                WHERE id = CAST(:cid AS uuid) AND resolved_by IS NULL {page_clause}
                 RETURNING id
             """),
             params,

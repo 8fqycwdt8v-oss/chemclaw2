@@ -89,7 +89,7 @@ async def lookup_compound_properties(
             SELECT id::text, name, value_num, value_text, unit, method,
                    source_citation_id::text, measured_at
             FROM properties
-            WHERE compound_id = :cid::uuid
+            WHERE compound_id = CAST(:cid AS uuid)
             ORDER BY created_at DESC
         """),
         {"cid": compound_id},
@@ -185,7 +185,7 @@ async def upsert_external_fact(
                 INSERT INTO external_facts
                     (source_type, source_id, payload, content_text,
                      fetched_by, first_seen, last_seen)
-                VALUES (:source_type, :source_id, :payload::jsonb, :content_text,
+                VALUES (:source_type, :source_id, CAST(:payload AS jsonb), :content_text,
                         :fetched_by, now(), now())
                 ON CONFLICT (source_type, source_id) DO UPDATE
                     SET payload      = EXCLUDED.payload,
@@ -248,8 +248,8 @@ async def insert_compound_property(
                 INSERT INTO properties
                     (compound_id, name, value_num, value_text, unit, method,
                      source_citation_id, created_by)
-                VALUES (:cid::uuid, :name, :value_num, :value_text, :unit, :method,
-                        :source_citation_id::uuid, :created_by)
+                VALUES (CAST(:cid AS uuid), :name, :value_num, :value_text, :unit, :method,
+                        CAST(:source_citation_id AS uuid), :created_by)
                 RETURNING id::text
             """),
             {

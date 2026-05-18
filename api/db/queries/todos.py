@@ -52,9 +52,9 @@ async def upsert_todos(
                         v.position
                     FROM (
                         SELECT
-                            unnest(:texts::text[])  AS text,
-                            unnest(:statuses::text[]) AS status,
-                            unnest(:positions::int[]) AS position
+                            unnest(CAST(:texts AS text[]))  AS text,
+                            unnest(CAST(:statuses AS text[])) AS status,
+                            unnest(CAST(:positions AS int[])) AS position
                     ) v
                 """),
                 {
@@ -77,7 +77,7 @@ async def mark_todo_done(db: AsyncSession, todo_id: str, user_id: str) -> bool:
             text("""
                 UPDATE agent_todos
                 SET status = 'done', updated_at = NOW()
-                WHERE id = :id::uuid AND user_id = :uid
+                WHERE id = CAST(:id AS uuid) AND user_id = :uid
             """),
             {"id": todo_id, "uid": user_id},
         )

@@ -19,7 +19,7 @@ async def create_notification(
         text(
             """
             INSERT INTO notifications (user_id, type, payload)
-            VALUES (:uid, :type, :payload::jsonb)
+            VALUES (:uid, :type, CAST(:payload AS jsonb))
             RETURNING id::text
             """
         ),
@@ -81,7 +81,7 @@ async def mark_read(
                 UPDATE notifications
                 SET read = TRUE
                 WHERE user_id = :uid
-                  AND id = ANY(:ids::uuid[])
+                  AND id = ANY(CAST(:ids AS uuid[]))
                   AND read = FALSE
                 """
             ),

@@ -66,7 +66,7 @@ class PostgresSessionStore:
 
                 await db.execute(text("""
                     INSERT INTO agent_sessions (project_key, session_id, subpath, entries, mtime)
-                    VALUES (:project_key, :session_id, :subpath, :entries::jsonb, :mtime)
+                    VALUES (:project_key, :session_id, :subpath, CAST(:entries AS jsonb), :mtime)
                     ON CONFLICT (project_key, session_id, subpath) DO UPDATE
                         SET entries   = agent_sessions.entries || EXCLUDED.entries,
                             mtime     = EXCLUDED.mtime,

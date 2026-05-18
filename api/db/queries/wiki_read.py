@@ -53,12 +53,12 @@ async def semantic_search_wiki(
     result = await db.execute(
         text(f"""
             SELECT c.page_id::text, p.slug, p.title, p.maturity, c.text,
-                   (c.embedding <=> :vec::vector({EMBED_DIM})) AS distance
+                   (c.embedding <=> CAST(:vec AS vector({EMBED_DIM}))) AS distance
             FROM wiki_chunks c
             JOIN wiki_pages p ON p.id = c.page_id
             WHERE c.embedding IS NOT NULL
                   {archived_clause}
-              AND (c.embedding <=> :vec::vector({EMBED_DIM})) < :max_dist
+              AND (c.embedding <=> CAST(:vec AS vector({EMBED_DIM}))) < :max_dist
             ORDER BY distance
             LIMIT :pre_limit
         """),
@@ -96,7 +96,7 @@ async def list_wiki_pages(
         clauses.append("project = :project")
         params["project"] = project
     if cursor_updated_at and cursor_id:
-        clauses.append("(updated_at, id) < (:cur_ts, :cur_id::uuid)")
+        clauses.append("(updated_at, id) < (:cur_ts, CAST(:cur_id AS uuid))")
         params["cur_ts"] = cursor_updated_at
         params["cur_id"] = cursor_id
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
@@ -146,7 +146,7 @@ async def get_wiki_page_citations(db: AsyncSession, page_id: str) -> list[dict[s
         text("""
             SELECT id::text, citation_id, source_type, source_id, label, disputed
             FROM wiki_citations
-            WHERE page_id = :page_id::uuid
+            WHERE page_id = CAST(:page_id AS uuid)
         """),
         {"page_id": page_id},
     )
@@ -164,7 +164,7 @@ async def list_wiki_revisions(
         text("""
             SELECT id::text, page_id::text, version, title, updated_by, updated_at
             FROM wiki_revisions
-            WHERE page_id = :pid::uuid
+            WHERE page_id = CAST(:pid AS uuid)
             ORDER BY version DESC
             LIMIT :lim
         """),
@@ -183,7 +183,7 @@ async def get_wiki_revision(
             SELECT id::text, page_id::text, version, title, content, content_text,
                    updated_by, updated_at
             FROM wiki_revisions
-            WHERE page_id = :pid::uuid AND version = :v
+            WHERE page_id = CAST(:pid AS uuid) AND version = :v
         """),
         {"pid": page_id, "v": version},
     )
@@ -220,7 +220,7 @@ async def get_wiki_page_at(
             SELECT id::text, page_id::text, version, title, content, content_text,
                    updated_by, updated_at
             FROM wiki_revisions
-            WHERE page_id = :pid::uuid AND updated_at <= :as_of
+            WHERE page_id = CAST(:pid AS uuid) AND updated_at <= :as_of
             ORDER BY updated_at DESC
             LIMIT 1
         """),
@@ -235,7 +235,7 @@ async def get_wiki_page_at(
                 SELECT id::text, page_id::text, version, title, content, content_text,
                        updated_by, updated_at
                 FROM wiki_revisions
-                WHERE page_id = :pid::uuid
+                WHERE page_id = CAST(:pid AS uuid)
                 ORDER BY version ASC
                 LIMIT 1
             """),

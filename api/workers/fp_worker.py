@@ -107,8 +107,8 @@ async def compute_compound_fingerprints(db: AsyncSession) -> int:
                 continue
             await db.execute(text("""
                 UPDATE compounds
-                SET morgan_fp = :bits::bit(2048), morgan_fp_popcount = :pc, fp_computed_at = now()
-                WHERE id = :id::uuid AND morgan_fp IS NULL
+                SET morgan_fp = CAST(:bits AS bit(2048)), morgan_fp_popcount = :pc, fp_computed_at = now()
+                WHERE id = CAST(:id AS uuid) AND morgan_fp IS NULL
             """), {"bits": bits, "pc": bits.count('1'), "id": compound_id})
             await db.commit()
             computed += 1
@@ -143,8 +143,8 @@ async def compute_reaction_fingerprints(db: AsyncSession) -> int:
                 logger.error("drfp_invalid_bits reaction=%s", reaction_id)
                 continue
             await db.execute(text("""
-                UPDATE reactions SET drfp = :bits::bit(2048), fp_computed_at = now()
-                WHERE id = :id::uuid AND drfp IS NULL
+                UPDATE reactions SET drfp = CAST(:bits AS bit(2048)), fp_computed_at = now()
+                WHERE id = CAST(:id AS uuid) AND drfp IS NULL
             """), {"bits": bits, "id": reaction_id})
             await db.commit()
             computed += 1

@@ -525,7 +525,15 @@ def build_chemclaw_mcp_server(
         return {"id": contradiction_id}
 
     # ── lookup_regulatory_guidance ────────────────────────────────────────────
+    # ICH publishes guidelines under stable topic landing pages (quality-guidelines,
+    # multidisciplinary-guidelines, etc.) and per-document PDFs whose URLs change
+    # with each revision (e.g. database.ich.org/sites/default/files/...). The
+    # PDF URLs are not safe to hard-code here without an offline verification
+    # step against the current revision set — so we point at the stable topic
+    # pages and let the `topic` filter + 24h external_facts cache (below) handle
+    # the substantive matching. See BACKLOG.md Tier F (D2 → deferred).
     _ICH_URLS: dict[str, str] = {
+        # Quality (Q-series) — all under the stable Quality Guidelines page
         "ICH Q1": "https://www.ich.org/page/quality-guidelines",
         "ICH Q2": "https://www.ich.org/page/quality-guidelines",
         "ICH Q3A": "https://www.ich.org/page/quality-guidelines",
@@ -539,6 +547,7 @@ def build_chemclaw_mcp_server(
         "ICH Q9": "https://www.ich.org/page/quality-guidelines",
         "ICH Q10": "https://www.ich.org/page/quality-guidelines",
         "ICH Q11": "https://www.ich.org/page/quality-guidelines",
+        # Multidisciplinary
         "ICH M7": "https://www.ich.org/page/multidisciplinary-guidelines",
     }
 
