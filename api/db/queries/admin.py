@@ -98,3 +98,24 @@ async def get_eval_run(db: AsyncSession, run_id: str) -> dict[str, Any] | None:
     )
     row = result.one_or_none()
     return dict(row._mapping) if row else None
+
+
+async def get_campaign_queue_depth(db: AsyncSession) -> int:
+    result = await db.execute(
+        text("SELECT COUNT(*) FROM synthesis_campaigns WHERE status = 'running'")
+    )
+    return result.scalar_one()
+
+
+async def get_wiki_backlog_depth(db: AsyncSession) -> int:
+    result = await db.execute(
+        text("SELECT COUNT(*) FROM wiki_pages WHERE needs_review = true AND archived = false")
+    )
+    return result.scalar_one()
+
+
+async def get_pending_step_count(db: AsyncSession) -> int:
+    result = await db.execute(
+        text("SELECT COUNT(*) FROM campaign_steps WHERE status = 'pending'")
+    )
+    return result.scalar_one()

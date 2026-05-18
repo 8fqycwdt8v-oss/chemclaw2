@@ -4,9 +4,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime
-from typing import Any
-
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from openai import AsyncOpenAI
@@ -29,7 +27,6 @@ from api.db.queries.wiki import (
     upsert_wiki_page,
 )
 from api.db.queries.subscriptions import (
-    get_unread_count,
     list_subscriptions,
     mark_seen,
     subscribe,
@@ -414,7 +411,7 @@ async def resolve_wiki_contradiction(
     page = await get_wiki_page(db, slug, include_archived=True)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
-    found = await resolve_contradiction(db, contradiction_id, user_id)
+    found = await resolve_contradiction(db, contradiction_id, user_id, page_id=page["id"])
     if not found:
         raise HTTPException(status_code=404, detail="Contradiction not found or already resolved")
     return {"ok": True}

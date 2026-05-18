@@ -469,24 +469,23 @@ def build_chemclaw_mcp_server(
         Looks up external_facts by source_id, checks last_seen freshness, and returns
         whether the fact is still current (last_seen within 30 days).
         """
-        from sqlalchemy import text as sa_text
+        from api.db.queries.knowledge import get_external_fact_by_source_id
         from datetime import datetime as _dt, timezone, timedelta
         async with session_factory() as db:
-            result = await db.execute(
-                sa_text("SELECT source_type, last_seen FROM external_facts WHERE source_id = :sid LIMIT 1"),
-                {"sid": citation_id},
-            )
-            row = result.one_or_none()
+            row = await get_external_fact_by_source_id(db, citation_id)
         if not row:
             return {"found": False, "source_type": None, "last_seen": None, "stale": None}
         cutoff = _dt.now(tz=timezone.utc) - timedelta(days=30)
-        last_seen = row.last_seen
-        is_stale = last_seen is None or (
-            hasattr(last_seen, "tzinfo") and last_seen.replace(tzinfo=timezone.utc) < cutoff
-        )
+        last_seen = row["last_seen"]
+        if last_seen is None:
+            is_stale = True
+        elif last_seen.tzinfo is None:
+            is_stale = last_seen.replace(tzinfo=timezone.utc) < cutoff
+        else:
+            is_stale = last_seen < cutoff
         return {
             "found": True,
-            "source_type": row.source_type,
+            "source_type": row["source_type"],
             "last_seen": last_seen.isoformat() if hasattr(last_seen, "isoformat") else str(last_seen),
             "stale": is_stale,
         }
@@ -547,35 +546,42 @@ def build_chemclaw_mcp_server(
         Checks external_facts cache first (24h TTL), then fetches from ich.org.
         Returns the guideline page text or a topic-filtered excerpt.
         """
-        from api.db.queries.knowledge import search_external_facts, upsert_external_fact
-        from datetime import timezone, timedelta
+        from api.db.queries.knowledge import get_external_fact_by_source_id, upsert_external_fact
+        from datetime import datetime as _dt, timezone, timedelta
 
         guideline_key = guideline.strip().upper()
         # Normalise common variants: "ICH Q3A(R2)" -> "ICH Q3A"
         guideline_key = re.sub(r'\([^)]*\)', '', guideline_key).strip()
 
         cache_source_id = f"regulatory:{guideline_key}"
-        freshness_cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+        freshness_cutoff = _dt.now(tz=timezone.utc) - timedelta(hours=24)
 
         async with session_factory() as db:
-            cached = await search_external_facts(db, source_type="regulatory", query=guideline_key, limit=1)
+            # Look up by source_id (not FTS) so we always get the right guideline's cache entry.
+            entry = await get_external_fact_by_source_id(db, cache_source_id)
 
-        if cached:
-            entry = cached[0]
-            last_seen = entry.get("last_seen") or entry.get("fetched_at")
-            if last_seen and (
-                (hasattr(last_seen, "tzinfo") and last_seen >= freshness_cutoff)
-                or (isinstance(last_seen, str) and last_seen >= freshness_cutoff.isoformat())
-            ):
+        if entry:
+            last_seen = entry.get("last_seen")
+            if last_seen is not None:
+                if last_seen.tzinfo is None:
+                    last_seen = last_seen.replace(tzinfo=timezone.utc)
+            if last_seen and last_seen >= freshness_cutoff:
                 text_body = entry.get("content_text", "")
                 if topic:
                     idx = text_body.lower().find(topic.lower())
                     if idx >= 0:
                         text_body = text_body[max(0, idx - 100): idx + 2000]
+                payload = entry.get("payload") or {}
+                if isinstance(payload, str):
+                    import json as _json
+                    try:
+                        payload = _json.loads(payload)
+                    except Exception:
+                        payload = {}
                 return {
                     "guideline": guideline_key,
                     "summary": text_body[:3000],
-                    "url": entry.get("payload", {}).get("url", ""),
+                    "url": payload.get("url", ""),
                     "cached": True,
                 }
 

@@ -86,20 +86,26 @@ async def resolve_contradiction(
     db: AsyncSession,
     contradiction_id: str,
     resolved_by: str,
+    page_id: str | None = None,
 ) -> bool:
     """Mark a contradiction as resolved by resolved_by.
 
     Idempotent-safe: only updates when resolved_by IS NULL so the first resolver wins.
+    page_id narrows the update to prevent cross-page ID guessing attacks.
     Returns True if the row was updated.
     """
+    page_clause = "AND page_id = :pid::uuid" if page_id is not None else ""
+    params: dict[str, Any] = {"cid": contradiction_id, "uid": resolved_by}
+    if page_id is not None:
+        params["pid"] = page_id
     async with db.begin():
         result = await db.execute(
-            text("""
+            text(f"""
                 UPDATE wiki_contradictions
                 SET resolved_by = :uid
-                WHERE id = :cid::uuid AND resolved_by IS NULL
+                WHERE id = :cid::uuid AND resolved_by IS NULL {page_clause}
                 RETURNING id
             """),
-            {"cid": contradiction_id, "uid": resolved_by},
+            params,
         )
         return result.one_or_none() is not None

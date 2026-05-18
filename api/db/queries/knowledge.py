@@ -207,6 +207,24 @@ async def upsert_external_fact(
         return row[0], bool(row[1])
 
 
+async def get_external_fact_by_source_id(
+    db: AsyncSession,
+    source_id: str,
+) -> dict[str, Any] | None:
+    """Return the external_fact row matching source_id exactly, or None."""
+    result = await db.execute(
+        text("""
+            SELECT id::text, source_type, source_id, payload, content_text, last_seen
+            FROM external_facts
+            WHERE source_id = :sid
+            LIMIT 1
+        """),
+        {"sid": source_id},
+    )
+    row = result.one_or_none()
+    return dict(row._mapping) if row else None
+
+
 async def insert_compound_property(
     db: AsyncSession,
     compound_id: str,

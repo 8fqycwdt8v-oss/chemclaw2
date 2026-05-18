@@ -50,6 +50,7 @@ async def eln_webhook(
 
     secret = os.environ.get("ELN_WEBHOOK_SECRET", "")
     if not secret:
+        logger.warning("eln_webhook_not_configured")
         raise HTTPException(status_code=400, detail="ELN webhook not configured")
 
     body_bytes = await request.body()

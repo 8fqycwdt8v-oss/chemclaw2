@@ -52,5 +52,8 @@ async def get_feedback(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
+    limited = await pg_rate_limit(db, f"feedback-read:{user_id}", 60, 60_000)
+    if limited["limited"]:
+        raise HTTPException(status_code=429, detail="Too many requests")
     feedback = await list_session_feedback(db, session_id=session_id, user_id=user_id)
     return {"feedback": feedback}
