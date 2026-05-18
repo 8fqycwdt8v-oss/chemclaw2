@@ -168,6 +168,62 @@ async def get_pending_campaign_steps(
     return [dict(r._mapping) for r in result]
 
 
+async def get_pending_steps_for_campaigns(
+    db: AsyncSession,
+    campaign_ids: list[str],
+) -> dict[str, list[dict[str, Any]]]:
+    """Batch variant: fetch pending steps for many campaigns in one query.
+
+    Returns a dict mapping campaign_id (str) -> ordered list of step rows.
+    Campaigns with no pending steps are present with an empty list so callers
+    can iterate without per-campaign None checks.
+    """
+    out: dict[str, list[dict[str, Any]]] = {cid: [] for cid in campaign_ids}
+    if not campaign_ids:
+        return out
+    result = await db.execute(
+        text("""
+            SELECT id::text, campaign_id::text AS cid, step_idx, reaction_smiles,
+                   conditions, status, retry_count, next_retry_at
+            FROM campaign_steps
+            WHERE campaign_id = ANY(CAST(:ids AS uuid[])) AND status = 'pending'
+            ORDER BY campaign_id, step_idx
+        """),
+        {"ids": campaign_ids},
+    )
+    for row in result:
+        m = dict(row._mapping)
+        cid = m.pop("cid")
+        out.setdefault(cid, []).append(m)
+    return out
+
+
+async def all_complete_for_campaigns(
+    db: AsyncSession,
+    campaign_ids: list[str],
+) -> dict[str, bool]:
+    """Batch variant of all_steps_complete. Returns campaign_id → True iff
+    every step is complete AND the campaign has at least one step.
+    """
+    out: dict[str, bool] = {cid: False for cid in campaign_ids}
+    if not campaign_ids:
+        return out
+    result = await db.execute(
+        text("""
+            SELECT campaign_id::text AS cid,
+                   count(*) AS total,
+                   count(*) FILTER (WHERE status != 'complete') AS incomplete
+            FROM campaign_steps
+            WHERE campaign_id = ANY(CAST(:ids AS uuid[]))
+            GROUP BY campaign_id
+        """),
+        {"ids": campaign_ids},
+    )
+    for row in result:
+        out[row.cid] = row.total > 0 and row.incomplete == 0
+    return out
+
+
 async def get_steps_for_retry(db: AsyncSession) -> list[dict[str, Any]]:
     """Return failed steps that are eligible for retry.
 

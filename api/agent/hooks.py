@@ -164,21 +164,25 @@ def build_hooks(user_id: str, project_key: str, db_factory: Any) -> dict[str, li
             tool_name = input_data.get("tool_name", "")
             tool_input = input_data.get("tool_input", {})
 
-            # Budget cap check — fail open (non-security) but log on error.
+            # Budget cap check — atomic reserve. Fails open (non-security) on
+            # DB error but logs it. The atomic INSERT/UPDATE WHERE eliminates
+            # the TOCTOU window between read-then-increment.
             try:
-                from api.db.queries.budgets import get_budget_with_spend
+                from api.db.queries.budgets import try_consume_tool_call
                 async with db_factory() as db:
-                    budget_info = await get_budget_with_spend(db, project_key)
-                if budget_info:
-                    spend = budget_info.get("spend") or {}
-                    cap = budget_info.get("tool_calls_cap")
-                    used = spend.get("tool_calls", 0) or 0
-                    if cap is not None and used >= cap:
+                    result = await try_consume_tool_call(db, project_key)
+                if result is not None:
+                    used = result["used"]
+                    cap = result["cap"]
+                    if not result["ok"]:
                         logger.warning(
-                            "budget_cap_exceeded project=%s tool=%s used=%d cap=%d",
+                            "budget_cap_exceeded project=%s tool=%s used=%d cap=%s",
                             project_key, tool_name, used, cap,
                         )
-                        return {"decision": "block", "reason": f"Tool call budget exhausted ({used}/{cap} calls used this period)."}
+                        return {
+                            "decision": "block",
+                            "reason": f"Tool call budget exhausted ({used}/{cap} calls used this period).",
+                        }
                     if cap is not None and cap > 0 and (used / cap) >= 0.9:
                         logger.warning(
                             "budget_cap_near project=%s tool=%s used=%d cap=%d",
@@ -217,17 +221,11 @@ def build_hooks(user_id: str, project_key: str, db_factory: Any) -> dict[str, li
         except Exception:
             logger.error("post_tool_use_fact_check_error tool=%s", tool_name, exc_info=True)
 
-        # Increment spend — fail open (non-security).
-        try:
-            from api.db.queries.budgets import get_budget_with_spend, increment_spend
-            async with db_factory() as spend_db:
-                budget_info = await get_budget_with_spend(spend_db, project_key)
-            if budget_info:
-                period = budget_info.get("period", "day")
-                async with db_factory() as spend_db:
-                    await increment_spend(spend_db, project_key, period, tool_calls=1)
-        except Exception:
-            logger.error("post_tool_use_spend_increment_error project=%s", project_key, exc_info=True)
+        # tool_calls spend is reserved atomically in PreToolUse via
+        # try_consume_tool_call(); no PostToolUse increment is needed.
+        # Tokens and experiments still ride the post-stream / explicit-call
+        # paths (which don't have the same TOCTOU concern) and go through
+        # increment_spend() at their own call sites.
 
         return {}
 
