@@ -6,14 +6,22 @@ validates incoming Bearer tokens using PyJWT.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import os
+import re
 import time
 from typing import Any
 
 import jwt
 from fastapi import Header, HTTPException
 from jwt import PyJWKClient
+
+# Matches the sub-claim regex enforced by the GUI (api_client.py:_SUB_RE).
+# No dots or colons — they would break the svc token wire format.
+_SVC_SUB_RE = re.compile(r"^[A-Za-z0-9_\-|]{1,255}$")
+_SVC_TOKEN_MAX_AGE = 300  # seconds — bound replay window to ±5 min
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +48,34 @@ def _make_jwks_client() -> PyJWKClient:
             else "https://api.clerk.com/v1/jwks"
         )
     return PyJWKClient(jwks_url, headers={"User-Agent": "chemclaw2-backend/1.0"})
+
+
+def _verify_svc_token(token: str, secret: str) -> str:
+    """Verify a svc.{sub}.{iat}.{sig} service token issued by the GUI.
+
+    Fail closed on any parse error, bad sig, or expired iat.
+    """
+    parts = token.split(".", 3)
+    if len(parts) != 4 or parts[0] != "svc":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    _, sub, iat_str, sig = parts
+    if not _SVC_SUB_RE.match(sub):
+        logger.warning("svc_token_invalid_sub")
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        iat = int(iat_str)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    age = int(time.time()) - iat
+    if abs(age) > _SVC_TOKEN_MAX_AGE:
+        logger.warning("svc_token_expired sub=%s age=%ds", sub, age)
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    msg = f"{sub}:{iat}".encode()
+    expected = hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, sig):
+        logger.warning("svc_token_bad_sig sub=%s", sub)
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return sub
 
 
 def _get_jwks_client() -> PyJWKClient:
@@ -73,6 +109,12 @@ async def get_current_user(authorization: str | None = Header(None)) -> str:
             if not user_id:
                 raise HTTPException(status_code=401, detail="Unauthorized: empty mock user ID")
             return user_id
+
+    # Service-token path: GUI → backend via HMAC-SHA256 signed token.
+    # Only active when CHEMCLAW2_SERVICE_SECRET is set (production).
+    service_secret = os.environ.get("CHEMCLAW2_SERVICE_SECRET")
+    if service_secret and token.startswith("svc."):
+        return _verify_svc_token(token, service_secret)
 
     try:
         client = _get_jwks_client()

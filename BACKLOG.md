@@ -93,7 +93,6 @@
 - [api/tests] zero automated tests for gap-closure Phases 1-8 (feedback, todos, budgets, admin, campaigns, wiki-revisions/subscriptions/contradictions, notifications, integrations, audit); plan verification criteria in docs/superpowers/plans/read-chemclaw2-features-md-setup-a-inherited-raccoon.md should be encoded as pytest fixtures against a real DB
 - [agent/tools] lookup_regulatory_guidance uses the ich.org index page for all 13 Q-series guidelines rather than per-guideline PDF URLs; extend _ICH_URLS map with deep links once direct URLs are confirmed
 - [api/wiki] get_wiki_page_at: when a page has no revisions older than as_of but the page itself predates it, returns current or earliest revision without flagging that the returned content post-dates the requested timestamp; add a _temporal_exact bool field or a warning key to the response
-- [agent/budget] increment_spend is defined but never called — every pre-tool budget check sees used=0 regardless of actual usage; wire post_tool_use_hook to call increment_spend(db, project_key, period, tool_calls=1) after each successful tool invocation so the cap is actually enforced
 - [auth] Move ADMIN_USER_IDS check to startup validation so misconfiguration fails fast
 - [wiki] Split api/db/queries/wiki.py (~500+ lines) into wiki_read.py + wiki_write.py per 400-line rule
 - [wiki] Move embed_texts() from api/routes/wiki.py to api/embeddings.py; shared by routes, workers, and tools
