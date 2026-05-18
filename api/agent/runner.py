@@ -60,6 +60,20 @@ Return exactly: WINNER: <citation_id>\nREASON: <one sentence>"""
 
 MAX_PROMPT_BYTES = 100_000
 
+# Per-block cap on text emitted in a single SSE `text` event. Without this,
+# a single AssistantMessage text block containing a huge tool result can be
+# json-encoded into one frame and held in memory while it's flushed. 1 MB is
+# generous for normal chat text and small enough that tool-heavy sessions
+# can't OOM the worker. Truncated frames carry a `[truncated]` marker.
+SSE_TEXT_BLOCK_MAX_BYTES = 1_000_000
+
+
+def _cap_text_block(text: str) -> str:
+    raw = text.encode("utf-8")
+    if len(raw) <= SSE_TEXT_BLOCK_MAX_BYTES:
+        return text
+    return raw[:SSE_TEXT_BLOCK_MAX_BYTES].decode("utf-8", errors="ignore") + "\n[truncated]"
+
 
 def _get_env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
@@ -134,7 +148,8 @@ async def run_agent_streaming(
                 # Stream assistant text blocks
                 for block in message.content:
                     if hasattr(block, 'text'):
-                        yield f"data: {json.dumps({'type': 'text', 'text': block.text})}\n\n"
+                        text = _cap_text_block(block.text)
+                        yield f"data: {json.dumps({'type': 'text', 'text': text})}\n\n"
                     elif getattr(block, 'type', None) == 'tool_use':
                         yield f"data: {json.dumps({'type': 'tool_use', 'name': getattr(block, 'name', '')})}\n\n"
             elif isinstance(message, UserMessage):

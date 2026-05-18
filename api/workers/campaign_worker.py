@@ -101,8 +101,8 @@ async def process_running_campaigns(
 ) -> int:
     """Drive all running campaigns one step forward. Returns number of updates."""
     from api.db.queries.campaigns import (
-        all_steps_complete,
-        get_pending_campaign_steps,
+        all_complete_for_campaigns,
+        get_pending_steps_for_campaigns,
         get_running_campaigns,
         mark_step_complete,
         mark_step_failed,
@@ -112,9 +112,12 @@ async def process_running_campaigns(
     campaigns = await get_running_campaigns(db)
     updates = 0
 
+    campaign_ids = [c["id"] for c in campaigns]
+    pending_by_campaign = await get_pending_steps_for_campaigns(db, campaign_ids)
+
     for campaign in campaigns:
         campaign_id = campaign["id"]
-        pending_steps = await get_pending_campaign_steps(db, campaign_id)
+        pending_steps = pending_by_campaign.get(campaign_id, [])
 
         for step in pending_steps:
             step_id = step["id"]
@@ -133,9 +136,14 @@ async def process_running_campaigns(
                 except Exception:
                     logger.exception("campaign_step_fail_record_error step=%s", step_id)
 
-        # After processing pending steps, check if everything is now complete.
-        done = await all_steps_complete(db, campaign_id)
-        if done:
+    # After processing every pending step across every campaign, check
+    # completion in one batched query. Recompute because the mark_step_complete
+    # calls above may have flipped some campaigns to all-complete.
+    done_by_campaign = await all_complete_for_campaigns(db, campaign_ids)
+
+    for campaign in campaigns:
+        campaign_id = campaign["id"]
+        if done_by_campaign.get(campaign_id):
             try:
                 from api.db.queries.notifications import create_notification
                 async with db.begin():

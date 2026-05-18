@@ -78,6 +78,80 @@ async def increment_spend(
         )
 
 
+async def try_consume_tool_call(
+    db: AsyncSession,
+    project_key: str,
+) -> dict[str, Any] | None:
+    """Atomically reserve one tool_call against the project's budget.
+
+    Returns:
+      - None: no budget configured for this project (caller should allow).
+      - {"ok": True,  "used": N, "cap": cap_or_None}: reserved; tool may run.
+      - {"ok": False, "used": N, "cap": cap}: cap would be exceeded; block.
+
+    Replaces the read-then-increment pattern used previously by the
+    PreToolUse hook, which had a TOCTOU window where two concurrent tool
+    calls could both pass the check before either incremented. Here the
+    INSERT/UPDATE WHERE clause does the cap check inside the same SQL
+    statement, so concurrent calls serialize correctly.
+
+    Note: this charges for the call up-front (before the tool executes),
+    not after. A tool that subsequently fails still counts against the cap
+    — that's the intended semantics: the cap budgets attempts, not just
+    successes. PostToolUse no longer needs to increment tool_calls (it
+    still increments tokens/experiments via increment_spend).
+    """
+    budget = await get_project_budget(db, project_key)
+    if not budget:
+        return None
+    period = budget["period"]
+    cap = budget.get("tool_calls_cap")
+    period_start = period_start_for(period)
+
+    if cap is not None and cap <= 0:
+        return {"ok": False, "used": 0, "cap": cap}
+
+    if cap is None:
+        sql = text("""
+            INSERT INTO project_budget_spend (project_key, period_start, tool_calls)
+            VALUES (:pk, :ps, 1)
+            ON CONFLICT (project_key, period_start) DO UPDATE
+            SET tool_calls = project_budget_spend.tool_calls + 1,
+                updated_at = now()
+            RETURNING tool_calls
+        """)
+        params: dict[str, Any] = {"pk": project_key, "ps": period_start}
+    else:
+        sql = text("""
+            INSERT INTO project_budget_spend (project_key, period_start, tool_calls)
+            VALUES (:pk, :ps, 1)
+            ON CONFLICT (project_key, period_start) DO UPDATE
+            SET tool_calls = project_budget_spend.tool_calls + 1,
+                updated_at = now()
+            WHERE project_budget_spend.tool_calls + 1 <= :cap
+            RETURNING tool_calls
+        """)
+        params = {"pk": project_key, "ps": period_start, "cap": cap}
+
+    async with db.begin():
+        result = await db.execute(sql, params)
+        row = result.one_or_none()
+        if row is not None:
+            return {"ok": True, "used": row.tool_calls, "cap": cap}
+        # WHERE clause rejected the UPDATE — cap would be exceeded. Read
+        # current value for telemetry; safe because UPDATE didn't fire.
+        cur = await db.execute(
+            text(
+                "SELECT tool_calls FROM project_budget_spend "
+                "WHERE project_key = :pk AND period_start = :ps"
+            ),
+            {"pk": project_key, "ps": period_start},
+        )
+        cur_row = cur.one_or_none()
+        used = cur_row.tool_calls if cur_row else cap
+        return {"ok": False, "used": used, "cap": cap}
+
+
 async def record_override(
     db: AsyncSession,
     session_id: str,
