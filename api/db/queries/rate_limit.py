@@ -14,12 +14,29 @@ metrics. If you need fail-open behaviour, change the except clause to
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+# Anything that isn't a safe identifier character gets replaced with '_' so a
+# user id like "org_abc:user_xyz" can't alias buckets across the ':' bucket
+# separator.
+_RL_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def make_key(bucket: str, identifier: str | None) -> str:
+    """Compose a rate-limit bucket name.
+
+    The ':' character is reserved as the bucket/identifier separator. Clerk
+    user ids and other external identifiers are not guaranteed colon-free, so
+    sanitize identifier before composing.
+    """
+    safe = _RL_UNSAFE.sub("_", identifier) if identifier else "anon"
+    return f"{bucket}:{safe}"
 
 
 async def pg_rate_limit(

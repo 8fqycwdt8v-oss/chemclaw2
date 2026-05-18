@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_optional_user
 from api.db.connection import get_db
-from api.db.queries.rate_limit import pg_rate_limit
+from api.db.queries.rate_limit import make_key, pg_rate_limit
 from api.db.queries.wiki import search_wiki_by_fts
 
 router = APIRouter()
@@ -32,7 +32,7 @@ async def search_get(
     db: AsyncSession = Depends(get_db),
     user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, f"search:{user_id or 'anon'}", 30, 60_000)
+    limited = await pg_rate_limit(db, make_key("search", user_id), 30, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     results = await search_wiki_by_fts(db, q, limit=limit)
@@ -45,7 +45,7 @@ async def search_post(
     db: AsyncSession = Depends(get_db),
     user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, f"search:{user_id or 'anon'}", 30, 60_000)
+    limited = await pg_rate_limit(db, make_key("search", user_id), 30, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
 

@@ -20,7 +20,7 @@ from api.db.queries.admin import (
     list_tool_permissions,
     upsert_tool_permission,
 )
-from api.db.queries.rate_limit import pg_rate_limit
+from api.db.queries.rate_limit import make_key, pg_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ async def get_tool_permissions(
     db: AsyncSession = Depends(get_db),
     admin_id: str = Depends(get_admin_user),
 ):
-    limited = await pg_rate_limit(db, f"admin-read:{admin_id}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("admin-read", admin_id), 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     permissions = await list_tool_permissions(db, scope=scope, scope_id=scope_id)
@@ -56,7 +56,7 @@ async def create_tool_permission(
     db: AsyncSession = Depends(get_db),
     admin_id: str = Depends(get_admin_user),
 ):
-    limited = await pg_rate_limit(db, f"admin-write:{admin_id}", 30, 60_000)
+    limited = await pg_rate_limit(db, make_key("admin-write", admin_id), 30, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     permission_id = await upsert_tool_permission(
@@ -80,7 +80,7 @@ async def remove_tool_permission(
     db: AsyncSession = Depends(get_db),
     admin_id: str = Depends(get_admin_user),
 ):
-    limited = await pg_rate_limit(db, f"admin-write:{admin_id}", 30, 60_000)
+    limited = await pg_rate_limit(db, make_key("admin-write", admin_id), 30, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     deleted = await delete_tool_permission(db, permission_id, updated_by=admin_id)
@@ -95,7 +95,7 @@ async def list_eval(
     db: AsyncSession = Depends(get_db),
     admin_id: str = Depends(get_admin_user),
 ):
-    limited = await pg_rate_limit(db, f"admin-read:{admin_id}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("admin-read", admin_id), 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     runs = await list_eval_runs(db, limit=limit)
@@ -108,7 +108,7 @@ async def get_eval(
     db: AsyncSession = Depends(get_db),
     admin_id: str = Depends(get_admin_user),
 ):
-    limited = await pg_rate_limit(db, f"admin-read:{admin_id}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("admin-read", admin_id), 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     run = await get_eval_run(db, run_id)
@@ -123,7 +123,7 @@ async def admin_health(
     admin_id: str = Depends(get_admin_user),
 ) -> dict:
     """Extended health check — campaign queue depth, pending steps, wiki review backlog."""
-    limited = await pg_rate_limit(db, f"admin-health:{admin_id}", 20, 60_000)
+    limited = await pg_rate_limit(db, make_key("admin-health", admin_id), 20, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     try:

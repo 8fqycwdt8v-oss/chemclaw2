@@ -17,7 +17,7 @@ from claude_agent_sdk.types import (
 )
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
-from api.agent.hooks import scheduled_substance_gate, build_hooks
+from api.agent.hooks import build_hooks
 from api.agent.tools import build_chemclaw_mcp_server
 from api.db.queries.session_store import scoped_session_store
 
@@ -77,10 +77,9 @@ async def run_agent_streaming(
         yield f"data: {json.dumps({'type': 'error', 'message': 'prompt too large'})}\n\n"
         return
 
-    gate = scheduled_substance_gate(prompt)
-    if gate["blocked"]:
-        yield f"data: {json.dumps({'type': 'error', 'message': gate['reason'], 'blocked': True})}\n\n"
-        return
+    # Substance gate is the single choke-point in api/routes/chat.py before
+    # streaming begins. Don't re-fire it here: the prompt has already passed
+    # the gate or carries a recorded override.
 
     project_key = f"chemclaw2:{user_id}"
     store = scoped_session_store(session_factory, project_key)

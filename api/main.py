@@ -6,6 +6,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.auth import validate_auth_config
 from api.db.connection import init_db
 from api.routes.admin import router as admin_router
 from api.routes.audit import router as audit_router
@@ -23,6 +24,7 @@ from api.routes.wiki import router as wiki_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    validate_auth_config()
     init_db()
     # Optional: run fingerprint worker in-process (controlled by env var).
     # For production, prefer running `python -m api.workers.fp_worker` as a

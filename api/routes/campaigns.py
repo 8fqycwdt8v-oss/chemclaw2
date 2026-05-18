@@ -17,7 +17,7 @@ from api.db.queries.campaigns import (
     get_campaign_with_steps,
     list_user_campaigns,
 )
-from api.db.queries.rate_limit import pg_rate_limit
+from api.db.queries.rate_limit import make_key, pg_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ async def list_campaigns(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"campaigns-list:{user_id}", 30, 60_000)
+    limited = await pg_rate_limit(db, make_key("campaigns-list", user_id), 30, 60_000)
     if limited["limited"]:
         logger.info("rate_limit_denied: campaigns-list user=%s", user_id)
         raise HTTPException(status_code=429, detail="Too many requests")
@@ -76,7 +76,7 @@ async def get_campaign(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"campaigns-get:{user_id}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("campaigns-get", user_id), 60, 60_000)
     if limited["limited"]:
         logger.info("rate_limit_denied: campaigns-get user=%s", user_id)
         raise HTTPException(status_code=429, detail="Too many requests")
@@ -95,7 +95,7 @@ async def patch_campaign(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"campaigns-patch:{user_id}", 20, 60_000)
+    limited = await pg_rate_limit(db, make_key("campaigns-patch", user_id), 20, 60_000)
     if limited["limited"]:
         logger.info("rate_limit_denied: campaigns-patch user=%s", user_id)
         raise HTTPException(status_code=429, detail="Too many requests")

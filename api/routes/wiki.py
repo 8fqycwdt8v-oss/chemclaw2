@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user, get_optional_user
 from api.db.connection import get_db
-from api.db.queries.rate_limit import pg_rate_limit
+from api.db.queries.rate_limit import make_key, pg_rate_limit
 from api.db.queries.wiki import (
     get_wiki_page,
     get_wiki_page_at,
@@ -117,7 +117,7 @@ async def list_wiki(
     db: AsyncSession = Depends(get_db),
     user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, f"wiki-read:{user_id or 'anon'}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki-read", user_id), 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
 
@@ -163,7 +163,7 @@ async def create_wiki(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     if not _SLUG_RE.match(body.slug):
@@ -191,7 +191,7 @@ async def get_wiki_subscriptions(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"wiki-read:{user_id}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki-read", user_id), 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     subs = await list_subscriptions(db, user_id)
@@ -205,7 +205,7 @@ async def get_wiki(
     db: AsyncSession = Depends(get_db),
     user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, f"wiki-read:{user_id or 'anon'}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki-read", user_id), 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     if as_of:
@@ -232,7 +232,7 @@ async def update_wiki(
     user_id: str = Depends(get_current_user),
 ):
     """Replace a wiki page's content, title, and citations. Triggers re-embed."""
-    limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     existing = await get_wiki_page(db, slug, include_archived=True)
@@ -262,7 +262,7 @@ async def patch_wiki(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
     if limited["limited"]:
         logger.warning("wiki_patch_rate_limited user=%s", user_id)
         raise HTTPException(status_code=429, detail="Too many requests")
@@ -289,7 +289,7 @@ async def get_wiki_revisions(
     db: AsyncSession = Depends(get_db),
     user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, f"wiki-read:{user_id or 'anon'}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki-read", user_id), 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug, include_archived=True)
@@ -306,7 +306,7 @@ async def get_wiki_revision_by_version(
     db: AsyncSession = Depends(get_db),
     user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, f"wiki-read:{user_id or 'anon'}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki-read", user_id), 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug, include_archived=True)
@@ -326,7 +326,7 @@ async def subscribe_wiki(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug)
@@ -342,7 +342,7 @@ async def unsubscribe_wiki(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug)
@@ -359,7 +359,7 @@ async def mark_wiki_seen(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug)
@@ -380,7 +380,7 @@ async def get_wiki_contradictions(
     db: AsyncSession = Depends(get_db),
     user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, f"wiki-read:{user_id or 'anon'}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki-read", user_id), 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug, include_archived=True)
@@ -397,7 +397,7 @@ async def create_wiki_contradiction(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug)
@@ -417,7 +417,7 @@ async def resolve_wiki_contradiction(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"wiki:{user_id}", 20, 60_000)
+    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug, include_archived=True)

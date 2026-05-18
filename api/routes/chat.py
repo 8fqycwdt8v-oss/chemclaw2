@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user
 from api.db.connection import get_db, async_session_factory
-from api.db.queries.rate_limit import pg_rate_limit
+from api.db.queries.rate_limit import make_key, pg_rate_limit
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -84,7 +84,7 @@ async def chat(
     from api.agent.runner import run_agent_streaming
     from api.db.queries.budgets import record_override
 
-    limited = await pg_rate_limit(db, f"chat:{user_id}", 20, 60_000)
+    limited = await pg_rate_limit(db, make_key("chat", user_id), 20, 60_000)
     if limited["limited"]:
         logger.warning("chat_rate_limited user=%s", user_id)
         return _error_stream("Too many requests — please wait before sending another message", 429)

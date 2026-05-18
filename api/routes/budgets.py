@@ -15,7 +15,7 @@ from api.db.queries.budgets import (
     get_budget_with_spend,
     upsert_project_budget,
 )
-from api.db.queries.rate_limit import pg_rate_limit
+from api.db.queries.rate_limit import make_key, pg_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ async def get_budget(
     user_id: str = Depends(get_current_user),
 ):
     _check_ownership(project_key, user_id)
-    limited = await pg_rate_limit(db, f"budget-read:{user_id}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("budget-read", user_id), 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     row = await get_budget_with_spend(db, project_key)
@@ -61,7 +61,7 @@ async def put_budget(
     user_id: str = Depends(get_current_user),
 ):
     _check_ownership(project_key, user_id)
-    limited = await pg_rate_limit(db, f"budget-write:{user_id}", 10, 60_000)
+    limited = await pg_rate_limit(db, make_key("budget-write", user_id), 10, 60_000)
     if limited["limited"]:
         logger.warning("budget_put_rate_limited: user=%s", user_id)
         raise HTTPException(status_code=429, detail="Too many requests")
@@ -84,7 +84,7 @@ async def delete_budget(
     user_id: str = Depends(get_current_user),
 ):
     _check_ownership(project_key, user_id)
-    limited = await pg_rate_limit(db, f"budget-write:{user_id}", 10, 60_000)
+    limited = await pg_rate_limit(db, make_key("budget-write", user_id), 10, 60_000)
     if limited["limited"]:
         logger.warning("budget_delete_rate_limited: user=%s", user_id)
         raise HTTPException(status_code=429, detail="Too many requests")

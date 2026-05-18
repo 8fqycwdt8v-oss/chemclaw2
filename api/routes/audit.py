@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth import get_admin_user, get_current_user
 from api.db.connection import get_db
 from api.db.queries.audit import get_session_replay, list_overrides
-from api.db.queries.rate_limit import pg_rate_limit
+from api.db.queries.rate_limit import make_key, pg_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ async def audit_overrides(
 
     Rate limit: 30 per 60 s per admin user.
     """
-    limited = await pg_rate_limit(db, f"audit-overrides:{admin_id}", 30, 60_000)
+    limited = await pg_rate_limit(db, make_key("audit-overrides", admin_id), 30, 60_000)
     if limited["limited"]:
         logger.warning("audit_overrides_rate_limited admin=%s", admin_id)
         raise HTTPException(status_code=429, detail="Too many requests")
@@ -54,7 +54,7 @@ async def audit_redactions(
     admin_id: str = Depends(get_admin_user),
 ) -> dict[str, Any]:
     """List tool-call redaction events (gate_name='redaction'). Admin only."""
-    limited = await pg_rate_limit(db, f"audit-redactions:{admin_id}", 30, 60_000)
+    limited = await pg_rate_limit(db, make_key("audit-redactions", admin_id), 30, 60_000)
     if limited["limited"]:
         logger.warning("audit_redactions_rate_limited admin=%s", admin_id)
         raise HTTPException(status_code=429, detail="Too many requests")
@@ -80,7 +80,7 @@ async def audit_session_replay(
     they can only retrieve sessions they own.
     Rate limit: 20 per 60 s per user.
     """
-    limited = await pg_rate_limit(db, f"audit-session:{user_id}", 20, 60_000)
+    limited = await pg_rate_limit(db, make_key("audit-session", user_id), 20, 60_000)
     if limited["limited"]:
         logger.warning("audit_session_rate_limited user=%s", user_id)
         raise HTTPException(status_code=429, detail="Too many requests")

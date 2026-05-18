@@ -30,6 +30,43 @@ _JWKS_TTL_SECONDS = 3600
 _jwks_client: PyJWKClient | None = None
 _jwks_loaded_at: float = 0.0
 
+# Populated by validate_auth_config() at app startup. Falsy means "no admins
+# configured" — admin routes will refuse all access.
+_admin_user_ids: frozenset[str] = frozenset()
+_admin_ids_loaded: bool = False
+
+# Envs in which the mock-auth bypass is allowed. Anything else and an
+# ALLOW_MOCK_AUTH=1 raises at startup.
+_DEV_ENVS = {"dev", "development", "test", "local"}
+
+
+def validate_auth_config() -> None:
+    """One-shot startup validation of auth configuration.
+
+    Loads ADMIN_USER_IDS into a frozenset, and refuses startup when
+    ALLOW_MOCK_AUTH=1 is set outside a dev env (ENV ∉ {dev, development,
+    test, local}).
+    """
+    global _admin_user_ids, _admin_ids_loaded
+
+    if os.environ.get("ALLOW_MOCK_AUTH") == "1":
+        env = os.environ.get("ENV", "").lower()
+        if env not in _DEV_ENVS:
+            raise RuntimeError(
+                f"ALLOW_MOCK_AUTH=1 is set but ENV={env!r} is not a dev "
+                f"environment ({sorted(_DEV_ENVS)}). Refusing to start — "
+                f"this combination would bypass Clerk in production."
+            )
+        logger.warning("ALLOW_MOCK_AUTH is enabled (ENV=%s) — never set this in production", env)
+
+    raw = os.environ.get("ADMIN_USER_IDS", "")
+    _admin_user_ids = frozenset(x.strip() for x in raw.split(",") if x.strip())
+    _admin_ids_loaded = True
+    if not _admin_user_ids:
+        logger.warning("ADMIN_USER_IDS env var is empty — all admin routes will return 403")
+    else:
+        logger.info("admin_user_ids_loaded count=%d", len(_admin_user_ids))
+
 
 def _make_jwks_client() -> PyJWKClient:
     """Create a PyJWKClient pointing at the Clerk Frontend API JWKS endpoint.
@@ -131,10 +168,12 @@ async def get_current_user(authorization: str | None = Header(None)) -> str:
                 raise HTTPException(status_code=401, detail="Unauthorized")
         except ImportError:
             pass  # cryptography package unavailable; skip algorithm-confusion check
+        issuer = os.environ.get("CLERK_ISSUER") or None
         claims: dict[str, Any] = jwt.decode(
             token,
             signing_key.key,
             algorithms=["RS256"],
+            issuer=issuer,  # Validates the `iss` claim when CLERK_ISSUER is set; skipped otherwise for back-compat with envs that haven't configured it
             options={"verify_aud": False},  # Clerk tokens don't always have audience
         )
         user_id = claims.get("sub", "")
@@ -166,13 +205,18 @@ async def get_optional_user(authorization: str | None = Header(None)) -> str | N
 
 
 async def get_admin_user(authorization: str | None = Header(None)) -> str:
-    """Dependency that requires the caller to be in ADMIN_USER_IDS env var."""
+    """Dependency that requires the caller to be in ADMIN_USER_IDS env var.
+
+    ADMIN_USER_IDS is parsed once at startup by validate_auth_config(); this
+    dependency just checks membership in the cached frozenset.
+    """
     user_id = await get_current_user(authorization)
-    raw = os.environ.get("ADMIN_USER_IDS", "")
-    admin_ids = {x.strip() for x in raw.split(",") if x.strip()}
-    if not admin_ids:
-        logger.warning("ADMIN_USER_IDS env var is not set — all admin routes will return 403")
-    if user_id not in admin_ids:
+    if not _admin_ids_loaded:
+        # Defensive: validate_auth_config() should have run at startup, but if
+        # something imports get_admin_user before lifespan starts, fail closed.
+        logger.error("admin_check_before_startup_init user=%s", user_id)
+        raise HTTPException(status_code=503, detail="Auth not initialized")
+    if user_id not in _admin_user_ids:
         logger.warning("admin_access_denied: user=%s", user_id)
         raise HTTPException(status_code=403, detail="Admin access required")
     return user_id
