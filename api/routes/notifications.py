@@ -18,7 +18,7 @@ from api.db.queries.notifications import (
     mark_all_read,
     mark_read,
 )
-from api.db.queries.rate_limit import pg_rate_limit
+from api.db.queries.rate_limit import make_key, pg_rate_limit
 
 router = APIRouter()
 
@@ -37,7 +37,7 @@ async def get_notifications(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    limited = await pg_rate_limit(db, f"notifications-read:{user_id}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("notifications-read", user_id), 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
 
@@ -52,7 +52,7 @@ async def patch_notifications(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    limited = await pg_rate_limit(db, f"notifications-write:{user_id}", 30, 60_000)
+    limited = await pg_rate_limit(db, make_key("notifications-write", user_id), 30, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
 
@@ -72,7 +72,7 @@ async def notification_stream(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ) -> StreamingResponse:
-    limited = await pg_rate_limit(db, f"notifications-stream:{user_id}", 10, 60_000)
+    limited = await pg_rate_limit(db, make_key("notifications-stream", user_id), 10, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
 

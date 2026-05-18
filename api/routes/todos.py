@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user
 from api.db.connection import get_db
-from api.db.queries.rate_limit import pg_rate_limit
+from api.db.queries.rate_limit import make_key, pg_rate_limit
 from api.db.queries.todos import list_todos, mark_todo_done, upsert_todos
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ async def get_todos(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"todos-read:{user_id}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("todos-read", user_id), 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     todos = await list_todos(db, session_id, user_id)
@@ -53,7 +53,7 @@ async def replace_todos(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"todos-put:{user_id}", 30, 60_000)
+    limited = await pg_rate_limit(db, make_key("todos-put", user_id), 30, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     await upsert_todos(db, session_id, user_id, [t.model_dump() for t in body.todos])
@@ -68,7 +68,7 @@ async def patch_todo(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, f"todos-patch:{user_id}", 60, 60_000)
+    limited = await pg_rate_limit(db, make_key("todos-patch", user_id), 60, 60_000)
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
     updated = await mark_todo_done(db, todo_id, user_id)
