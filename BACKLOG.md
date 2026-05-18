@@ -33,7 +33,7 @@ Ordered batches, each sized to one PR. File paths and migration numbers referenc
 - **C1. Split `api/db/queries/wiki.py`** (521 LOC → ~260 LOC × 2)
   - `wiki_read.py`: list / get / search / `get_wiki_page_at` / revisions / citations / semantic search.
   - `wiki_write.py`: `upsert_wiki_page` / `patch_wiki_page` / chunking / embed-fan-out.
-  - Re-export from `api/db/queries/wiki/__init__.py` for back-compat (or update the ~10 call sites in one pass).
+  - Update the ~10 call sites in one pass — no re-export shim. `from api.db.queries.wiki_read import …` reads better than a compatibility layer, and one find-and-replace is cheaper than carrying the shim forever.
 - **C2. Extract embeddings module** (new `api/embeddings.py`)
   - Move `embed_texts` and `_get_oai` out of `api/routes/wiki.py`. Callers today: `routes/wiki.py`, `agent/tools.py` (semantic wiki lookup), `workers/campaign_worker.py` (campaign-wiki upsert).
 
