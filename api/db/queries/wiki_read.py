@@ -196,6 +196,28 @@ async def get_wiki_page_at(
     slug: str,
     as_of: datetime,
 ) -> dict[str, Any] | None:
+    """Return the page state at `as_of` (bi-temporal lookup).
+
+    The response always carries two extra fields callers can surface to UI
+    or audit:
+
+    - `temporal_exact: bool` — True iff the returned row's `updated_at` is
+      exactly the requested `as_of` (rare; usually False because as_of is
+      arbitrary).
+    - `temporal_warning: str | None` — human-readable note when the
+      returned content does NOT correspond to the requested moment. The
+      compliance §3.8 reproducibility story needs this signal so a stale
+      result isn't silently presented as authoritative.
+
+    Cases:
+      1. Current row's updated_at <= as_of: return it. exact iff equal.
+      2. Page exists but was updated after as_of and a matching revision
+         is found: return that revision blended with page-level fields.
+         exact iff revision.updated_at == as_of.
+      3. Page row predates as_of but no revision is older than as_of:
+         return the earliest revision with a warning that the response
+         post-dates the requested moment.
+    """
     # Check if the current page was already at or before as_of.
     current = await db.execute(
         text("""
@@ -212,7 +234,11 @@ async def get_wiki_page_at(
         return None
     page = dict(row._mapping)
     if page["updated_at"] <= as_of:
-        return page
+        return {
+            **page,
+            "temporal_exact": page["updated_at"] == as_of,
+            "temporal_warning": None,
+        }
     # Page exists but was updated after as_of — look in revisions for the version
     # whose updated_at is closest to but not after as_of.
     rev = await db.execute(
@@ -228,8 +254,8 @@ async def get_wiki_page_at(
     )
     rev_row = rev.one_or_none()
     if not rev_row:
-        # The page was created after as_of in terms of content, but the page row
-        # itself predates it — return the earliest known version.
+        # The page was created before as_of, but no revision is older than
+        # as_of — return the earliest known version and flag the gap.
         earliest = await db.execute(
             text("""
                 SELECT id::text, page_id::text, version, title, content, content_text,
@@ -242,5 +268,22 @@ async def get_wiki_page_at(
             {"pid": page["id"]},
         )
         earliest_row = earliest.one_or_none()
-        return dict(earliest_row._mapping) if earliest_row else None
-    return {**page, **dict(rev_row._mapping)}
+        if not earliest_row:
+            return None
+        rev_dict = dict(earliest_row._mapping)
+        return {
+            **page,
+            **rev_dict,
+            "temporal_exact": False,
+            "temporal_warning": (
+                "No revision older than the requested timestamp exists; "
+                "returning the earliest available revision which post-dates as_of."
+            ),
+        }
+    rev_dict = dict(rev_row._mapping)
+    return {
+        **page,
+        **rev_dict,
+        "temporal_exact": rev_dict["updated_at"] == as_of,
+        "temporal_warning": None,
+    }

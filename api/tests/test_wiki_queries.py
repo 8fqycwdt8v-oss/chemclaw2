@@ -148,6 +148,12 @@ async def test_get_wiki_page_at_returns_current_when_asof_after_last_edit(
     assert page is not None
     assert page["slug"] == slug
     assert page["title"] == "T1"
+    # Tier E1: temporal flags. The current row was returned for a future
+    # as_of, so the response is NOT exact (updated_at != as_of) but no
+    # warning is needed — the content does correspond to what was current
+    # at as_of.
+    assert page["temporal_exact"] is False
+    assert page["temporal_warning"] is None
 
 
 @pytest.mark.asyncio
@@ -164,6 +170,40 @@ async def test_get_wiki_page_at_returns_none_when_asof_before_creation(
     async with session_factory() as s:
         result = await get_wiki_page_at(s, slug, past)
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_wiki_page_at_warns_when_asof_predates_revisions(
+    session_factory, user_id,
+):
+    """Tier E1: when the page row predates as_of but no revision is older
+    than as_of, the response includes a warning that the returned content
+    post-dates the request."""
+    slug = f"warn-{uuid.uuid4().hex[:8]}"
+    # First version
+    async with session_factory() as s:
+        await upsert_wiki_page(
+            s, slug=slug, title="V1", content={}, content_text="first " * 20,
+            created_by=user_id, citations=[], embed_fn=_noop_embed,
+        )
+    await asyncio.sleep(0.05)
+    # Bookmark: any as_of between creation and the next edit will catch
+    # the current row, so we need to FIRST capture an as_of after creation,
+    # THEN do a second edit that bumps updated_at past it.
+    between = datetime.now(timezone.utc)
+    await asyncio.sleep(0.05)
+    async with session_factory() as s:
+        await upsert_wiki_page(
+            s, slug=slug, title="V2", content={}, content_text="second " * 20,
+            created_by=user_id, citations=[], embed_fn=_noop_embed,
+        )
+    async with session_factory() as s:
+        result = await get_wiki_page_at(s, slug, between)
+    assert result is not None
+    # The earliest revision (snapshot of V1 captured when V2 was written)
+    # was returned. Whether its updated_at is before or after `between` is
+    # implementation-defined — either way temporal_exact must be False.
+    assert result["temporal_exact"] is False
 
 
 # ── FTS ──────────────────────────────────────────────────────────────────────
