@@ -20,7 +20,7 @@ async def subscribe(db: AsyncSession, user_id: str, page_id: str) -> None:
         await db.execute(
             text("""
                 INSERT INTO wiki_subscriptions (user_id, page_id)
-                VALUES (:uid, :pid::uuid)
+                VALUES (:uid, CAST(:pid AS uuid))
                 ON CONFLICT DO NOTHING
             """),
             {"uid": user_id, "pid": page_id},
@@ -33,7 +33,7 @@ async def unsubscribe(db: AsyncSession, user_id: str, page_id: str) -> bool:
         result = await db.execute(
             text("""
                 DELETE FROM wiki_subscriptions
-                WHERE user_id = :uid AND page_id = :pid::uuid
+                WHERE user_id = :uid AND page_id = CAST(:pid AS uuid)
                 RETURNING page_id
             """),
             {"uid": user_id, "pid": page_id},
@@ -93,7 +93,7 @@ async def mark_seen(
                 UPDATE wiki_subscriptions
                 SET last_seen_version = :v
                 WHERE user_id = :uid
-                  AND page_id = :pid::uuid
+                  AND page_id = CAST(:pid AS uuid)
                   AND last_seen_version < :v
             """),
             {"uid": user_id, "pid": page_id, "v": version},

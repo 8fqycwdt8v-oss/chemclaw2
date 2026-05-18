@@ -26,7 +26,7 @@ async def find_similar_reactions(
             SELECT id::text, rxn_smiles, name, conditions, drfp::text AS fp
             FROM reactions
             WHERE drfp IS NOT NULL
-            ORDER BY drfp <~> :bits::bit(2048)
+            ORDER BY drfp <~> CAST(:bits AS bit(2048))
             LIMIT 100
         """),
         {"bits": query_fp_bits},

@@ -147,7 +147,7 @@ async def upsert_wiki_page(
         result = await db.execute(
             text(f"""
                 INSERT INTO wiki_pages (slug, title, content, content_text, created_by, updated_by{meta_cols})
-                VALUES (:slug, :title, :content::jsonb, :content_text, :created_by, :updated_by{meta_vals})
+                VALUES (:slug, :title, CAST(:content AS jsonb), :content_text, :created_by, :updated_by{meta_vals})
                 ON CONFLICT (slug) DO UPDATE SET
                     title        = EXCLUDED.title,
                     content      = EXCLUDED.content,
@@ -171,13 +171,13 @@ async def upsert_wiki_page(
 
         if content_changed:
             await db.execute(
-                text("DELETE FROM wiki_chunks WHERE page_id = :pid::uuid"),
+                text("DELETE FROM wiki_chunks WHERE page_id = CAST(:pid AS uuid)"),
                 {"pid": page_id},
             )
             if chunks:
                 # Batch insert all chunks in one statement instead of N round-trips.
                 rows = ",".join(
-                    f"(:pid::uuid, {i}, :text_{i}, :emb_{i}::vector)"
+                    f"(CAST(:pid AS uuid), {i}, :text_{i}, CAST(:emb_{i} AS vector))"
                     for i in range(len(chunks))
                 )
                 batch_params: dict[str, Any] = {"pid": page_id}
@@ -191,7 +191,7 @@ async def upsert_wiki_page(
 
         # Always replace citations
         await db.execute(
-            text("DELETE FROM wiki_citations WHERE page_id = :pid::uuid"),
+            text("DELETE FROM wiki_citations WHERE page_id = CAST(:pid AS uuid)"),
             {"pid": page_id},
         )
         for c in citations:
@@ -209,7 +209,7 @@ async def upsert_wiki_page(
             await db.execute(
                 text("""
                     INSERT INTO wiki_citations (page_id, citation_id, source_type, source_id, label)
-                    VALUES (:page_id::uuid, :citation_id, :source_type, :source_id, :label)
+                    VALUES (CAST(:page_id AS uuid), :citation_id, :source_type, :source_id, :label)
                 """),
                 {
                     "page_id": page_id,
@@ -226,7 +226,7 @@ async def upsert_wiki_page(
             subs = await db.execute(
                 text("""
                     SELECT user_id FROM wiki_subscriptions
-                    WHERE page_id = :pid::uuid AND user_id != :author
+                    WHERE page_id = CAST(:pid AS uuid) AND user_id != :author
                 """),
                 {"pid": page_id, "author": created_by},
             )
@@ -234,7 +234,7 @@ async def upsert_wiki_page(
                 await db.execute(
                     text("""
                         INSERT INTO notifications (user_id, type, payload)
-                        VALUES (:uid, 'wiki_updated', :payload::jsonb)
+                        VALUES (:uid, 'wiki_updated', CAST(:payload AS jsonb))
                     """),
                     {
                         "uid": sub.user_id,

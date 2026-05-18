@@ -45,7 +45,7 @@ async def _add_steps(
                     text("""
                         INSERT INTO campaign_steps
                             (campaign_id, step_idx, reaction_smiles, conditions, status)
-                        VALUES (:cid::uuid, :idx, :smi, :cond, :st)
+                        VALUES (CAST(:cid AS uuid), :idx, :smi, :cond, :st)
                     """),
                     {
                         "cid": campaign_id, "idx": idx,

@@ -51,7 +51,7 @@ async def update_campaign_status(
     Source-state predicate excludes terminal statuses to prevent
     double-transitions.
     """
-    plan_clause = ", plan = :plan::jsonb" if plan is not None else ""
+    plan_clause = ", plan = CAST(:plan AS jsonb)" if plan is not None else ""
     params: dict[str, Any] = {
         "id": campaign_id,
         "user_id": user_id,
@@ -64,7 +64,7 @@ async def update_campaign_status(
         text(f"""
             UPDATE synthesis_campaigns
             SET status = :status, updated_at = now(){plan_clause}
-            WHERE id = :id::uuid
+            WHERE id = CAST(:id AS uuid)
               AND created_by = :user_id
               AND status = ANY(:statuses)
         """),
@@ -83,7 +83,7 @@ async def system_advance_campaign(
     Only callable from background workers. Never expose via HTTP routes.
     Does NOT commit — caller manages the transaction.
     """
-    plan_clause = ", plan = :plan::jsonb" if plan is not None else ""
+    plan_clause = ", plan = CAST(:plan AS jsonb)" if plan is not None else ""
     params: dict[str, Any] = {
         "id": campaign_id,
         "status": status,
@@ -95,7 +95,7 @@ async def system_advance_campaign(
         text(f"""
             UPDATE synthesis_campaigns
             SET status = :status, updated_at = now(){plan_clause}
-            WHERE id = :id::uuid
+            WHERE id = CAST(:id AS uuid)
               AND status = ANY(:statuses)
         """),
         params,
@@ -135,7 +135,7 @@ async def add_campaign_step(
     result = await db.execute(
         text("""
             INSERT INTO campaign_steps (campaign_id, step_idx, reaction_smiles, conditions)
-            VALUES (:campaign_id::uuid, :step_idx, :reaction_smiles, :conditions)
+            VALUES (CAST(:campaign_id AS uuid), :step_idx, :reaction_smiles, :conditions)
             ON CONFLICT (campaign_id, step_idx) DO UPDATE
                 SET reaction_smiles = EXCLUDED.reaction_smiles,
                     conditions      = EXCLUDED.conditions
@@ -160,7 +160,7 @@ async def get_pending_campaign_steps(
             SELECT id::text, step_idx, reaction_smiles, conditions, status,
                    retry_count, next_retry_at
             FROM campaign_steps
-            WHERE campaign_id = :campaign_id::uuid AND status = 'pending'
+            WHERE campaign_id = CAST(:campaign_id AS uuid) AND status = 'pending'
             ORDER BY step_idx
         """),
         {"campaign_id": campaign_id},
@@ -264,7 +264,7 @@ async def mark_step_failed(
                 retry_count   = :retry_count,
                 next_retry_at = now() + :backoff * interval '1 minute',
                 updated_at    = now()
-            WHERE id = :id::uuid
+            WHERE id = CAST(:id AS uuid)
               AND status = 'pending'
         """),
         {"id": step_id, "retry_count": retry_count, "backoff": backoff_minutes},
@@ -284,9 +284,9 @@ async def mark_step_complete(
         text("""
             UPDATE campaign_steps
             SET status     = 'complete',
-                result     = :result::jsonb,
+                result     = CAST(:result AS jsonb),
                 updated_at = now()
-            WHERE id = :id::uuid
+            WHERE id = CAST(:id AS uuid)
               AND status = 'pending'
         """),
         {"id": step_id, "result": json.dumps(result) if result is not None else None},
@@ -314,7 +314,7 @@ async def all_steps_complete(db: AsyncSession, campaign_id: str) -> bool:
                 count(*) AS total,
                 count(*) FILTER (WHERE status != 'complete') AS incomplete
             FROM campaign_steps
-            WHERE campaign_id = :campaign_id::uuid
+            WHERE campaign_id = CAST(:campaign_id AS uuid)
         """),
         {"campaign_id": campaign_id},
     )
@@ -333,7 +333,7 @@ async def list_user_campaigns(
     params: dict[str, Any] = {"uid": user_id, "lim": limit}
     cursor_clause = ""
     if cursor_updated_at is not None and cursor_id is not None:
-        cursor_clause = "AND (updated_at, id) < (:cur_ts, :cur_id::uuid)"
+        cursor_clause = "AND (updated_at, id) < (:cur_ts, CAST(:cur_id AS uuid))"
         params["cur_ts"] = cursor_updated_at
         params["cur_id"] = cursor_id
     result = await db.execute(
@@ -362,7 +362,7 @@ async def get_campaign_with_steps(
             SELECT id::text, session_id, created_by, target_smiles, status, plan,
                    created_at, updated_at
             FROM synthesis_campaigns
-            WHERE id = :cid::uuid AND created_by = :uid
+            WHERE id = CAST(:cid AS uuid) AND created_by = :uid
         """),
         {"cid": campaign_id, "uid": user_id},
     )
@@ -374,7 +374,7 @@ async def get_campaign_with_steps(
             SELECT id::text, step_idx, reaction_smiles, conditions, status,
                    retry_count, next_retry_at, result, updated_at
             FROM campaign_steps
-            WHERE campaign_id = :cid::uuid
+            WHERE campaign_id = CAST(:cid AS uuid)
             ORDER BY step_idx
         """),
         {"cid": campaign_id},
@@ -397,7 +397,7 @@ async def reset_steps_for_retry(db: AsyncSession, step_ids: list[str]) -> None:
         text("""
             UPDATE campaign_steps
             SET status = 'pending', updated_at = now()
-            WHERE id = ANY(:ids::uuid[])
+            WHERE id = ANY(CAST(:ids AS uuid[]))
               AND status = 'failed'
         """),
         {"ids": step_ids},
@@ -415,7 +415,7 @@ async def cancel_campaign(
             text("""
                 UPDATE synthesis_campaigns
                 SET status = 'failed', updated_at = now()
-                WHERE id = :cid::uuid
+                WHERE id = CAST(:cid AS uuid)
                   AND created_by = :uid
                   AND status = ANY(:non_terminal)
                 RETURNING id

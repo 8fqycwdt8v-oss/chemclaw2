@@ -72,7 +72,7 @@ async def delete_tool_permission(
     """Delete a tool permission by id. Returns True if a row was deleted."""
     async with db.begin():
         result = await db.execute(
-            text("DELETE FROM tool_permissions WHERE id = :id::uuid RETURNING id"),
+            text("DELETE FROM tool_permissions WHERE id = CAST(:id AS uuid) RETURNING id"),
             {"id": permission_id},
         )
         found = result.one_or_none() is not None
@@ -93,7 +93,7 @@ async def list_eval_runs(db: AsyncSession, limit: int = 20) -> list[dict[str, An
 async def get_eval_run(db: AsyncSession, run_id: str) -> dict[str, Any] | None:
     """Return a single eval run by UUID, or None if not found."""
     result = await db.execute(
-        text("SELECT * FROM eval_runs WHERE id = :id::uuid"),
+        text("SELECT * FROM eval_runs WHERE id = CAST(:id AS uuid)"),
         {"id": run_id},
     )
     row = result.one_or_none()
