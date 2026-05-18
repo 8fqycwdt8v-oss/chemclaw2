@@ -65,6 +65,9 @@ async def get_current_user(authorization: str | None = Header(None)) -> str:
 
     # Mock auth: only active when explicitly enabled via env var.
     if os.environ.get("ALLOW_MOCK_AUTH") == "1":
+        if not hasattr(get_current_user, "_mock_auth_warned"):
+            logger.warning("ALLOW_MOCK_AUTH is enabled — NEVER set this in production")
+            get_current_user._mock_auth_warned = True  # type: ignore[attr-defined]
         if token.startswith("mock:"):
             user_id = token.removeprefix("mock:")
             if not user_id:
@@ -75,10 +78,17 @@ async def get_current_user(authorization: str | None = Header(None)) -> str:
         client = _get_jwks_client()
         # get_signing_key_from_jwt may do a blocking HTTP fetch on cache miss;
         # run it in a thread pool to keep the event loop unblocked.
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         signing_key = await loop.run_in_executor(
             None, client.get_signing_key_from_jwt, token
         )
+        try:
+            from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey as _RSAPublicKey
+            if not isinstance(signing_key.key, _RSAPublicKey):
+                logger.warning("jwks_key_type_unexpected type=%s", type(signing_key.key).__name__)
+                raise HTTPException(status_code=401, detail="Unauthorized")
+        except ImportError:
+            pass  # cryptography package unavailable; skip algorithm-confusion check
         claims: dict[str, Any] = jwt.decode(
             token,
             signing_key.key,
@@ -106,5 +116,21 @@ async def get_optional_user(authorization: str | None = Header(None)) -> str | N
         return None
     try:
         return await get_current_user(authorization)
-    except HTTPException:
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            logger.warning("get_optional_user_unexpected_error status=%d", exc.status_code)
+            raise
         return None
+
+
+async def get_admin_user(authorization: str | None = Header(None)) -> str:
+    """Dependency that requires the caller to be in ADMIN_USER_IDS env var."""
+    user_id = await get_current_user(authorization)
+    raw = os.environ.get("ADMIN_USER_IDS", "")
+    admin_ids = {x.strip() for x in raw.split(",") if x.strip()}
+    if not admin_ids:
+        logger.warning("ADMIN_USER_IDS env var is not set — all admin routes will return 403")
+    if user_id not in admin_ids:
+        logger.warning("admin_access_denied: user=%s", user_id)
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user_id

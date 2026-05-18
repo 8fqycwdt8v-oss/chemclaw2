@@ -71,7 +71,7 @@ def compute_morgan_fp(smiles: str, radius: int = 2, n_bits: int = 2048) -> dict:
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         log.warning("invalid_smiles", extra={"smiles_len": len(smiles), "tool": "compute_morgan_fp"})
-        raise ValueError(f"Invalid SMILES: {smiles}")
+        raise ValueError("Invalid SMILES")
     fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=radius, nBits=n_bits)
     bit_str = fp.ToBitString()
     log.info(
@@ -99,14 +99,13 @@ def substructure_match(smiles: str, smarts: str) -> dict:
     Returns {"match": bool}. Invalid SMILES → match: false. Invalid SMARTS raises.
     """
     _check_smiles_len("smiles", smiles)
-    if len(smarts) > MAX_SMILES_LEN:
-        raise ValueError(f"smarts exceeds {MAX_SMILES_LEN} chars (got {len(smarts)})")
+    _check_smiles_len("smarts", smarts)
     if not smarts.strip():
         raise ValueError("smarts pattern is required")
     pattern = Chem.MolFromSmarts(smarts)
     if pattern is None:
         log.warning("invalid_smarts", extra={"smarts_len": len(smarts)})
-        raise ValueError(f"Invalid SMARTS: {smarts}")
+        raise ValueError("Invalid SMARTS")
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return {"match": False}

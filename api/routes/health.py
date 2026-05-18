@@ -1,10 +1,11 @@
 import logging
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
 
 from api.db.connection import get_db
+from api.db.queries.compounds import count_pending_fingerprints
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -16,19 +17,14 @@ async def health(db: AsyncSession = Depends(get_db)):
     pending_compounds = 0
     pending_reactions = 0
     try:
-        result = await db.execute(text("""
-            SELECT
-              (SELECT count(*) FROM compounds WHERE morgan_fp IS NULL)::int AS pending_compounds,
-              (SELECT count(*) FROM reactions  WHERE drfp      IS NULL)::int AS pending_reactions
-        """))
-        row = result.one()
-        pending_compounds = row.pending_compounds
-        pending_reactions = row.pending_reactions
+        counts = await count_pending_fingerprints(db)
+        pending_compounds = counts["pending_compounds"]
+        pending_reactions = counts["pending_reactions"]
         db_ok = True
     except Exception:
         logger.warning("health_db_check_failed", exc_info=True)
 
-    return {
+    body = {
         "ok": db_ok,
         "db": db_ok,
         "fingerprint_backlog": {
@@ -37,3 +33,4 @@ async def health(db: AsyncSession = Depends(get_db)):
         },
         "worker_warn": (pending_compounds + pending_reactions) > 500,
     }
+    return JSONResponse(content=body, status_code=200 if db_ok else 503)

@@ -59,12 +59,24 @@ async def _call_mcp_tool(server_module: str, tool_name: str, tool_input: dict[st
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, _ = await asyncio.wait_for(proc.communicate(json.dumps(request).encode()), timeout=30.0)
+        stdout, stderr_bytes = await asyncio.wait_for(
+            proc.communicate(json.dumps(request).encode()), timeout=30.0
+        )
+        if stderr_bytes:
+            logger.debug("mcp_stderr server=%s tool=%s: %s", server_module, tool_name,
+                         stderr_bytes.decode(errors="replace")[:500])
     except asyncio.TimeoutError:
         try:
-            proc.kill()
+            proc.terminate()
         except Exception:
             pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
         raise RuntimeError(f"MCP call to {server_module}.{tool_name} timed out")
 
     for line in reversed(stdout.decode().strip().splitlines()):
@@ -153,8 +165,12 @@ async def compute_reaction_fingerprints(db: AsyncSession) -> int:
 async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
     global _in_flight
     logger.info("fp_worker_started")
-    while True:
-        if not _in_flight:
+    _cycle = 0
+    try:
+        while True:
+            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+            if _in_flight:
+                continue
             _in_flight = True
             try:
                 async with session_factory() as db:
@@ -162,11 +178,15 @@ async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
                     r = await compute_reaction_fingerprints(db)
                 if c or r:
                     logger.info("fp_worker_cycle compounds=%d reactions=%d", c, r)
+                _cycle += 1
+                if _cycle % 10 == 0:
+                    logger.info("fp_worker_heartbeat cycle=%d", _cycle)
             except Exception:
                 logger.exception("fp_worker_cycle_error")
             finally:
                 _in_flight = False
-        await asyncio.sleep(POLL_INTERVAL_SECONDS)
+    except asyncio.CancelledError:
+        logger.info("fp_worker_shutdown")
 
 
 if __name__ == "__main__":

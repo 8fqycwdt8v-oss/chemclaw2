@@ -51,11 +51,16 @@ def scheduled_substance_gate(prompt: str) -> dict[str, Any]:
 _SSN_RE = re.compile(r'\b\d{3}-\d{2}-\d{4}\b')
 
 _SECRET_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
+    # Anthropic SDK keys (must come before generic sk- pattern)
+    (re.compile(r'\bsk-ant-[A-Za-z0-9_-]{20,}\b'), '[REDACTED-ANTHROPIC-KEY]', 'anthropic_key'),
+    # Generic short-key prefixes (OpenAI, Stripe, etc.)
     (re.compile(r'\b(sk|rk|pk)[-_][A-Za-z0-9]{20,}\b'), '[REDACTED-API-KEY]', 'api_key'),
     (re.compile(r'\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{16,}\b'), 'Bearer [REDACTED]', 'bearer_token'),
     (re.compile(r'\bAKIA[0-9A-Z]{16}\b'), '[REDACTED-AWS-KEY]', 'aws_access_key'),
     (re.compile(r'\bghp_[A-Za-z0-9]{30,}\b'), '[REDACTED-GITHUB-TOKEN]', 'github_pat'),
     (re.compile(r'\bgithub_pat_[A-Za-z0-9_]{30,}\b'), '[REDACTED-GITHUB-TOKEN]', 'github_pat'),
+    # SSH/PEM private keys
+    (re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----'), '[REDACTED-PRIVATE-KEY]', 'private_key'),
 ]
 
 
@@ -69,6 +74,33 @@ def _redact_secrets(s: str, tool_name: str) -> tuple[str, bool]:
             out = pattern.sub(sub, out)
             matched = True
     return out, matched
+
+
+def _redact_obj(obj: Any, tool_name: str) -> tuple[Any, bool]:
+    """Recursively redact secrets from nested dicts/lists/strings."""
+    if isinstance(obj, str):
+        new_s, changed = _redact_secrets(obj, tool_name)
+        if _SSN_RE.search(obj):
+            new_s = _SSN_RE.sub('[REDACTED-SSN]', new_s)
+            changed = True
+        return new_s, changed
+    if isinstance(obj, dict):
+        new_d = {}
+        any_changed = False
+        for k, v in obj.items():
+            new_v, changed = _redact_obj(v, tool_name)
+            new_d[k] = new_v
+            any_changed = any_changed or changed
+        return new_d, any_changed
+    if isinstance(obj, list):
+        new_l = []
+        any_changed = False
+        for item in obj:
+            new_item, changed = _redact_obj(item, tool_name)
+            new_l.append(new_item)
+            any_changed = any_changed or changed
+        return new_l, any_changed
+    return obj, False
 
 
 def _extract_string_values(obj: Any, depth: int = 0) -> list[str]:
@@ -126,32 +158,49 @@ def build_hooks(user_id: str, project_key: str, db_factory: Any) -> dict[str, li
     from claude_agent_sdk.types import HookMatcher
 
     async def pre_tool_use_hook(input_data: dict[str, Any]) -> dict[str, Any]:
-        if input_data.get("hook_event_name") != "PreToolUse":
+        try:
+            if input_data.get("hook_event_name") != "PreToolUse":
+                return {}
+            tool_name = input_data.get("tool_name", "")
+            tool_input = input_data.get("tool_input", {})
+
+            # Budget cap check — fail open (non-security) but log on error.
+            try:
+                from api.db.queries.budgets import get_budget_with_spend
+                async with db_factory() as db:
+                    budget_info = await get_budget_with_spend(db, project_key)
+                if budget_info:
+                    spend = budget_info.get("spend") or {}
+                    cap = budget_info.get("tool_calls_cap")
+                    used = spend.get("tool_calls", 0) or 0
+                    if cap is not None and used >= cap:
+                        logger.warning(
+                            "budget_cap_exceeded project=%s tool=%s used=%d cap=%d",
+                            project_key, tool_name, used, cap,
+                        )
+                        return {"decision": "block", "reason": f"Tool call budget exhausted ({used}/{cap} calls used this period)."}
+                    if cap is not None and cap > 0 and (used / cap) >= 0.9:
+                        logger.warning(
+                            "budget_cap_near project=%s tool=%s used=%d cap=%d",
+                            project_key, tool_name, used, cap,
+                        )
+            except Exception:
+                logger.error("budget_check_failed project=%s tool=%s", project_key, tool_name, exc_info=True)
+
+            # Block controlled substance names in tool params
+            for val in _extract_string_values(tool_input):
+                if _CONTROLLED_SUBSTANCES.search(_normalize(val)):
+                    logger.warning("tool_input_block_controlled_substance", extra={"tool": tool_name})
+                    return {"decision": "block", "reason": "Tool input blocked: contains a term that is not permitted in this context."}
+
+            # Recursively redact credentials + SSNs from all nested values
+            redacted_input, changed = _redact_obj(tool_input, tool_name)
+            if changed:
+                return {"decision": "allow", "updatedInput": redacted_input}
             return {}
-        tool_name = input_data.get("tool_name", "")
-        tool_input = input_data.get("tool_input", {})
-
-        # Block controlled substance names in tool params
-        for val in _extract_string_values(tool_input):
-            if _CONTROLLED_SUBSTANCES.search(_normalize(val)):
-                logger.warning("tool_input_block_controlled_substance", extra={"tool": tool_name})
-                return {"decision": "block", "reason": "Tool input blocked: contains a term that is not permitted in this context."}
-
-        # Redact credentials + SSNs from string values
-        redacted_input = dict(tool_input)
-        changed = False
-        for key, val in list(redacted_input.items()):
-            if isinstance(val, str):
-                new_val, did_redact = _redact_secrets(val, tool_name)
-                if _SSN_RE.search(val):
-                    new_val = _SSN_RE.sub('[REDACTED-SSN]', new_val)
-                    did_redact = True
-                if did_redact:
-                    redacted_input[key] = new_val
-                    changed = True
-        if changed:
-            return {"decision": "allow", "updatedInput": redacted_input}
-        return {}
+        except Exception:
+            logger.error("pre_tool_use_hook_error tool=%s", input_data.get("tool_name", "?"), exc_info=True)
+            return {}
 
     async def post_tool_use_hook(input_data: dict[str, Any]) -> dict[str, Any]:
         if input_data.get("hook_event_name") != "PostToolUse":
@@ -159,10 +208,27 @@ def build_hooks(user_id: str, project_key: str, db_factory: Any) -> dict[str, li
         tool_name = input_data.get("tool_name", "")
         tool_output = str(input_data.get("tool_result", "") or "")
 
-        async with db_factory() as db:
-            result = await check_tool_output(tool_name, tool_output, db)
-        if result["warnings"]:
-            logger.warning("fact_id_check_warnings", extra={"tool": tool_name, "warnings": result["warnings"]})
+        # CAS fact-check
+        try:
+            async with db_factory() as db:
+                result = await check_tool_output(tool_name, tool_output, db)
+            if result["warnings"]:
+                logger.warning("fact_id_check_warnings", extra={"tool": tool_name, "warnings": result["warnings"]})
+        except Exception:
+            logger.error("post_tool_use_fact_check_error tool=%s", tool_name, exc_info=True)
+
+        # Increment spend — fail open (non-security).
+        try:
+            from api.db.queries.budgets import get_budget_with_spend, increment_spend
+            async with db_factory() as spend_db:
+                budget_info = await get_budget_with_spend(spend_db, project_key)
+            if budget_info:
+                period = budget_info.get("period", "day")
+                async with db_factory() as spend_db:
+                    await increment_spend(spend_db, project_key, period, tool_calls=1)
+        except Exception:
+            logger.error("post_tool_use_spend_increment_error project=%s", project_key, exc_info=True)
+
         return {}
 
     return {

@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_optional_user
@@ -21,8 +21,8 @@ _FP_RE = re.compile(r'^[01]{2048}$')
 class FingerprintSearchRequest(BaseModel):
     fingerprint_bits: str | None = None
     rxn_fingerprint_bits: str | None = None
-    limit: int = 20
-    min_score: float = 0.4
+    limit: int = Field(default=20, ge=1, le=200)
+    min_score: float = Field(default=0.4, ge=0.0, le=1.0)
 
 
 @router.get("/api/search")

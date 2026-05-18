@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -257,7 +260,11 @@ async def upsert_wiki_page(
     if content_changed:
         chunks = chunk_text(content_text)
         if chunks:
-            embeddings = await embed_fn(chunks)
+            try:
+                embeddings = await embed_fn(chunks)
+            except Exception:
+                logger.exception("wiki_embed_failed slug=%s", slug)
+                raise
             if len(embeddings) != len(chunks):
                 raise ValueError(f"embed_fn returned {len(embeddings)} vectors for {len(chunks)} chunks")
 
@@ -329,6 +336,17 @@ async def upsert_wiki_page(
             {"pid": page_id},
         )
         for c in citations:
+            # Support both Pydantic model instances and plain dicts.
+            if isinstance(c, dict):
+                cit_id = c["citation_id"]
+                src_type = c["source_type"]
+                src_id = c.get("source_id")
+                label = c.get("label")
+            else:
+                cit_id = c.citation_id
+                src_type = c.source_type
+                src_id = c.source_id
+                label = c.label
             await db.execute(
                 text("""
                     INSERT INTO wiki_citations (page_id, citation_id, source_type, source_id, label)
@@ -336,14 +354,129 @@ async def upsert_wiki_page(
                 """),
                 {
                     "page_id": page_id,
-                    "citation_id": c.citation_id,
-                    "source_type": c.source_type,
-                    "source_id": c.source_id,
-                    "label": c.label,
+                    "citation_id": cit_id,
+                    "source_type": src_type,
+                    "source_id": src_id,
+                    "label": label,
                 },
             )
 
+        # Dispatch wiki_updated notifications to all subscribers inside the same
+        # transaction so notification rows are atomic with the page write.
+        if existing_row:
+            subs = await db.execute(
+                text("""
+                    SELECT user_id FROM wiki_subscriptions
+                    WHERE page_id = :pid::uuid AND user_id != :author
+                """),
+                {"pid": page_id, "author": created_by},
+            )
+            for sub in subs:
+                await db.execute(
+                    text("""
+                        INSERT INTO notifications (user_id, type, payload)
+                        VALUES (:uid, 'wiki_updated', :payload::jsonb)
+                    """),
+                    {
+                        "uid": sub.user_id,
+                        "payload": json.dumps({"page_id": page_id, "slug": slug, "title": title}),
+                    },
+                )
+
     return page_id
+
+
+# ── revisions ─────────────────────────────────────────────────────────────────
+
+async def list_wiki_revisions(
+    db: AsyncSession,
+    page_id: str,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    result = await db.execute(
+        text("""
+            SELECT id::text, page_id::text, version, title, updated_by, updated_at
+            FROM wiki_revisions
+            WHERE page_id = :pid::uuid
+            ORDER BY version DESC
+            LIMIT :lim
+        """),
+        {"pid": page_id, "lim": min(limit, 50)},
+    )
+    return [dict(r._mapping) for r in result]
+
+
+async def get_wiki_revision(
+    db: AsyncSession,
+    page_id: str,
+    version: int,
+) -> dict[str, Any] | None:
+    result = await db.execute(
+        text("""
+            SELECT id::text, page_id::text, version, title, content, content_text,
+                   updated_by, updated_at
+            FROM wiki_revisions
+            WHERE page_id = :pid::uuid AND version = :v
+        """),
+        {"pid": page_id, "v": version},
+    )
+    row = result.one_or_none()
+    return dict(row._mapping) if row else None
+
+
+async def get_wiki_page_at(
+    db: AsyncSession,
+    slug: str,
+    as_of: datetime,
+) -> dict[str, Any] | None:
+    # Check if the current page was already at or before as_of.
+    current = await db.execute(
+        text("""
+            SELECT id::text, slug, title, content, content_text, maturity, project,
+                   created_by, updated_by, created_at, updated_at, version,
+                   needs_review, archived
+            FROM wiki_pages
+            WHERE slug = :slug AND created_at <= :as_of
+        """),
+        {"slug": slug, "as_of": as_of},
+    )
+    row = current.one_or_none()
+    if not row:
+        return None
+    page = dict(row._mapping)
+    if page["updated_at"] <= as_of:
+        return page
+    # Page exists but was updated after as_of — look in revisions for the version
+    # whose updated_at is closest to but not after as_of.
+    rev = await db.execute(
+        text("""
+            SELECT id::text, page_id::text, version, title, content, content_text,
+                   updated_by, updated_at
+            FROM wiki_revisions
+            WHERE page_id = :pid::uuid AND updated_at <= :as_of
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """),
+        {"pid": page["id"], "as_of": as_of},
+    )
+    rev_row = rev.one_or_none()
+    if not rev_row:
+        # The page was created after as_of in terms of content, but the page row
+        # itself predates it — return the earliest known version.
+        earliest = await db.execute(
+            text("""
+                SELECT id::text, page_id::text, version, title, content, content_text,
+                       updated_by, updated_at
+                FROM wiki_revisions
+                WHERE page_id = :pid::uuid
+                ORDER BY version ASC
+                LIMIT 1
+            """),
+            {"pid": page["id"]},
+        )
+        earliest_row = earliest.one_or_none()
+        return dict(earliest_row._mapping) if earliest_row else None
+    return {**page, **dict(rev_row._mapping)}
 
 
 async def patch_wiki_page(
