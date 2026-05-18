@@ -83,51 +83,59 @@ async def db_engine():
 
 
 @pytest_asyncio.fixture
-async def db(db_engine) -> AsyncIterator[AsyncSession]:
-    """A bare AsyncSession bound to the test engine.
+async def session_factory(db_engine) -> async_sessionmaker[AsyncSession]:
+    """Session factory mirroring production's `Depends(get_db)` shape.
 
-    We do NOT wrap the session in an outer transaction-rolled-back pattern
-    here because most of the queries we're testing wrap their own writes in
-    `async with db.begin():` blocks, and SAVEPOINT-around-commit interacts
-    badly with that. Tests should write into uniquely-named slugs / ids so
-    they don't collide between runs.
+    Tests that call multiple query functions in sequence should use this
+    factory and open a fresh session per call — the same pattern as a
+    request handler — so each function's internal `async with db.begin():`
+    block sees a clean session.
     """
-    factory = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
-    async with factory() as session:
-        yield session
+    return async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
 
 
 @pytest_asyncio.fixture
-async def session_factory(db_engine) -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+async def db(session_factory) -> AsyncIterator[AsyncSession]:
+    """A single AsyncSession, useful for tests that perform exactly one
+    logical DB operation (which itself may begin its own transaction).
+
+    For multi-step tests, prefer `session_factory` and open a fresh session
+    per call.
+    """
+    async with session_factory() as session:
+        yield session
 
 
 # ── Factories ────────────────────────────────────────────────────────────────
 
 @pytest_asyncio.fixture
-async def wiki_page(db: AsyncSession, user_id: str) -> dict[str, Any]:
-    """Create a fresh wiki page and yield its row dict."""
+async def wiki_page(session_factory, user_id: str) -> dict[str, Any]:
+    """Create a fresh wiki page and yield its row dict. Uses separate sessions
+    for write + read to mirror production behavior."""
     from api.db.queries.wiki_write import upsert_wiki_page
+    from api.db.queries.wiki_read import get_wiki_page
+    from api.embeddings import EMBED_DIM
 
     async def _noop_embed(texts: list[str]) -> list[list[float]]:
-        from api.embeddings import EMBED_DIM
         return [[0.0] * EMBED_DIM for _ in texts]
 
     slug = f"test-page-{uuid.uuid4().hex[:8]}"
-    page_id = await upsert_wiki_page(
-        db,
-        slug=slug,
-        title=f"Test Page {slug}",
-        content={"type": "doc", "content": []},
-        content_text=(
-            "First paragraph of test content with enough length to "
-            "exceed the minimum chunk threshold of fifty characters.\n\n"
-            "Second paragraph to give the chunker a second segment to "
-            "split into a separate chunk."
-        ),
-        created_by=user_id,
-        citations=[],
-        embed_fn=_noop_embed,
-    )
-    from api.db.queries.wiki_read import get_wiki_page
-    return await get_wiki_page(db, slug)  # type: ignore[return-value]
+    async with session_factory() as s:
+        await upsert_wiki_page(
+            s,
+            slug=slug,
+            title=f"Test Page {slug}",
+            content={"type": "doc", "content": []},
+            content_text=(
+                "First paragraph of test content with enough length to "
+                "exceed the minimum chunk threshold of fifty characters.\n\n"
+                "Second paragraph to give the chunker a second segment to "
+                "split into a separate chunk."
+            ),
+            created_by=user_id,
+            citations=[],
+            embed_fn=_noop_embed,
+        )
+    async with session_factory() as s:
+        page = await get_wiki_page(s, slug)
+    return page  # type: ignore[return-value]

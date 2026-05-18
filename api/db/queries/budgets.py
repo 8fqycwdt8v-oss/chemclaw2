@@ -101,39 +101,49 @@ async def try_consume_tool_call(
     successes. PostToolUse no longer needs to increment tool_calls (it
     still increments tokens/experiments via increment_spend).
     """
-    budget = await get_project_budget(db, project_key)
-    if not budget:
-        return None
-    period = budget["period"]
-    cap = budget.get("tool_calls_cap")
-    period_start = period_start_for(period)
-
-    if cap is not None and cap <= 0:
-        return {"ok": False, "used": 0, "cap": cap}
-
-    if cap is None:
-        sql = text("""
-            INSERT INTO project_budget_spend (project_key, period_start, tool_calls)
-            VALUES (:pk, :ps, 1)
-            ON CONFLICT (project_key, period_start) DO UPDATE
-            SET tool_calls = project_budget_spend.tool_calls + 1,
-                updated_at = now()
-            RETURNING tool_calls
-        """)
-        params: dict[str, Any] = {"pk": project_key, "ps": period_start}
-    else:
-        sql = text("""
-            INSERT INTO project_budget_spend (project_key, period_start, tool_calls)
-            VALUES (:pk, :ps, 1)
-            ON CONFLICT (project_key, period_start) DO UPDATE
-            SET tool_calls = project_budget_spend.tool_calls + 1,
-                updated_at = now()
-            WHERE project_budget_spend.tool_calls + 1 <= :cap
-            RETURNING tool_calls
-        """)
-        params = {"pk": project_key, "ps": period_start, "cap": cap}
-
+    # All reads + the conditional upsert happen inside one transaction so
+    # we don't trip "A transaction is already begun" when this is called on
+    # a shared session that previously executed an autobegun SELECT.
     async with db.begin():
+        budget_row = await db.execute(
+            text(
+                "SELECT period, tool_calls_cap FROM project_budgets "
+                "WHERE project_key = :pk"
+            ),
+            {"pk": project_key},
+        )
+        b = budget_row.one_or_none()
+        if b is None:
+            return None
+        period = b.period
+        cap = b.tool_calls_cap
+        period_start = period_start_for(period)
+
+        if cap is not None and cap <= 0:
+            return {"ok": False, "used": 0, "cap": cap}
+
+        if cap is None:
+            sql = text("""
+                INSERT INTO project_budget_spend (project_key, period_start, tool_calls)
+                VALUES (:pk, :ps, 1)
+                ON CONFLICT (project_key, period_start) DO UPDATE
+                SET tool_calls = project_budget_spend.tool_calls + 1,
+                    updated_at = now()
+                RETURNING tool_calls
+            """)
+            params: dict[str, Any] = {"pk": project_key, "ps": period_start}
+        else:
+            sql = text("""
+                INSERT INTO project_budget_spend (project_key, period_start, tool_calls)
+                VALUES (:pk, :ps, 1)
+                ON CONFLICT (project_key, period_start) DO UPDATE
+                SET tool_calls = project_budget_spend.tool_calls + 1,
+                    updated_at = now()
+                WHERE project_budget_spend.tool_calls + 1 <= :cap
+                RETURNING tool_calls
+            """)
+            params = {"pk": project_key, "ps": period_start, "cap": cap}
+
         result = await db.execute(sql, params)
         row = result.one_or_none()
         if row is not None:
