@@ -49,15 +49,26 @@ def validate_auth_config() -> None:
     """
     global _admin_user_ids, _admin_ids_loaded
 
+    env = os.environ.get("ENV", "").lower()
+    is_dev = env in _DEV_ENVS
+
     if os.environ.get("ALLOW_MOCK_AUTH") == "1":
-        env = os.environ.get("ENV", "").lower()
-        if env not in _DEV_ENVS:
+        if not is_dev:
             raise RuntimeError(
                 f"ALLOW_MOCK_AUTH=1 is set but ENV={env!r} is not a dev "
                 f"environment ({sorted(_DEV_ENVS)}). Refusing to start — "
                 f"this combination would bypass Clerk in production."
             )
         logger.warning("ALLOW_MOCK_AUTH is enabled (ENV=%s) — never set this in production", env)
+
+    # In non-dev environments, require CLERK_ISSUER so the `iss` claim is
+    # validated. Without it, jwt.decode() is called with issuer=None and
+    # skips issuer validation entirely — leaving only the signature check.
+    if not is_dev and not os.environ.get("CLERK_ISSUER"):
+        raise RuntimeError(
+            f"CLERK_ISSUER must be set when ENV={env!r} (non-dev). "
+            f"Without it, JWT issuer validation is silently skipped."
+        )
 
     raw = os.environ.get("ADMIN_USER_IDS", "")
     _admin_user_ids = frozenset(x.strip() for x in raw.split(",") if x.strip())
@@ -168,12 +179,15 @@ async def get_current_user(authorization: str | None = Header(None)) -> str:
                 raise HTTPException(status_code=401, detail="Unauthorized")
         except ImportError:
             pass  # cryptography package unavailable; skip algorithm-confusion check
+        # CLERK_ISSUER is required in non-dev envs (enforced at startup by
+        # validate_auth_config()). In dev/test it may be unset, in which case
+        # issuer validation is skipped.
         issuer = os.environ.get("CLERK_ISSUER") or None
         claims: dict[str, Any] = jwt.decode(
             token,
             signing_key.key,
             algorithms=["RS256"],
-            issuer=issuer,  # Validates the `iss` claim when CLERK_ISSUER is set; skipped otherwise for back-compat with envs that haven't configured it
+            issuer=issuer,
             options={"verify_aud": False},  # Clerk tokens don't always have audience
         )
         user_id = claims.get("sub", "")

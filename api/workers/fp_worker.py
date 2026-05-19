@@ -81,12 +81,24 @@ async def _call_mcp_tool(server_module: str, tool_name: str, tool_input: dict[st
 
     for line in reversed(stdout.decode().strip().splitlines()):
         if line.strip().startswith('{'):
-            resp = json.loads(line)
+            try:
+                resp = json.loads(line)
+            except json.JSONDecodeError as e:
+                logger.warning("mcp_response_invalid_json server=%s tool=%s err=%s",
+                               server_module, tool_name, e)
+                continue
             for block in resp.get("result", {}).get("content", []):
                 if block.get("type") == "text":
-                    return json.loads(block["text"])
-            raise RuntimeError(f"No text block in MCP response: {resp}")
-    raise RuntimeError(f"Could not parse MCP response: {stdout.decode()[:200]}")
+                    try:
+                        return json.loads(block["text"])
+                    except json.JSONDecodeError as e:
+                        raise RuntimeError(
+                            f"MCP {server_module}.{tool_name} returned invalid JSON in text block: {e}"
+                        ) from e
+            raise RuntimeError(f"No text block in MCP response from {server_module}.{tool_name}")
+    logger.warning("mcp_response_unparseable server=%s tool=%s stdout=%r",
+                   server_module, tool_name, stdout.decode(errors="replace")[:200])
+    raise RuntimeError(f"Could not parse MCP response from {server_module}.{tool_name}")
 
 
 async def compute_compound_fingerprints(db: AsyncSession) -> int:
