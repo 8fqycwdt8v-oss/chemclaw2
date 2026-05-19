@@ -19,8 +19,16 @@ import sys
 import uuid as _uuid_mod
 from typing import Any
 
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+
+from api.db.queries.fingerprints import (
+    fetch_compounds_missing_fp,
+    fetch_reactions_missing_fp,
+    release_fp_lock,
+    try_acquire_fp_lock,
+    write_compound_fp,
+    write_reaction_fp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,14 +110,11 @@ async def _call_mcp_tool(server_module: str, tool_name: str, tool_input: dict[st
 
 
 async def compute_compound_fingerprints(db: AsyncSession) -> int:
-    rows = (await db.execute(
-        text("SELECT id::text, smiles FROM compounds WHERE morgan_fp IS NULL LIMIT :n"), {"n": BATCH_SIZE}
-    )).fetchall()
+    rows = await fetch_compounds_missing_fp(db, BATCH_SIZE)
     computed = 0
-    for row in rows:
-        compound_id, smiles = row.id, row.smiles
+    for compound_id, smiles in rows:
         lock_key = _stable_lock_key(compound_id)
-        if not (await db.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": lock_key})).scalar():
+        if not await try_acquire_fp_lock(db, lock_key):
             continue
         try:
             data = await _call_mcp_tool("mcp_molfp.server", "compute_morgan_fp", {"smiles": smiles})
@@ -117,11 +122,7 @@ async def compute_compound_fingerprints(db: AsyncSession) -> int:
             if not _FP_RE.match(bits):
                 logger.error("fp_invalid_bits compound=%s", compound_id)
                 continue
-            await db.execute(text("""
-                UPDATE compounds
-                SET morgan_fp = CAST(:bits AS bit(2048)), morgan_fp_popcount = :pc, fp_computed_at = now()
-                WHERE id = CAST(:id AS uuid) AND morgan_fp IS NULL
-            """), {"bits": bits, "pc": bits.count('1'), "id": compound_id})
+            await write_compound_fp(db, compound_id, bits, bits.count('1'))
             await db.commit()
             computed += 1
         except Exception as e:
@@ -132,21 +133,18 @@ async def compute_compound_fingerprints(db: AsyncSession) -> int:
                 pass
         finally:
             try:
-                await db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+                await release_fp_lock(db, lock_key)
             except Exception as unlock_err:
                 logger.warning("fp_advisory_unlock_failed compound=%s: %s", compound_id, unlock_err)
     return computed
 
 
 async def compute_reaction_fingerprints(db: AsyncSession) -> int:
-    rows = (await db.execute(
-        text("SELECT id::text, rxn_smiles FROM reactions WHERE drfp IS NULL LIMIT :n"), {"n": BATCH_SIZE}
-    )).fetchall()
+    rows = await fetch_reactions_missing_fp(db, BATCH_SIZE)
     computed = 0
-    for row in rows:
-        reaction_id, rxn_smiles = row.id, row.rxn_smiles
+    for reaction_id, rxn_smiles in rows:
         lock_key = _stable_lock_key(reaction_id)
-        if not (await db.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": lock_key})).scalar():
+        if not await try_acquire_fp_lock(db, lock_key):
             continue
         try:
             data = await _call_mcp_tool("mcp_rxnfp.server", "compute_drfp", {"rxn_smiles": rxn_smiles})
@@ -154,10 +152,7 @@ async def compute_reaction_fingerprints(db: AsyncSession) -> int:
             if not _FP_RE.match(bits):
                 logger.error("drfp_invalid_bits reaction=%s", reaction_id)
                 continue
-            await db.execute(text("""
-                UPDATE reactions SET drfp = CAST(:bits AS bit(2048)), fp_computed_at = now()
-                WHERE id = CAST(:id AS uuid) AND drfp IS NULL
-            """), {"bits": bits, "id": reaction_id})
+            await write_reaction_fp(db, reaction_id, bits)
             await db.commit()
             computed += 1
         except Exception as e:
@@ -168,7 +163,7 @@ async def compute_reaction_fingerprints(db: AsyncSession) -> int:
                 pass
         finally:
             try:
-                await db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+                await release_fp_lock(db, lock_key)
             except Exception as unlock_err:
                 logger.warning("drfp_advisory_unlock_failed reaction=%s: %s", reaction_id, unlock_err)
     return computed

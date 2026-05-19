@@ -283,8 +283,14 @@ async def patch_wiki_page(
     sets.append("updated_by = :updated_by")
     params["updated_by"] = updated_by
     async with db.begin():
+        # Owner-scope predicate: route handlers also enforce this with a 403,
+        # but per CLAUDE.md every per-user UPDATE includes the creator in WHERE
+        # so a future caller cannot accidentally bypass.
         result = await db.execute(
-            text(f"UPDATE wiki_pages SET {', '.join(sets)} WHERE slug = :slug RETURNING id"),
+            text(
+                f"UPDATE wiki_pages SET {', '.join(sets)} "
+                f"WHERE slug = :slug AND created_by = :updated_by RETURNING id"
+            ),
             params,
         )
         found = result.one_or_none() is not None

@@ -18,11 +18,14 @@ from api.agent.hooks import _redact_obj, _redact_secrets
 # pattern's minimum length but doesn't correspond to a real account.
 _ANTHROPIC = "sk-ant-api03-" + "A" * 30
 _OPENAI = "sk-" + "B" * 40
-# Generic pk-prefixed key with only one separator (matches the existing
-# (sk|rk|pk)[-_][A-Za-z0-9]{20,} pattern). Stripe's pk_live_/pk_test_
-# format has a second underscore that breaks this regex — see BACKLOG.md.
+# Generic pk-prefixed key with only one separator (matches the generic
+# (sk|rk|pk)[-_][A-Za-z0-9]{20,} pattern).
 _PUBLIC = "pk_" + "C" * 24
+# Stripe: dedicated pattern handles the second underscore.
+_STRIPE_LIVE_SK = "sk_live_" + "S" * 24
+_STRIPE_TEST_PK = "pk_test_" + "T" * 24
 _BEARER = "Bearer " + "D" * 32
+_JWT = "eyJ" + "h" * 18 + ".eyJ" + "p" * 18 + "." + "s" * 22
 _AWS = "AKIAIOSFODNN7EXAMPLE"
 _GHP = "ghp_" + "E" * 36
 _GITHUB_PAT = "github_pat_" + "F" * 35
@@ -31,6 +34,9 @@ _SLACK_USER = "xoxp-1-abcdefghijklmnop"
 _SLACK_APP = "xapp-1-A1B2C3D4-1234567890"
 _GOOGLE = "AIza" + "G" * 35
 _GITLAB = "glpat-aBcDe1234567890_-xyz0"
+_SENDGRID = "SG." + "A" * 22 + "." + "B" * 43
+_TWILIO = "AC" + "0123456789abcdef0123456789abcdef"
+_NPM = "npm_" + "n" * 36
 _PEM = "-----BEGIN RSA PRIVATE KEY-----"
 _SSN = "123-45-6789"
 
@@ -41,7 +47,10 @@ _SSN = "123-45-6789"
         (_ANTHROPIC, "ANTHROPIC"),
         (_OPENAI, "API-KEY"),
         (_PUBLIC, "API-KEY"),
+        (_STRIPE_LIVE_SK, "STRIPE"),
+        (_STRIPE_TEST_PK, "STRIPE"),
         (_BEARER, "REDACTED"),
+        (_JWT, "JWT"),
         (_AWS, "AWS"),
         (_GHP, "GITHUB"),
         (_GITHUB_PAT, "GITHUB"),
@@ -50,6 +59,9 @@ _SSN = "123-45-6789"
         (_SLACK_APP, "SLACK"),
         (_GOOGLE, "GOOGLE"),
         (_GITLAB, "GITLAB"),
+        (_SENDGRID, "SENDGRID"),
+        (_TWILIO, "TWILIO"),
+        (_NPM, "NPM"),
         (_PEM, "PRIVATE-KEY"),
     ],
 )
@@ -65,6 +77,15 @@ def test_anthropic_precedence_over_generic_sk() -> None:
     is tagged ANTHROPIC, not the generic API-KEY tag."""
     out, _ = _redact_secrets(_ANTHROPIC, "test")
     assert "ANTHROPIC" in out
+    assert "[REDACTED-API-KEY]" not in out
+
+
+def test_stripe_precedence_over_generic_pk_sk() -> None:
+    """Stripe pattern must match before the generic sk/pk fallback, otherwise
+    `sk_live_…` would either fail (second underscore stops the generic regex)
+    or be tagged as a plain API-KEY rather than Stripe-specific."""
+    out, _ = _redact_secrets(_STRIPE_LIVE_SK, "test")
+    assert "STRIPE" in out
     assert "[REDACTED-API-KEY]" not in out
 
 
