@@ -103,15 +103,19 @@ async def upsert_wiki_page(
 ) -> str:
     # Pre-flight: skip re-embedding if content unchanged.
     # SQLAlchemy 2.0 async auto-begins a transaction on the SELECT below; we
-    # explicitly close it with rollback() (read-only, nothing to commit) so
-    # the explicit `async with db.begin():` write block further down doesn't
-    # collide with the autobegun read tx.
+    # close it before the slow embed call so the explicit `async with
+    # db.begin():` write block further down doesn't collide.
+    # IMPORTANT: only roll back the tx if WE autobegan it. If the caller
+    # had a transaction active before calling this function, rollback would
+    # silently discard the caller's uncommitted work.
+    pre_existing_tx = db.in_transaction()
     existing = await db.execute(
         text("SELECT content_text FROM wiki_pages WHERE slug = :slug"),
         {"slug": slug},
     )
     existing_row = existing.one_or_none()
-    await db.rollback()
+    if not pre_existing_tx:
+        await db.rollback()
     content_changed = not existing_row or existing_row.content_text != content_text
 
     chunks: list[str] = []

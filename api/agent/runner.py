@@ -67,12 +67,20 @@ MAX_PROMPT_BYTES = 100_000
 # can't OOM the worker. Truncated frames carry a `[truncated]` marker.
 SSE_TEXT_BLOCK_MAX_BYTES = 1_000_000
 
+_TRUNC_MARKER = "\n[truncated]"
+_TRUNC_MARKER_BYTES = len(_TRUNC_MARKER.encode("utf-8"))
+
 
 def _cap_text_block(text: str) -> str:
     raw = text.encode("utf-8")
     if len(raw) <= SSE_TEXT_BLOCK_MAX_BYTES:
         return text
-    return raw[:SSE_TEXT_BLOCK_MAX_BYTES].decode("utf-8", errors="ignore") + "\n[truncated]"
+    # Reserve space for the marker so the post-truncation string stays at
+    # or below SSE_TEXT_BLOCK_MAX_BYTES — otherwise a downstream proxy
+    # tuned to exactly 1 MB would cut the marker mid-string and silently
+    # lose the truncation signal.
+    body_budget = SSE_TEXT_BLOCK_MAX_BYTES - _TRUNC_MARKER_BYTES
+    return raw[:body_budget].decode("utf-8", errors="ignore") + _TRUNC_MARKER
 
 
 def _get_env(name: str, default: str = "") -> str:

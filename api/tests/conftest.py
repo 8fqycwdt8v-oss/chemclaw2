@@ -42,6 +42,15 @@ def _mock_token(user_id: str) -> str:
 
 @pytest.fixture(scope="session")
 def app():
+    """The FastAPI app instance.
+
+    NOTE: building the app does NOT run the lifespan — that fires only when
+    a TestClient context manager enters. Specifically, validate_auth_config()
+    runs in lifespan, so the _admin_user_ids cache stays empty until a test
+    enters the `client` fixture. Tests that exercise get_admin_user directly
+    (without going through the HTTP layer) should either depend on `client`
+    or call api.auth.validate_auth_config() explicitly.
+    """
     from api.main import create_app
     return create_app()
 

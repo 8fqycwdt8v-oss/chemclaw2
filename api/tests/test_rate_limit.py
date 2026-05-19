@@ -9,12 +9,15 @@ from api.db.queries.rate_limit import make_key, pg_rate_limit
 
 
 def test_make_key_strips_colons():
-    # The literal sanitization rule: anything not [A-Za-z0-9_-] becomes '_'.
-    assert make_key("wiki", "alice:bob") == "wiki:alice_bob"
-    assert make_key("wiki", "org abc") == "wiki:org_abc"
-    assert make_key("wiki", "u/1") == "wiki:u_1"
-    # Safe chars pass through.
-    assert make_key("wiki", "user-1_abc") == "wiki:user-1_abc"
+    # Lossless hex-escape: every unsafe byte becomes "_xx_". Safe chars
+    # (letters, digits, '-') pass through. '_' is escaped too so the
+    # marker is unambiguous.
+    assert make_key("wiki", "alice:bob") == "wiki:alice_3a_bob"
+    assert make_key("wiki", "org abc") == "wiki:org_20_abc"
+    assert make_key("wiki", "u/1") == "wiki:u_2f_1"
+    assert make_key("wiki", "user-1_abc") == "wiki:user-1_5f_abc"
+    # Hyphens and alphanumerics survive untouched.
+    assert make_key("wiki", "user-1-abc") == "wiki:user-1-abc"
 
 
 def test_make_key_handles_none():
@@ -25,14 +28,11 @@ def test_make_key_handles_none():
 def test_make_key_prevents_aliasing():
     """Two different identifiers must produce different keys, even when they
     'collide' across the bucket separator before sanitization."""
-    # Without sanitization, "alice" and "x:alice" in bucket "foo" would BOTH
-    # produce something containing "foo:x:alice" or "foo:alice" depending on
-    # how the f-string was written. Sanitization rules out the cross-aliasing.
     a = make_key("foo", "alice")
     b = make_key("foo", "x:alice")
     assert a != b
     assert a == "foo:alice"
-    assert b == "foo:x_alice"
+    assert b == "foo:x_3a_alice"
 
 
 @pytest.mark.asyncio

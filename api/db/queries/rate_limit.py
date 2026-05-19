@@ -22,20 +22,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
-# Anything that isn't a safe identifier character gets replaced with '_' so a
-# user id like "org_abc:user_xyz" can't alias buckets across the ':' bucket
-# separator.
-_RL_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
+# Anything that isn't a safe identifier character gets hex-escaped as `_xx_`
+# (where xx is the byte's hex code) so a user id like "org_abc:user_xyz"
+# can't alias buckets across the ':' bucket separator. Hex escape is
+# lossless — two distinct identifiers cannot collide on the sanitized key,
+# unlike a simple `replace-with-_` which mapped "alice@bob" and "alice_bob"
+# to the same bucket.
+# `_` itself is escaped (→ `_5f_`) so the hex-marker is unambiguous.
+_RL_UNSAFE = re.compile(r"[^A-Za-z0-9-]")
+
+
+def _escape_byte(m: "re.Match[str]") -> str:
+    # Hex-encode each byte of the matched code-point so the result stays
+    # 7-bit ASCII regardless of input encoding.
+    return "".join(f"_{b:02x}_" for b in m.group(0).encode("utf-8"))
 
 
 def make_key(bucket: str, identifier: str | None) -> str:
     """Compose a rate-limit bucket name.
 
     The ':' character is reserved as the bucket/identifier separator. Clerk
-    user ids and other external identifiers are not guaranteed colon-free, so
-    sanitize identifier before composing.
+    user ids and other external identifiers are not guaranteed colon-free,
+    and lossy sanitization (replace unsafe chars with '_') would create
+    cross-user bucket collisions. Hex-escape the identifier instead.
     """
-    safe = _RL_UNSAFE.sub("_", identifier) if identifier else "anon"
+    safe = _RL_UNSAFE.sub(_escape_byte, identifier) if identifier else "anon"
     return f"{bucket}:{safe}"
 
 
