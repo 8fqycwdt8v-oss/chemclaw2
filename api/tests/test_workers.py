@@ -240,3 +240,93 @@ async def test_call_mcp_tool_missing_text_block_raises(
     _patch_subprocess(monkeypatch, _StubProc(json.dumps(response).encode() + b"\n"))
     with pytest.raises(RuntimeError, match="No text block"):
         await fp_worker._call_mcp_tool("mcp_molfp.server", "compute_morgan_fp", {"smiles": "CCO"})
+
+
+# ── _create_campaign_wiki retry behaviour ────────────────────────────────────
+
+
+def _noop_factory() -> Any:
+    """Stand-in session_factory: tests never reach the DB because
+    upsert_wiki_page is mocked."""
+    class _NoopSession:
+        async def __aenter__(self) -> Any:
+            return self
+        async def __aexit__(self, *a: Any) -> None:
+            return None
+    return _NoopSession()
+
+
+@pytest.mark.asyncio
+async def test_create_campaign_wiki_succeeds_first_try(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"n": 0}
+
+    async def _fake_upsert(*a: Any, **kw: Any) -> str:
+        calls["n"] += 1
+        return "page-id"
+
+    monkeypatch.setattr("api.db.queries.wiki_write.upsert_wiki_page", _fake_upsert)
+
+    out = await campaign_worker._create_campaign_wiki(
+        {"id": "c-1", "target_smiles": "CCO", "plan": {"steps": []}, "created_by": "alice"},
+        _noop_factory,  # type: ignore[arg-type]
+    )
+    assert out == {"ok": True, "error": None}
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_create_campaign_wiki_retries_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two transient failures + one success → ok=True after 3 attempts."""
+    calls = {"n": 0}
+
+    async def _flaky_upsert(*a: Any, **kw: Any) -> str:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("transient embed failure")
+        return "page-id"
+
+    # Skip the real sleeps so the test stays fast.
+    async def _no_sleep(*a: Any, **kw: Any) -> None:
+        return None
+
+    monkeypatch.setattr("api.db.queries.wiki_write.upsert_wiki_page", _flaky_upsert)
+    monkeypatch.setattr(campaign_worker.asyncio, "sleep", _no_sleep)
+
+    out = await campaign_worker._create_campaign_wiki(
+        {"id": "c-2", "target_smiles": "CCO", "plan": {}, "created_by": "alice"},
+        _noop_factory,  # type: ignore[arg-type]
+    )
+    assert out == {"ok": True, "error": None}
+    assert calls["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_create_campaign_wiki_exhausts_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All attempts fail → ok=False with the last error string. The first
+    attempt has no delay; the remaining attempts are 3 retries → 4 tries total."""
+    calls = {"n": 0}
+
+    async def _always_fail(*a: Any, **kw: Any) -> str:
+        calls["n"] += 1
+        raise RuntimeError("permanent failure")
+
+    async def _no_sleep(*a: Any, **kw: Any) -> None:
+        return None
+
+    monkeypatch.setattr("api.db.queries.wiki_write.upsert_wiki_page", _always_fail)
+    monkeypatch.setattr(campaign_worker.asyncio, "sleep", _no_sleep)
+
+    out = await campaign_worker._create_campaign_wiki(
+        {"id": "c-3", "target_smiles": "CCO", "plan": {}, "created_by": "alice"},
+        _noop_factory,  # type: ignore[arg-type]
+    )
+    assert out["ok"] is False
+    assert "permanent failure" in (out["error"] or "")
+    # 1 initial attempt + 3 retries = 4 tries (matches _WIKI_RETRY_DELAYS_SEC).
+    assert calls["n"] == 4

@@ -155,6 +155,37 @@ async def get_running_campaigns(db: AsyncSession) -> list[dict[str, Any]]:
     return [dict(r._mapping) for r in result]
 
 
+async def get_complete_campaigns_missing_wiki(
+    db: AsyncSession, limit: int = 20
+) -> list[dict[str, Any]]:
+    """Return recently-completed campaigns whose summary wiki page is missing.
+
+    The wiki creation runs outside the completion transaction (slow embed
+    call), so a failure there leaves the campaign in `complete` without a
+    wiki. This query is the input for a backfill pass in the worker.
+
+    Scoped to the last 24 h so the worker doesn't endlessly retry
+    historically-failed campaigns. Operators should backfill anything
+    older by running the worker tick manually after fixing the underlying
+    failure (e.g. embedding API outage).
+    """
+    result = await db.execute(
+        text("""
+            SELECT c.id::text, c.session_id, c.created_by,
+                   c.target_smiles, c.plan, c.updated_at
+            FROM synthesis_campaigns c
+            LEFT JOIN wiki_pages w ON w.slug = 'campaign-' || c.id::text
+            WHERE c.status = 'complete'
+              AND c.updated_at >= now() - interval '24 hours'
+              AND w.id IS NULL
+            ORDER BY c.updated_at DESC
+            LIMIT :lim
+        """),
+        {"lim": limit},
+    )
+    return [dict(r._mapping) for r in result]
+
+
 async def list_user_campaigns(
     db: AsyncSession,
     user_id: str,
