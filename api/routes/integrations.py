@@ -17,7 +17,7 @@ from api.auth import get_current_user
 from api.db.connection import get_db
 from api.db.queries.compounds import insert_compound
 from api.db.queries.knowledge import upsert_external_fact, upsert_paper
-from api.db.queries.rate_limit import make_key, pg_rate_limit
+from api.db.queries.rate_limit import pg_rate_limit, rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ async def eln_webhook(
     return {"ok": True, "fact_id": fact_id}
 
 
-@router.post("/api/integrations/documents")
+@router.post("/api/integrations/documents", dependencies=[Depends(rate_limit("doc-upload", 5))])
 async def upload_document(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
@@ -107,11 +107,6 @@ async def upload_document(
     Rate limit: 5 per 60 s per user.
     Max size: 10 MB.
     """
-    limited = await pg_rate_limit(db, make_key("doc-upload", user_id), 5, 60_000)
-    if limited["limited"]:
-        logger.warning("doc_upload_rate_limited user=%s", user_id)
-        raise HTTPException(status_code=429, detail="Too many requests")
-
     content_type = file.content_type or ""
     if content_type not in _ALLOWED_MIME_TYPES:
         raise HTTPException(

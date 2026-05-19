@@ -10,13 +10,19 @@ availability — operators should resolve DB issues rather than silently
 bypassing rate limits. The error is always logged so a DB blip is visible in
 metrics. If you need fail-open behaviour, change the except clause to
 `return {"limited": False}` and document the reason at the call site.
+
+Routes should prefer the `rate_limit` FastAPI dependency in
+`api.db.queries.rate_limit` (factory at the bottom of this module) over
+inline `pg_rate_limit` calls — keeps the 4-line guard out of every handler.
 """
 from __future__ import annotations
 
 import logging
 import re
 import time
+from typing import Annotated
 
+from fastapi import Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,3 +85,59 @@ async def pg_rate_limit(
     except Exception:
         logger.exception("rate_limit_db_fail_closed", extra={"key": key})
         return {"limited": True}
+
+
+# ── FastAPI dependency factory ────────────────────────────────────────────────
+
+
+def rate_limit(
+    bucket: str,
+    max_requests: int,
+    window_ms: int = 60_000,
+    *,
+    optional_user: bool = False,
+):
+    """Build a FastAPI dependency that enforces a per-user rate limit.
+
+    Usage:
+        @router.get("/api/wiki", dependencies=[Depends(rate_limit("wiki-list", 60))])
+
+    The bucket name is hex-escaped against the caller's `user_id`; admin
+    routes that already depend on `get_admin_user` reuse the same caller
+    identity (FastAPI deduplicates `get_current_user` across the request).
+
+    Set `optional_user=True` for endpoints that allow anonymous reads;
+    anonymous callers share one "anon" bucket (matches how `make_key`
+    handles a None identifier).
+
+    Fail-closed: a DB error in `pg_rate_limit` returns `{"limited": True}`
+    and this dep raises 429 — same posture as inline call sites.
+    """
+    # Import inside the factory to avoid an import cycle.
+    from api.auth import get_current_user, get_optional_user
+    from api.db.connection import get_db
+
+    if optional_user:
+        async def _dep_optional(
+            db: Annotated[AsyncSession, Depends(get_db)],
+            user_id: Annotated[str | None, Depends(get_optional_user)],
+        ) -> None:
+            result = await pg_rate_limit(db, make_key(bucket, user_id), max_requests, window_ms)
+            if result["limited"]:
+                logger.warning("rate_limit_denied bucket=%s user=%s", bucket, user_id or "anon")
+                raise HTTPException(status_code=429, detail="Too many requests")
+
+        _dep_optional.__name__ = f"rate_limit_{bucket.replace('-', '_')}"
+        return _dep_optional
+
+    async def _dep(
+        db: Annotated[AsyncSession, Depends(get_db)],
+        user_id: Annotated[str, Depends(get_current_user)],
+    ) -> None:
+        result = await pg_rate_limit(db, make_key(bucket, user_id), max_requests, window_ms)
+        if result["limited"]:
+            logger.warning("rate_limit_denied bucket=%s user=%s", bucket, user_id)
+            raise HTTPException(status_code=429, detail="Too many requests")
+
+    _dep.__name__ = f"rate_limit_{bucket.replace('-', '_')}"
+    return _dep

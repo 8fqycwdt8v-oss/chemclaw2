@@ -15,11 +15,14 @@ from api.db.queries.budgets import (
     get_budget_with_spend,
     upsert_project_budget,
 )
-from api.db.queries.rate_limit import make_key, pg_rate_limit
+from api.db.queries.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_RL_READ = Depends(rate_limit("budget-read", 60))
+_RL_WRITE = Depends(rate_limit("budget-write", 10))
 
 
 def _check_ownership(project_key: str, user_id: str) -> None:
@@ -36,16 +39,13 @@ class BudgetUpsertBody(BaseModel):
     tokens_cap: int | None = Field(default=None, ge=0)
 
 
-@router.get("/api/budgets/{project_key}")
+@router.get("/api/budgets/{project_key}", dependencies=[_RL_READ])
 async def get_budget(
     project_key: str,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
     _check_ownership(project_key, user_id)
-    limited = await pg_rate_limit(db, make_key("budget-read", user_id), 60, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     row = await get_budget_with_spend(db, project_key)
     if row is None:
         return {"budget": None, "spend": None}
@@ -53,7 +53,7 @@ async def get_budget(
     return {"budget": row, "spend": spend}
 
 
-@router.put("/api/budgets/{project_key}")
+@router.put("/api/budgets/{project_key}", dependencies=[_RL_WRITE])
 async def put_budget(
     project_key: str,
     body: BudgetUpsertBody,
@@ -61,10 +61,6 @@ async def put_budget(
     user_id: str = Depends(get_current_user),
 ):
     _check_ownership(project_key, user_id)
-    limited = await pg_rate_limit(db, make_key("budget-write", user_id), 10, 60_000)
-    if limited["limited"]:
-        logger.warning("budget_put_rate_limited: user=%s", user_id)
-        raise HTTPException(status_code=429, detail="Too many requests")
     await upsert_project_budget(
         db,
         project_key,
@@ -77,17 +73,13 @@ async def put_budget(
     return {"ok": True}
 
 
-@router.delete("/api/budgets/{project_key}")
+@router.delete("/api/budgets/{project_key}", dependencies=[_RL_WRITE])
 async def delete_budget(
     project_key: str,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
     _check_ownership(project_key, user_id)
-    limited = await pg_rate_limit(db, make_key("budget-write", user_id), 10, 60_000)
-    if limited["limited"]:
-        logger.warning("budget_delete_rate_limited: user=%s", user_id)
-        raise HTTPException(status_code=429, detail="Too many requests")
     deleted = await delete_project_budget(db, project_key)
     if not deleted:
         raise HTTPException(status_code=404, detail="Budget not found")

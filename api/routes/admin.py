@@ -20,13 +20,20 @@ from api.db.queries.admin import (
     list_tool_permissions,
     upsert_tool_permission,
 )
-from api.db.queries.rate_limit import make_key, pg_rate_limit
+from api.db.queries.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 _EVAL_PREFIX = "/api/admin/eval"
+
+# Admin dep listed before rate-limit so a non-admin sees 403 (not 429).
+# FastAPI runs `dependencies=[]` in order and dedupes by callable, so the
+# route function's `admin_id = Depends(get_admin_user)` reuses the same call.
+_ADMIN_READ = [Depends(get_admin_user), Depends(rate_limit("admin-read", 60))]
+_ADMIN_WRITE = [Depends(get_admin_user), Depends(rate_limit("admin-write", 30))]
+_ADMIN_HEALTH = [Depends(get_admin_user), Depends(rate_limit("admin-health", 20))]
 
 
 class ToolPermissionBody(BaseModel):
@@ -36,29 +43,22 @@ class ToolPermissionBody(BaseModel):
     mode: Literal["allow", "ask", "deny"]
 
 
-@router.get("/api/admin/tool-permissions")
+@router.get("/api/admin/tool-permissions", dependencies=_ADMIN_READ)
 async def get_tool_permissions(
     scope: str | None = Query(None),
     scope_id: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
 ):
-    limited = await pg_rate_limit(db, make_key("admin-read", admin_id), 60, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     permissions = await list_tool_permissions(db, scope=scope, scope_id=scope_id)
     return {"permissions": permissions}
 
 
-@router.post("/api/admin/tool-permissions")
+@router.post("/api/admin/tool-permissions", dependencies=_ADMIN_WRITE)
 async def create_tool_permission(
     body: ToolPermissionBody,
     db: AsyncSession = Depends(get_db),
     admin_id: str = Depends(get_admin_user),
 ):
-    limited = await pg_rate_limit(db, make_key("admin-write", admin_id), 30, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     permission_id = await upsert_tool_permission(
         db,
         scope=body.scope,
@@ -74,58 +74,43 @@ async def create_tool_permission(
     return {"id": permission_id}
 
 
-@router.delete("/api/admin/tool-permissions/{permission_id}")
+@router.delete("/api/admin/tool-permissions/{permission_id}", dependencies=_ADMIN_WRITE)
 async def remove_tool_permission(
     permission_id: str,
     db: AsyncSession = Depends(get_db),
     admin_id: str = Depends(get_admin_user),
 ):
-    limited = await pg_rate_limit(db, make_key("admin-write", admin_id), 30, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     deleted = await delete_tool_permission(db, permission_id, updated_by=admin_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Permission not found")
     return {"ok": True}
 
 
-@router.get(_EVAL_PREFIX)
+@router.get(_EVAL_PREFIX, dependencies=_ADMIN_READ)
 async def list_eval(
     limit: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
 ):
-    limited = await pg_rate_limit(db, make_key("admin-read", admin_id), 60, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     runs = await list_eval_runs(db, limit=limit)
     return {"runs": runs}
 
 
-@router.get(_EVAL_PREFIX + "/{run_id}")
+@router.get(_EVAL_PREFIX + "/{run_id}", dependencies=_ADMIN_READ)
 async def get_eval(
     run_id: str,
     db: AsyncSession = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
 ):
-    limited = await pg_rate_limit(db, make_key("admin-read", admin_id), 60, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     run = await get_eval_run(db, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Eval run not found")
     return run
 
 
-@router.get("/api/admin/health")
+@router.get("/api/admin/health", dependencies=_ADMIN_HEALTH)
 async def admin_health(
     db: AsyncSession = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
 ) -> dict:
     """Extended health check — campaign queue depth, pending steps, wiki review backlog."""
-    limited = await pg_rate_limit(db, make_key("admin-health", admin_id), 20, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     try:
         running_campaigns = await get_campaign_queue_depth(db)
     except Exception:

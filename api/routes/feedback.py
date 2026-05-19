@@ -4,14 +4,14 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user
 from api.db.connection import get_db
 from api.db.queries.feedback import list_session_feedback, record_feedback
-from api.db.queries.rate_limit import make_key, pg_rate_limit
+from api.db.queries.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -24,17 +24,12 @@ class FeedbackBody(BaseModel):
     reason: str | None = None
 
 
-@router.post("/api/feedback")
+@router.post("/api/feedback", dependencies=[Depends(rate_limit("feedback", 60))])
 async def post_feedback(
     body: FeedbackBody,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, make_key("feedback", user_id), 60, 60_000)
-    if limited["limited"]:
-        logger.info("feedback_rate_limited user_id=%s", user_id)
-        raise HTTPException(status_code=429, detail="Too many requests")
-
     feedback_id = await record_feedback(
         db,
         session_id=body.session_id,
@@ -46,14 +41,11 @@ async def post_feedback(
     return {"id": feedback_id}
 
 
-@router.get("/api/feedback/{session_id}")
+@router.get("/api/feedback/{session_id}", dependencies=[Depends(rate_limit("feedback-read", 60))])
 async def get_feedback(
     session_id: str,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, make_key("feedback-read", user_id), 60, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     feedback = await list_session_feedback(db, session_id=session_id, user_id=user_id)
     return {"feedback": feedback}
