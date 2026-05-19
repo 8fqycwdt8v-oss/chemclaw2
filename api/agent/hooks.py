@@ -59,6 +59,12 @@ _SECRET_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r'\bAKIA[0-9A-Z]{16}\b'), '[REDACTED-AWS-KEY]', 'aws_access_key'),
     (re.compile(r'\bghp_[A-Za-z0-9]{30,}\b'), '[REDACTED-GITHUB-TOKEN]', 'github_pat'),
     (re.compile(r'\bgithub_pat_[A-Za-z0-9_]{30,}\b'), '[REDACTED-GITHUB-TOKEN]', 'github_pat'),
+    # Slack tokens: xox{b,p,a,r,s,e}-... and the separate xapp-... app-level
+    (re.compile(r'\b(?:xox[baprs]|xapp)-[A-Za-z0-9-]{10,}\b'), '[REDACTED-SLACK-TOKEN]', 'slack_token'),
+    # Google API keys
+    (re.compile(r'\bAIza[0-9A-Za-z_-]{35}\b'), '[REDACTED-GOOGLE-API-KEY]', 'google_api_key'),
+    # GitLab personal access tokens
+    (re.compile(r'\bglpat-[A-Za-z0-9_-]{20,}\b'), '[REDACTED-GITLAB-TOKEN]', 'gitlab_pat'),
     # SSH/PEM private keys
     (re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----'), '[REDACTED-PRIVATE-KEY]', 'private_key'),
 ]

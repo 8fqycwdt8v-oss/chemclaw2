@@ -39,7 +39,10 @@ async def _assert_not_private(hostname: str) -> None:
             addr = ipaddress.ip_address(ip_str)
         except ValueError:
             raise ValueError(f"SSRF blocked: unrecognised address format {ip_str}")
-        if not addr.is_global:
+        # is_global treats multicast (224.0.0.0/4, ff00::/8) as globally
+        # routed, so check it separately — outbound HTTP must never target
+        # a multicast destination.
+        if not addr.is_global or addr.is_multicast:
             raise ValueError(f"SSRF blocked: {hostname} resolves to a non-public address ({ip_str})")
 
 
