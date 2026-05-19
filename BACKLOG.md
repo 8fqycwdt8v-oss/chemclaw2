@@ -45,6 +45,10 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - ~~Migration numbering: there are two `0029_*` files~~ — resolved by renaming `0029_wiki_tables_cleanup.sql` → `0029a_wiki_tables_cleanup.sql` in the review-fixes-A PR.
 - `api/db/connection.py` pool: `pool_size=5, max_overflow=10` is the Python equivalent of the Wave-3h `DB_POOL_MAX=15` total. Document upstream Postgres `max_connections` headroom if running without a pooler at scale.
 
+### Migration policy (May 2026 — review-fix PR F)
+
+- ~~46 `CREATE INDEX` statements lack `CONCURRENTLY`~~ — policy now documented in `migrations/MIGRATIONS.md`. Historical migrations 0001–0036 are already applied; rewriting them retroactively has no effect. New index migrations on populated tables must use `CREATE INDEX CONCURRENTLY` and live in a single-statement file (CI's `--single-transaction` apply forbids mixing `CONCURRENTLY` with other DDL). CLAUDE.md updated to point at the policy file.
+
 ### CI quality — partial adoption (May 2026)
 
 - **mypy strict adoption** — CI now runs mypy in *non-strict* mode (config: `strict = false`, `check_untyped_defs = true`, `no_implicit_optional = true`). `api.agent.tools`, `api.agent.runner`, and `api.agent.hooks` are excluded via per-module overrides because the `claude_agent_sdk` TypedDicts (`McpSdkServerConfig`, `AgentDefinition`, `HookMatcher`) don't match how the SDK's own examples use them, producing ~30 errors that aren't ours to fix. Re-enable strict mode per module as each is cleaned: drop the override, fix any errors that surface. Goal: full strict in 4-6 more PRs.
