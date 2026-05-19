@@ -39,7 +39,7 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 - **Owner-scope every per-user write.** Every `UPDATE`/`DELETE` against per-user rows includes `user_id = :uid` in WHERE — `session_id`/`page_id` alone is not access control.
 - **Read env vars through `os.environ` inside factory/startup functions, never at module import time for required vars.** Module-level reads of required vars fail at import (killing all routes), not at request time. Vars with defaults are fine at module level.
 - **Use the env-var name the library expects** (`DATABASE_URL`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). Aliases break libraries that auto-read.
-- **Before adding a migration, run `git fetch origin main && ls migrations/` and pick a number higher than every file on `main`.** Stale-base branches silently collide on the slot.
+- **Before adding a migration, run `git fetch origin main && ls migrations/` and pick a number higher than every file on `main`.** Stale-base branches silently collide on the slot. Full migration policy in `migrations/MIGRATIONS.md` — read before any index migration on a populated table (`CREATE INDEX CONCURRENTLY`).
 - **Extract on the third copy.** Same 3+ line block across three sibling files = a helper in `api/db/queries/` or a shared utility.
 - **Filter before materialize.** Don't build a list you're about to discard.
 - **No defensive checks the language guarantees.** `str(int(b))` on a value already known to be `int`, `x if x else None` on a value already `Optional` — drop them.
