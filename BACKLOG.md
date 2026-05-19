@@ -45,6 +45,11 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - ~~Migration numbering: there are two `0029_*` files~~ — resolved by renaming `0029_wiki_tables_cleanup.sql` → `0029a_wiki_tables_cleanup.sql` in the review-fixes-A PR.
 - `api/db/connection.py` pool: `pool_size=5, max_overflow=10` is the Python equivalent of the Wave-3h `DB_POOL_MAX=15` total. Document upstream Postgres `max_connections` headroom if running without a pooler at scale.
 
+### CI quality — partial adoption (May 2026)
+
+- **mypy strict adoption** — CI now runs mypy in *non-strict* mode (config: `strict = false`, `check_untyped_defs = true`, `no_implicit_optional = true`). `api.agent.tools`, `api.agent.runner`, and `api.agent.hooks` are excluded via per-module overrides because the `claude_agent_sdk` TypedDicts (`McpSdkServerConfig`, `AgentDefinition`, `HookMatcher`) don't match how the SDK's own examples use them, producing ~30 errors that aren't ours to fix. Re-enable strict mode per module as each is cleaned: drop the override, fix any errors that surface. Goal: full strict in 4-6 more PRs.
+- **Ruff rule expansion** — CI runs `ruff check --select=E,F,W` at `line-length=120`. Auto-fix pass cleaned 42 issues (unused imports + isort) and 4 wrapped lines. Next rule families to add (in order of value): `I` (sorted imports — cosmetic but standardising), `UP` (pyupgrade — auto-rewrites old syntax), `B` (bugbear — catches real bugs), `SIM` (simplification suggestions), `RUF` (Ruff-specific lints).
+
 ### Deferred from test-coverage / audit pass (May 2026)
 
 - ~~SSRF: DNS-rebinding TOCTOU~~ — resolved in fix/ssrf-dns-rebinding PR. `_fetch_validated` resolves DNS exactly once, rewrites the URL to use the resolved IP for the actual connection, and passes the original hostname via `Host` header + httpcore `sni_hostname` extension (for TLS SNI + certificate verification). All three call sites (`fetch_document`, `lookup_regulatory_guidance`, `eln_fetch_experiment`) migrated to the shared helper.

@@ -19,8 +19,8 @@ from sqlalchemy import text
 
 from api.db.queries.campaigns import (
     cancel_campaign,
-    update_campaign_status,
     system_advance_campaign,
+    update_campaign_status,
 )
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, AsyncGenerator
+from typing import AsyncGenerator
 
 from claude_agent_sdk import query
 from claude_agent_sdk.types import (
@@ -15,7 +15,7 @@ from claude_agent_sdk.types import (
     ResultMessage,
     UserMessage,
 )
-from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.agent.hooks import build_hooks
 from api.agent.tools import build_chemclaw_mcp_server
@@ -146,12 +146,15 @@ async def run_agent_streaming(
     if session_id:
         yield f"data: {json.dumps({'type': 'session_start', 'session_id': session_id})}\n\n"
 
-    result_session_id: str | None = None
     try:
         async for message in query(prompt=prompt, options=options):
             if isinstance(message, ResultMessage):
-                result_session_id = message.session_id
-                yield f"data: {json.dumps({'type': 'result', 'session_id': message.session_id, 'stop_reason': str(message.stop_reason)})}\n\n"
+                result_event = {
+                    'type': 'result',
+                    'session_id': message.session_id,
+                    'stop_reason': str(message.stop_reason),
+                }
+                yield f"data: {json.dumps(result_event)}\n\n"
             elif isinstance(message, AssistantMessage):
                 # Stream assistant text blocks
                 for block in message.content:

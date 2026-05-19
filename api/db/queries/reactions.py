@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.models import Reaction
-from api.db.queries.fp_utils import validate_fp_bits, rerank_by_tanimoto
+from api.db.queries.fp_utils import rerank_by_tanimoto, validate_fp_bits
 
 
 async def find_similar_reactions(

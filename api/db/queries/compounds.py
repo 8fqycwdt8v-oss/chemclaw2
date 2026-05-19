@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.models import Compound
-from api.db.queries.fp_utils import validate_fp_bits, rerank_by_tanimoto
+from api.db.queries.fp_utils import rerank_by_tanimoto, validate_fp_bits
 
 
 async def count_pending_fingerprints(db: AsyncSession) -> dict[str, int]:

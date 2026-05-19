@@ -64,7 +64,7 @@ async def pg_rate_limit(
                 VALUES (:key, :window_start, 1)
                 ON CONFLICT (key, window_start)
                 DO UPDATE SET count = rate_limits.count + 1
-                RETURNING count
+                RETURNING count AS cnt
             """),
             {"key": key, "window_start": window_start},
         )
@@ -73,7 +73,9 @@ async def pg_rate_limit(
             logger.error("rate_limit_no_row_returned", extra={"key": key})
             return {"limited": True}
         await db.commit()
-        return {"limited": row.count > max_requests}
+        # Alias the returned column to `cnt` because `row.count` is otherwise
+        # the SQLAlchemy Row built-in count() method, not the column.
+        return {"limited": row.cnt > max_requests}
     except Exception:
         logger.exception("rate_limit_db_fail_closed", extra={"key": key})
         return {"limited": True}

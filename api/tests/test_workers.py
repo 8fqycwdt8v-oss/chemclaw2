@@ -19,7 +19,6 @@ import pytest
 
 from api.workers import campaign_worker, fp_worker
 
-
 # ── Reentrancy guard (campaign_worker) ───────────────────────────────────────
 
 

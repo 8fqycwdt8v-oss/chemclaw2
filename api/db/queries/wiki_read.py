@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.embeddings import EMBED_DIM
 
-
 # ── list / search ─────────────────────────────────────────────────────────────
 
 async def search_wiki_by_fts(

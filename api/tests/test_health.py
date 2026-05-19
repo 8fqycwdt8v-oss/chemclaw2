@@ -12,6 +12,7 @@ os.environ.setdefault("CLERK_SECRET_KEY", "sk_test_placeholder")
 @pytest.fixture(scope="module")
 def client():
     from fastapi.testclient import TestClient
+
     from api.main import create_app
     app = create_app()
     with TestClient(app) as c:

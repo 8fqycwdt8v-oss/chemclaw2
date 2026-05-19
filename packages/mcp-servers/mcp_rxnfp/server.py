@@ -5,8 +5,8 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from mcp.server.fastmcp import FastMCP
 from drfp import DrfpEncoder
+from mcp.server.fastmcp import FastMCP
 
 
 class JsonFormatter(logging.Formatter):

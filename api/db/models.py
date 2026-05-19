@@ -163,7 +163,9 @@ class WikiSubscription(Base):
     __tablename__ = "wiki_subscriptions"
 
     user_id: Mapped[str] = mapped_column(sa.Text, primary_key=True)
-    page_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, ForeignKey("wiki_pages.id", ondelete="CASCADE"), primary_key=True)
+    page_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, ForeignKey("wiki_pages.id", ondelete="CASCADE"), primary_key=True
+    )
     last_seen_version: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default=sa.text("0"))
     created_at: Mapped[datetime] = _now()
 
@@ -227,7 +229,9 @@ class CampaignStep(Base):
     __tablename__ = "campaign_steps"
 
     id: Mapped[uuid.UUID] = _uuid_pk()
-    campaign_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, ForeignKey("synthesis_campaigns.id", ondelete="CASCADE"), nullable=False)
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, ForeignKey("synthesis_campaigns.id", ondelete="CASCADE"), nullable=False
+    )
     step_idx: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     reaction_smiles: Mapped[str | None] = mapped_column(sa.Text)
     conditions: Mapped[str | None] = mapped_column(sa.Text)
@@ -380,7 +384,9 @@ class Property(Base):
     __tablename__ = "properties"
 
     id: Mapped[uuid.UUID] = _uuid_pk()
-    compound_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, ForeignKey("compounds.id", ondelete="CASCADE"), nullable=False)
+    compound_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, ForeignKey("compounds.id", ondelete="CASCADE"), nullable=False
+    )
     name: Mapped[str] = mapped_column(sa.Text, nullable=False)
     value_num: Mapped[float | None] = mapped_column(sa.Double)
     value_text: Mapped[str | None] = mapped_column(sa.Text)

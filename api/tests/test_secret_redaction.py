@@ -13,7 +13,6 @@ import pytest
 
 from api.agent.hooks import _redact_obj, _redact_secrets
 
-
 # Real-world-shaped tokens. Each is long enough to satisfy the
 # pattern's minimum length but doesn't correspond to a real account.
 _ANTHROPIC = "sk-ant-api03-" + "A" * 30

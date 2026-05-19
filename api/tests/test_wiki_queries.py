@@ -65,7 +65,7 @@ async def test_upsert_increments_version_on_change(session_factory, user_id):
         )
     async with session_factory() as s:
         p1 = await get_wiki_page(s, slug)
-    assert p1["version"] == 1
+    assert p1 is not None and p1["version"] == 1
 
     async with session_factory() as s:
         await upsert_wiki_page(
@@ -74,7 +74,7 @@ async def test_upsert_increments_version_on_change(session_factory, user_id):
         )
     async with session_factory() as s:
         p2 = await get_wiki_page(s, slug)
-    assert p2["version"] == 2
+    assert p2 is not None and p2["version"] == 2
 
 
 @pytest.mark.asyncio

@@ -402,7 +402,7 @@ def build_chemclaw_mcp_server(
         steps: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Confirm a synthesis plan and add steps to the campaign."""
-        from api.db.queries.campaigns import update_campaign_status, add_campaign_step
+        from api.db.queries.campaigns import add_campaign_step, update_campaign_status
         # Single transaction: status flip + step inserts are atomic.
         # If any step insert fails the whole operation rolls back.
         async with session_factory() as db:
@@ -455,12 +455,12 @@ def build_chemclaw_mcp_server(
             return {"error": "query must be 1-500 chars"}
         active = set(sources) if sources else {"wiki", "papers", "properties", "facts"}
 
-        from api.db.queries.wiki_read import search_wiki_by_fts
         from api.db.queries.knowledge import (
-            search_papers,
-            search_external_facts,
             lookup_compound_properties,
+            search_external_facts,
+            search_papers,
         )
+        from api.db.queries.wiki_read import search_wiki_by_fts
 
         async with session_factory() as db:
             wiki_results: list[dict] = []
@@ -548,8 +548,10 @@ def build_chemclaw_mcp_server(
         Looks up external_facts by source_id, checks last_seen freshness, and returns
         whether the fact is still current (last_seen within 30 days).
         """
+        from datetime import datetime as _dt
+        from datetime import timedelta, timezone
+
         from api.db.queries.knowledge import get_external_fact_by_source_id
-        from datetime import datetime as _dt, timezone, timedelta
         async with session_factory() as db:
             row = await get_external_fact_by_source_id(db, citation_id)
         if not row:
@@ -586,8 +588,8 @@ def build_chemclaw_mcp_server(
         """
         if proposed_winner not in ("a", "b", "inconclusive"):
             return {"error": "proposed_winner must be 'a', 'b', or 'inconclusive'"}
-        from api.db.queries.wiki_read import get_wiki_page
         from api.db.queries.contradictions import create_contradiction
+        from api.db.queries.wiki_read import get_wiki_page
         async with session_factory() as db:
             page = await get_wiki_page(db, page_slug)
             if not page:
@@ -635,8 +637,10 @@ def build_chemclaw_mcp_server(
         Checks external_facts cache first (24h TTL), then fetches from ich.org.
         Returns the guideline page text or a topic-filtered excerpt.
         """
+        from datetime import datetime as _dt
+        from datetime import timedelta, timezone
+
         from api.db.queries.knowledge import get_external_fact_by_source_id, upsert_external_fact
-        from datetime import datetime as _dt, timezone, timedelta
 
         guideline_key = guideline.strip().upper()
         # Normalise common variants: "ICH Q3A(R2)" -> "ICH Q3A"

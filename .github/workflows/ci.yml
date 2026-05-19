@@ -37,6 +37,12 @@ jobs:
         run: |
           pip install packages/mcp-servers/mcp_molfp packages/mcp-servers/mcp_rxnfp
 
+      - name: Lint (ruff)
+        run: ruff check api/ packages/
+
+      - name: Type-check (mypy)
+        run: mypy api/
+
       - name: Assert DRFP produces 2048 bits
         run: |
           python -c "
@@ -47,9 +53,15 @@ jobs:
           "
 
       - name: Run migrations
+        # --single-transaction wraps each file so partial failure rolls
+        # back the whole file; ON_ERROR_STOP fails the step on first
+        # SQL error; `set -e` fails the loop on the first failing file.
         run: |
+          set -e
           for f in migrations/*.sql; do
-            psql "$DATABASE_URL" -f "$f"
+            echo "applying $f"
+            psql "$DATABASE_URL" --single-transaction \
+              -v ON_ERROR_STOP=1 -f "$f"
           done
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/chemclaw2_test

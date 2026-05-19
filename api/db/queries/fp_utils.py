@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import re
 
-
 _FP_RE = re.compile(r'^[01]{2048}$')
 
 
