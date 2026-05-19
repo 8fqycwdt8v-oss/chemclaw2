@@ -41,16 +41,28 @@ async def _execute_step(step: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_WIKI_RETRY_DELAYS_SEC = (1.0, 2.0, 4.0)
+
+
 async def _create_campaign_wiki(
     campaign: dict[str, Any],
     session_factory: async_sessionmaker[AsyncSession],
-) -> None:
+) -> dict[str, Any]:
     """Create a wiki page summarising a completed synthesis campaign.
 
-    Opens its own session so it does not share transaction state with the
-    main worker loop session.
+    Opens its own session — the slow embed call would otherwise hold the
+    campaign-completion transaction open.
+
+    Retries up to 3 times with exponential backoff against transient
+    failures (embedding API rate-limit, brief DB blip). Returns
+    `{"ok": bool, "error": str | None}` so the caller can distinguish
+    "wiki created" from "logged and dropped" per CLAUDE.md observability
+    rules. The slug is stable (`campaign-{id}`), so re-running this
+    function for the same campaign is idempotent: `upsert_wiki_page`
+    will no-op if the content hash hasn't changed.
     """
     from api.db.queries.wiki_write import upsert_wiki_page
+    from api.embeddings import embed_texts
 
     campaign_id = campaign["id"]
     target = campaign.get("target_smiles") or "unknown target"
@@ -75,24 +87,39 @@ async def _create_campaign_wiki(
         f"## Synthesis Steps\n{steps_text or '(no steps recorded)'}\n"
     )
 
-    from api.embeddings import embed_texts
-
-    try:
-        async with session_factory() as db:
-            await upsert_wiki_page(
-                db,
-                slug=slug,
-                title=title,
-                content={"type": "doc", "content": []},
-                content_text=content_text,
-                created_by=campaign.get("created_by", "system"),
-                citations=[],
-                embed_fn=embed_texts,
-                project="synthesis-campaigns",
+    last_error: str | None = None
+    for attempt, delay in enumerate((0.0, *_WIKI_RETRY_DELAYS_SEC)):
+        if delay > 0:
+            await asyncio.sleep(delay)
+        try:
+            async with session_factory() as db:
+                await upsert_wiki_page(
+                    db,
+                    slug=slug,
+                    title=title,
+                    content={"type": "doc", "content": []},
+                    content_text=content_text,
+                    created_by=campaign.get("created_by", "system"),
+                    citations=[],
+                    embed_fn=embed_texts,
+                    project="synthesis-campaigns",
+                )
+            logger.info(
+                "campaign_wiki_created campaign=%s slug=%s attempt=%d",
+                campaign_id, slug, attempt + 1,
             )
-        logger.info("campaign_wiki_created campaign=%s slug=%s", campaign_id, slug)
-    except Exception:
-        logger.exception("campaign_wiki_create_failed campaign=%s", campaign_id)
+            return {"ok": True, "error": None}
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "campaign_wiki_create_attempt_failed campaign=%s attempt=%d err=%s",
+                campaign_id, attempt + 1, last_error,
+            )
+    logger.error(
+        "campaign_wiki_create_exhausted_retries campaign=%s last_err=%s",
+        campaign_id, last_error,
+    )
+    return {"ok": False, "error": last_error}
 
 
 async def process_running_campaigns(
@@ -156,7 +183,15 @@ async def process_running_campaigns(
                              "target_smiles": campaign.get("target_smiles")},
                         )
                 logger.info("campaign_complete campaign=%s", campaign_id)
-                await _create_campaign_wiki(campaign, session_factory)
+                wiki_result = await _create_campaign_wiki(campaign, session_factory)
+                if not wiki_result["ok"]:
+                    # Status is already 'complete' and the user has been
+                    # notified; the wiki is best-effort. A subsequent
+                    # worker tick will retry via the backfill pass.
+                    logger.error(
+                        "campaign_complete_wiki_missing campaign=%s err=%s",
+                        campaign_id, wiki_result["error"],
+                    )
                 updates += 1
             except Exception:
                 logger.exception("campaign_complete_error campaign=%s", campaign_id)
@@ -184,6 +219,31 @@ async def process_retry_steps(db: AsyncSession) -> int:
     return len(steps)
 
 
+async def backfill_missing_campaign_wikis(
+    db: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> int:
+    """Re-create wiki pages for completed campaigns where the inline creation
+    failed. Bounded to recently-completed campaigns by the underlying query.
+    Returns the number of wikis successfully created on this pass.
+    """
+    from api.db.queries.campaigns import get_complete_campaigns_missing_wiki
+
+    try:
+        rows = await get_complete_campaigns_missing_wiki(db, limit=20)
+    except Exception:
+        logger.exception("campaign_wiki_backfill_query_error")
+        return 0
+
+    backfilled = 0
+    for campaign in rows:
+        result = await _create_campaign_wiki(campaign, session_factory)
+        if result["ok"]:
+            backfilled += 1
+            logger.info("campaign_wiki_backfilled campaign=%s", campaign["id"])
+    return backfilled
+
+
 async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
     global _in_flight
     logger.info("campaign_worker_started")
@@ -199,11 +259,16 @@ async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
                     retried = await process_retry_steps(db)
                 async with session_factory() as db:
                     updated = await process_running_campaigns(db, session_factory)
-                if retried or updated:
+                # Backfill missing campaign wikis once every 5 cycles
+                # (≈ once every 5 minutes at the default 60 s interval).
+                backfilled = 0
+                if _cycle % 5 == 0:
+                    async with session_factory() as db:
+                        backfilled = await backfill_missing_campaign_wikis(db, session_factory)
+                if retried or updated or backfilled:
                     logger.info(
-                        "campaign_worker_cycle retried=%d updated=%d",
-                        retried,
-                        updated,
+                        "campaign_worker_cycle retried=%d updated=%d backfilled=%d",
+                        retried, updated, backfilled,
                     )
                 _cycle += 1
                 if _cycle % 10 == 0:

@@ -35,6 +35,11 @@ _jwks_loaded_at: float = 0.0
 _admin_user_ids: frozenset[str] = frozenset()
 _admin_ids_loaded: bool = False
 
+# Tracks whether the per-request "ALLOW_MOCK_AUTH is enabled" warning has
+# fired this process. The startup-time check in validate_auth_config()
+# already refuses prod ENVs, so this is just to avoid log spam in dev.
+_mock_auth_warned: bool = False
+
 # Envs in which the mock-auth bypass is allowed. Anything else and an
 # ALLOW_MOCK_AUTH=1 raises at startup.
 _DEV_ENVS = {"dev", "development", "test", "local"}
@@ -149,9 +154,10 @@ async def get_current_user(authorization: str | None = Header(None)) -> str:
 
     # Mock auth: only active when explicitly enabled via env var.
     if os.environ.get("ALLOW_MOCK_AUTH") == "1":
-        if not hasattr(get_current_user, "_mock_auth_warned"):
+        global _mock_auth_warned
+        if not _mock_auth_warned:
             logger.warning("ALLOW_MOCK_AUTH is enabled — NEVER set this in production")
-            get_current_user._mock_auth_warned = True  # type: ignore[attr-defined]
+            _mock_auth_warned = True
         if token.startswith("mock:"):
             user_id = token.removeprefix("mock:")
             if not user_id:
