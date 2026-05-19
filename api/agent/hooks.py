@@ -1,7 +1,6 @@
 """Agent security hooks — Python port of packages/agent-tools/src/hooks/*.ts."""
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 import unicodedata
@@ -157,7 +156,11 @@ async def check_tool_output(tool_name: str, tool_output: str, db: Any) -> dict[s
     try:
         known = await known_cas_numbers(db, cas_numbers)
     except Exception:
-        logger.warning("fact_id_check_db_error", extra={"tool": tool_name, "cas_count": len(cas_numbers)}, exc_info=True)
+        logger.warning(
+            "fact_id_check_db_error",
+            extra={"tool": tool_name, "cas_count": len(cas_numbers)},
+            exc_info=True,
+        )
         return {"warnings": ["CAS fact-check unavailable — database error"]}
 
     unknown = [c for c in cas_numbers if c not in known]
@@ -215,7 +218,13 @@ def build_hooks(user_id: str, project_key: str, db_factory: Any) -> dict[str, li
             for val in _extract_string_values(tool_input):
                 if _CONTROLLED_SUBSTANCES.search(_normalize(val)):
                     logger.warning("tool_input_block_controlled_substance", extra={"tool": tool_name})
-                    return {"decision": "block", "reason": "Tool input blocked: contains a term that is not permitted in this context."}
+                    return {
+                        "decision": "block",
+                        "reason": (
+                            "Tool input blocked: contains a term that is not "
+                            "permitted in this context."
+                        ),
+                    }
 
             # Recursively redact credentials + SSNs from all nested values
             redacted_input, changed = _redact_obj(tool_input, tool_name)

@@ -1,7 +1,7 @@
 """Budget queries — Python port of packages/db/src/queries/budgets.ts."""
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text

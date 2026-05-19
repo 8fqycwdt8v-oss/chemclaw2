@@ -6,9 +6,9 @@ import uuid
 import pytest
 
 from api.db.queries.budgets import (
+    delete_project_budget,
     try_consume_tool_call,
     upsert_project_budget,
-    delete_project_budget,
 )
 
 

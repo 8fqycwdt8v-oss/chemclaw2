@@ -9,8 +9,6 @@ is lost, in which case the predicate prevents an overwrite.
 """
 from __future__ import annotations
 
-from typing import Any
-
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 

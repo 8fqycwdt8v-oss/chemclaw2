@@ -23,6 +23,7 @@ dev = [
   "pytest-asyncio>=0.24",
   "httpx>=0.28",
   "mypy>=1.10",
+  "ruff>=0.6",
 ]
 chem = [
   "rdkit>=2024.3",
@@ -41,7 +42,46 @@ include = ["api*"]
 asyncio_mode = "auto"
 testpaths = ["api"]
 
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# Start narrow: pycodestyle errors (E), pyflakes (F), warnings (W). Isort (I)
+# is auto-fixable but its diff is large; add later. Other rule families
+# (UP, B, SIM, RUF) deserve their own enabling pass.
+select = ["E", "F", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use a lot of pytest.fixture closures; ignore unused-import noise
+# for conftest-style helpers there if it shows up later.
+"api/tests/*" = []
+
 [tool.mypy]
 python_version = "3.11"
-strict = true
 ignore_missing_imports = true
+# Strict mode was configured but never run in CI. The codebase has
+# ~100 type-annotation gaps that would fail it today. Re-enable per-module
+# via the [[tool.mypy.overrides]] sections below as each module is cleaned.
+# Tracking ticket: BACKLOG "mypy strict adoption".
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "claude_agent_sdk.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+# The Agent SDK's TypedDicts (McpSdkServerConfig, AgentDefinition,
+# HookMatcher) don't match how the SDK's own examples use them, producing
+# ~30 errors per check. Ignore until the SDK ships better stubs.
+module = ["api.agent.tools", "api.agent.runner", "api.agent.hooks"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "api.tests.*"
+# Tests intentionally omit type annotations on fixture parameters.
+disallow_untyped_defs = false

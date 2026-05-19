@@ -6,7 +6,6 @@ call db.commit() — wrap multi-step operations in `async with db.begin():`.
 from __future__ import annotations
 
 import json
-from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import text

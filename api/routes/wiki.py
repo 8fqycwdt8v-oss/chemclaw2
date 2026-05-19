@@ -12,8 +12,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user, get_optional_user
 from api.db.connection import get_db
-from api.embeddings import embed_texts
+from api.db.queries.contradictions import (
+    create_contradiction,
+    list_contradictions,
+    resolve_contradiction,
+)
 from api.db.queries.rate_limit import make_key, pg_rate_limit
+from api.db.queries.subscriptions import (
+    list_subscriptions,
+    mark_seen,
+    subscribe,
+    unsubscribe,
+)
 from api.db.queries.wiki_read import (
     get_wiki_page,
     get_wiki_page_at,
@@ -28,17 +38,7 @@ from api.db.queries.wiki_write import (
     patch_wiki_page,
     upsert_wiki_page,
 )
-from api.db.queries.subscriptions import (
-    list_subscriptions,
-    mark_seen,
-    subscribe,
-    unsubscribe,
-)
-from api.db.queries.contradictions import (
-    create_contradiction,
-    list_contradictions,
-    resolve_contradiction,
-)
+from api.embeddings import embed_texts
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -162,7 +162,7 @@ async def create_wiki(
         body.content or {"type": "doc", "content": []},
         body.content_text or "",
         user_id,
-        body.citations or [],
+        [c.model_dump() for c in (body.citations or [])],
         embed_texts,
         body.project,
         body.needs_review,
@@ -231,7 +231,7 @@ async def update_wiki(
         body.content or {"type": "doc", "content": []},
         body.content_text or "",
         user_id,
-        body.citations or [],
+        [c.model_dump() for c in (body.citations or [])],
         embed_texts,
         body.project,
         body.needs_review,
@@ -350,7 +350,10 @@ async def mark_wiki_seen(
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
     if body.version > page["version"]:
-        raise HTTPException(status_code=400, detail=f"version {body.version} exceeds current page version {page['version']}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"version {body.version} exceeds current page version {page['version']}",
+        )
     await mark_seen(db, user_id, page["id"], body.version)
     return {"ok": True}
 

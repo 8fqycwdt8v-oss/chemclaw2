@@ -19,7 +19,7 @@ import sys
 import uuid as _uuid_mod
 from typing import Any
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.db.queries.fingerprints import (
     fetch_compounds_missing_fp,
@@ -197,9 +197,9 @@ async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
 
 
 if __name__ == "__main__":
-    import os
     logging.basicConfig(level=logging.INFO)
-    from api.db.connection import init_db, async_session_factory as factory
+    from api.db.connection import async_session_factory as factory
+    from api.db.connection import init_db
     init_db()
     if factory is None:
         raise RuntimeError("init_db() failed")

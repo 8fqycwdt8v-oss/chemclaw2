@@ -13,14 +13,13 @@ import pytest
 from sqlalchemy import text
 
 from api.agent.runner import (
-    SSE_TEXT_BLOCK_MAX_BYTES,
     _TRUNC_MARKER,
+    SSE_TEXT_BLOCK_MAX_BYTES,
     _cap_text_block,
 )
 from api.db.queries.rate_limit import make_key
 from api.db.queries.wiki_write import upsert_wiki_page
 from api.embeddings import EMBED_DIM
-
 
 # ── 1. upsert_wiki_page rollback hazard ──────────────────────────────────────
 

@@ -17,10 +17,9 @@ import pytest
 from sqlalchemy import text
 
 from api.db.queries.notifications import create_notification, mark_read
-from api.db.queries.subscriptions import unsubscribe, subscribe
-from api.db.queries.todos import upsert_todos, mark_todo_done
+from api.db.queries.subscriptions import subscribe, unsubscribe
+from api.db.queries.todos import mark_todo_done, upsert_todos
 from api.db.queries.wiki_write import patch_wiki_page
-
 
 # ── notifications ────────────────────────────────────────────────────────────
 

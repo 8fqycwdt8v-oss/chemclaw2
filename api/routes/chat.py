@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -11,7 +10,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user
-from api.db.connection import get_db, async_session_factory
+from api.db.connection import async_session_factory, get_db
 from api.db.queries.rate_limit import make_key, pg_rate_limit
 
 router = APIRouter()
@@ -96,8 +95,14 @@ async def chat(
         justification = body.override_justification
         if not justification:
             import json
+            blocked_event = {
+                'type': 'error',
+                'message': gate['reason'],
+                'blocked': True,
+                'override_available': True,
+            }
             async def blocked_gen():
-                yield f"data: {json.dumps({'type': 'error', 'message': gate['reason'], 'blocked': True, 'override_available': True})}\n\n"
+                yield f"data: {json.dumps(blocked_event)}\n\n"
                 yield "data: [DONE]\n\n"
             return StreamingResponse(
                 blocked_gen(), status_code=403, media_type="text/event-stream",

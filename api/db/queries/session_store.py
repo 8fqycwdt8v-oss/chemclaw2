@@ -5,7 +5,6 @@ Uses the same `agent_sessions` table with advisory locks for concurrent-safe app
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -48,7 +47,10 @@ class PostgresSessionStore:
         import json
         serialized = json.dumps(entries).encode()
         if len(serialized) > MAX_ENTRY_SERIALIZED_BYTES:
-            raise ValueError(f"session-store: entries serialize to {len(serialized)} bytes (max {MAX_ENTRY_SERIALIZED_BYTES})")
+            raise ValueError(
+                f"session-store: entries serialize to {len(serialized)} bytes "
+                f"(max {MAX_ENTRY_SERIALIZED_BYTES})"
+            )
 
         import time
         mtime = int(time.time() * 1000)

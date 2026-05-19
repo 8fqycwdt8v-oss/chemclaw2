@@ -76,8 +76,9 @@ async def notification_stream(
     if limited["limited"]:
         raise HTTPException(status_code=429, detail="Too many requests")
 
-    from api.db.connection import async_session_factory
     import asyncio
+
+    from api.db.connection import async_session_factory
 
     async def gen():
         try:

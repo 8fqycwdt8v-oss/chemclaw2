@@ -121,8 +121,8 @@ async def db(session_factory) -> AsyncIterator[AsyncSession]:
 async def wiki_page(session_factory, user_id: str) -> dict[str, Any]:
     """Create a fresh wiki page and yield its row dict. Uses separate sessions
     for write + read to mirror production behavior."""
-    from api.db.queries.wiki_write import upsert_wiki_page
     from api.db.queries.wiki_read import get_wiki_page
+    from api.db.queries.wiki_write import upsert_wiki_page
     from api.embeddings import EMBED_DIM
 
     async def _noop_embed(texts: list[str]) -> list[list[float]]:
