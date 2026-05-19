@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +18,7 @@ from api.db.queries.notifications import (
     mark_all_read,
     mark_read,
 )
-from api.db.queries.rate_limit import make_key, pg_rate_limit
+from api.db.queries.rate_limit import rate_limit
 
 router = APIRouter()
 
@@ -30,32 +30,24 @@ class NotificationMarkBody(BaseModel):
     all: bool = False
 
 
-@router.get("/api/notifications")
+@router.get("/api/notifications", dependencies=[Depends(rate_limit("notifications-read", 60))])
 async def get_notifications(
     unread_only: bool = Query(True),
     limit: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    limited = await pg_rate_limit(db, make_key("notifications-read", user_id), 60, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
-
     notifications = await list_notifications(db, user_id, unread_only=unread_only, limit=limit)
     unread_count = await count_unread(db, user_id)
     return {"notifications": notifications, "unread_count": unread_count}
 
 
-@router.patch("/api/notifications")
+@router.patch("/api/notifications", dependencies=[Depends(rate_limit("notifications-write", 30))])
 async def patch_notifications(
     body: NotificationMarkBody,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    limited = await pg_rate_limit(db, make_key("notifications-write", user_id), 30, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
-
     if not body.ids and not body.all:
         return {"marked_read": 0}
 
@@ -67,15 +59,10 @@ async def patch_notifications(
     return {"marked_read": updated}
 
 
-@router.get("/api/notifications/stream")
+@router.get("/api/notifications/stream", dependencies=[Depends(rate_limit("notifications-stream", 10))])
 async def notification_stream(
-    db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ) -> StreamingResponse:
-    limited = await pg_rate_limit(db, make_key("notifications-stream", user_id), 10, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
-
     import asyncio
 
     from api.db.connection import async_session_factory

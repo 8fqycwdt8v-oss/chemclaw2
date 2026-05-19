@@ -7,14 +7,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.auth import get_optional_user
 from api.db.connection import get_db
-from api.db.queries.rate_limit import make_key, pg_rate_limit
+from api.db.queries.rate_limit import rate_limit
 from api.db.queries.wiki_read import search_wiki_by_fts
 
 router = APIRouter()
 
 _FP_RE = re.compile(r'^[01]{2048}$')
+_RL_SEARCH = Depends(rate_limit("search", 30, optional_user=True))
 
 
 class FingerprintSearchRequest(BaseModel):
@@ -24,30 +24,21 @@ class FingerprintSearchRequest(BaseModel):
     min_score: float = Field(default=0.4, ge=0.0, le=1.0)
 
 
-@router.get("/api/search")
+@router.get("/api/search", dependencies=[_RL_SEARCH])
 async def search_get(
     q: str = Query(..., min_length=1, max_length=500),
     limit: int = Query(20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, make_key("search", user_id), 30, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     results = await search_wiki_by_fts(db, q, limit=limit)
     return {"query": q, "wiki": results}
 
 
-@router.post("/api/search")
+@router.post("/api/search", dependencies=[_RL_SEARCH])
 async def search_post(
     body: FingerprintSearchRequest,
     db: AsyncSession = Depends(get_db),
-    user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, make_key("search", user_id), 30, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
-
     if body.fingerprint_bits:
         if not _FP_RE.match(body.fingerprint_bits):
             raise HTTPException(status_code=400, detail="fingerprint_bits must be exactly 2048 binary characters")

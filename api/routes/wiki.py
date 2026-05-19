@@ -17,7 +17,7 @@ from api.db.queries.contradictions import (
     list_contradictions,
     resolve_contradiction,
 )
-from api.db.queries.rate_limit import make_key, pg_rate_limit
+from api.db.queries.rate_limit import rate_limit
 from api.db.queries.subscriptions import (
     list_subscriptions,
     mark_seen,
@@ -45,6 +45,14 @@ logger = logging.getLogger(__name__)
 
 _SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9-]*[a-z0-9]$')
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
+
+# Reusable rate-limit dependencies. Reads are 60/min/user, writes 20/min/user.
+# The "optional_user" variant keys anonymous callers under a shared "anon"
+# bucket — matches the previous inline behaviour of `make_key(..., user_id)`
+# falling through to None.
+_RL_READ = Depends(rate_limit("wiki-read", 60, optional_user=True))
+_RL_READ_REQ = Depends(rate_limit("wiki-read", 60))
+_RL_WRITE = Depends(rate_limit("wiki", 20))
 
 
 class CitationIn(BaseModel):
@@ -91,7 +99,7 @@ class ContradictionBody(BaseModel):
     reason: str
 
 
-@router.get("/api/wiki")
+@router.get("/api/wiki", dependencies=[_RL_READ])
 async def list_wiki(
     q: str | None = Query(None),
     cursor: str | None = Query(None),
@@ -99,12 +107,7 @@ async def list_wiki(
     include_archived: bool = Query(False),
     projects: bool = Query(False),
     db: AsyncSession = Depends(get_db),
-    user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, make_key("wiki-read", user_id), 60, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
-
     if projects:
         return {"projects": await list_wiki_projects(db)}
 
@@ -141,15 +144,12 @@ async def list_wiki(
     return {"pages": pages, "nextCursor": next_cursor}
 
 
-@router.post("/api/wiki")
+@router.post("/api/wiki", dependencies=[_RL_WRITE])
 async def create_wiki(
     body: WikiPostBody,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     if not _SLUG_RE.match(body.slug):
         raise HTTPException(status_code=400, detail="Invalid slug: use lowercase letters, numbers, and hyphens only")
     existing = await get_wiki_page(db, body.slug, include_archived=True)
@@ -170,28 +170,22 @@ async def create_wiki(
     return {"id": page_id}
 
 
-@router.get("/api/wiki/subscriptions")
+@router.get("/api/wiki/subscriptions", dependencies=[_RL_READ_REQ])
 async def get_wiki_subscriptions(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, make_key("wiki-read", user_id), 60, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     subs = await list_subscriptions(db, user_id)
     return {"subscriptions": subs}
 
 
-@router.get("/api/wiki/{slug}")
+@router.get("/api/wiki/{slug}", dependencies=[_RL_READ])
 async def get_wiki(
     slug: str,
     as_of: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, make_key("wiki-read", user_id), 60, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     if as_of:
         try:
             as_of_dt = datetime.fromisoformat(as_of)
@@ -208,7 +202,7 @@ async def get_wiki(
     return {**page, "citations": citations}
 
 
-@router.put("/api/wiki/{slug}")
+@router.put("/api/wiki/{slug}", dependencies=[_RL_WRITE])
 async def update_wiki(
     slug: str,
     body: WikiPutBody,
@@ -216,9 +210,6 @@ async def update_wiki(
     user_id: str = Depends(get_current_user),
 ):
     """Replace a wiki page's content, title, and citations. Triggers re-embed."""
-    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     existing = await get_wiki_page(db, slug, include_archived=True)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
@@ -239,17 +230,13 @@ async def update_wiki(
     return {"id": page_id}
 
 
-@router.patch("/api/wiki/{slug}")
+@router.patch("/api/wiki/{slug}", dependencies=[_RL_WRITE])
 async def patch_wiki(
     slug: str,
     body: WikiPatchBody,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
-    if limited["limited"]:
-        logger.warning("wiki_patch_rate_limited user=%s", user_id)
-        raise HTTPException(status_code=429, detail="Too many requests")
     existing = await get_wiki_page(db, slug, include_archived=True)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
@@ -266,16 +253,12 @@ async def patch_wiki(
 
 # ── Revisions ──────────────────────────────────────────────────────────────────
 
-@router.get("/api/wiki/{slug}/revisions")
+@router.get("/api/wiki/{slug}/revisions", dependencies=[_RL_READ])
 async def get_wiki_revisions(
     slug: str,
     limit: int = Query(20, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
-    user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, make_key("wiki-read", user_id), 60, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug, include_archived=True)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
@@ -283,16 +266,12 @@ async def get_wiki_revisions(
     return {"revisions": revisions}
 
 
-@router.get("/api/wiki/{slug}/revisions/{version}")
+@router.get("/api/wiki/{slug}/revisions/{version}", dependencies=[_RL_READ])
 async def get_wiki_revision_by_version(
     slug: str,
     version: int,
     db: AsyncSession = Depends(get_db),
-    user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, make_key("wiki-read", user_id), 60, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug, include_archived=True)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
@@ -304,15 +283,12 @@ async def get_wiki_revision_by_version(
 
 # ── Subscriptions ──────────────────────────────────────────────────────────────
 
-@router.post("/api/wiki/{slug}/subscribe")
+@router.post("/api/wiki/{slug}/subscribe", dependencies=[_RL_WRITE])
 async def subscribe_wiki(
     slug: str,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
@@ -320,15 +296,12 @@ async def subscribe_wiki(
     return {"ok": True}
 
 
-@router.delete("/api/wiki/{slug}/subscribe")
+@router.delete("/api/wiki/{slug}/subscribe", dependencies=[_RL_WRITE])
 async def unsubscribe_wiki(
     slug: str,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
@@ -336,16 +309,13 @@ async def unsubscribe_wiki(
     return {"ok": True}
 
 
-@router.post("/api/wiki/{slug}/seen")
+@router.post("/api/wiki/{slug}/seen", dependencies=[_RL_WRITE])
 async def mark_wiki_seen(
     slug: str,
     body: WikiSeenBody,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
@@ -360,16 +330,12 @@ async def mark_wiki_seen(
 
 # ── Contradictions ─────────────────────────────────────────────────────────────
 
-@router.get("/api/wiki/{slug}/contradictions")
+@router.get("/api/wiki/{slug}/contradictions", dependencies=[_RL_READ])
 async def get_wiki_contradictions(
     slug: str,
     resolved: bool = Query(False),
     db: AsyncSession = Depends(get_db),
-    user_id: str | None = Depends(get_optional_user),
 ):
-    limited = await pg_rate_limit(db, make_key("wiki-read", user_id), 60, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug, include_archived=True)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
@@ -377,16 +343,13 @@ async def get_wiki_contradictions(
     return {"contradictions": items}
 
 
-@router.post("/api/wiki/{slug}/contradictions")
+@router.post("/api/wiki/{slug}/contradictions", dependencies=[_RL_WRITE])
 async def create_wiki_contradiction(
     slug: str,
     body: ContradictionBody,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
@@ -397,16 +360,13 @@ async def create_wiki_contradiction(
     return {"id": contradiction_id}
 
 
-@router.patch("/api/wiki/{slug}/contradictions/{contradiction_id}/resolve")
+@router.patch("/api/wiki/{slug}/contradictions/{contradiction_id}/resolve", dependencies=[_RL_WRITE])
 async def resolve_wiki_contradiction(
     slug: str,
     contradiction_id: str,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, make_key("wiki", user_id), 20, 60_000)
-    if limited["limited"]:
-        raise HTTPException(status_code=429, detail="Too many requests")
     page = await get_wiki_page(db, slug, include_archived=True)
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")

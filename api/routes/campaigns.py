@@ -17,7 +17,7 @@ from api.db.queries.campaigns import (
     get_campaign_with_steps,
     list_user_campaigns,
 )
-from api.db.queries.rate_limit import make_key, pg_rate_limit
+from api.db.queries.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +30,12 @@ class CampaignPatchBody(BaseModel):
     status: Literal["failed"]
 
 
-@router.get("/api/campaigns")
+@router.get("/api/campaigns", dependencies=[Depends(rate_limit("campaigns-list", 30))])
 async def list_campaigns(
     cursor: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, make_key("campaigns-list", user_id), 30, 60_000)
-    if limited["limited"]:
-        logger.info("rate_limit_denied: campaigns-list user=%s", user_id)
-        raise HTTPException(status_code=429, detail="Too many requests")
-
     cursor_updated_at: datetime | None = None
     cursor_id: str | None = None
     if cursor:
@@ -70,17 +65,12 @@ async def list_campaigns(
     return {"campaigns": campaigns, "nextCursor": next_cursor}
 
 
-@router.get("/api/campaigns/{campaign_id}")
+@router.get("/api/campaigns/{campaign_id}", dependencies=[Depends(rate_limit("campaigns-get", 60))])
 async def get_campaign(
     campaign_id: str,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, make_key("campaigns-get", user_id), 60, 60_000)
-    if limited["limited"]:
-        logger.info("rate_limit_denied: campaigns-get user=%s", user_id)
-        raise HTTPException(status_code=429, detail="Too many requests")
-
     result = await get_campaign_with_steps(db, campaign_id, user_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -88,18 +78,13 @@ async def get_campaign(
     return result
 
 
-@router.patch("/api/campaigns/{campaign_id}")
+@router.patch("/api/campaigns/{campaign_id}", dependencies=[Depends(rate_limit("campaigns-patch", 20))])
 async def patch_campaign(
     campaign_id: str,
     body: CampaignPatchBody,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    limited = await pg_rate_limit(db, make_key("campaigns-patch", user_id), 20, 60_000)
-    if limited["limited"]:
-        logger.info("rate_limit_denied: campaigns-patch user=%s", user_id)
-        raise HTTPException(status_code=429, detail="Too many requests")
-
     cancelled = await cancel_campaign(db, campaign_id, user_id)
     if not cancelled:
         raise HTTPException(status_code=404, detail="Campaign not found or already in a terminal state")
