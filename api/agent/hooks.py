@@ -51,11 +51,18 @@ def scheduled_substance_gate(prompt: str) -> dict[str, Any]:
 _SSN_RE = re.compile(r'\b\d{3}-\d{2}-\d{4}\b')
 
 _SECRET_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
-    # Anthropic SDK keys (must come before generic sk- pattern)
+    # Anthropic SDK keys (must come before any generic sk- pattern)
     (re.compile(r'\bsk-ant-[A-Za-z0-9_-]{20,}\b'), '[REDACTED-ANTHROPIC-KEY]', 'anthropic_key'),
-    # Generic short-key prefixes (OpenAI, Stripe, etc.)
+    # Stripe live/test keys: must come before the generic sk/pk fallback
+    # because Stripe's `sk_live_<rest>` has a second underscore that the
+    # `[-_]` separator in the generic pattern stops on.
+    (re.compile(r'\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b'), '[REDACTED-STRIPE-KEY]', 'stripe_key'),
+    # Generic short-key prefixes (OpenAI restricted/public, custom providers)
     (re.compile(r'\b(sk|rk|pk)[-_][A-Za-z0-9]{20,}\b'), '[REDACTED-API-KEY]', 'api_key'),
     (re.compile(r'\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{16,}\b'), 'Bearer [REDACTED]', 'bearer_token'),
+    # JWT: three base64url segments separated by dots. Anchor on the eyJ
+    # prefix (base64-encoded `{"`) — every real JWT header starts with it.
+    (re.compile(r'\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b'), '[REDACTED-JWT]', 'jwt'),
     (re.compile(r'\bAKIA[0-9A-Z]{16}\b'), '[REDACTED-AWS-KEY]', 'aws_access_key'),
     (re.compile(r'\bghp_[A-Za-z0-9]{30,}\b'), '[REDACTED-GITHUB-TOKEN]', 'github_pat'),
     (re.compile(r'\bgithub_pat_[A-Za-z0-9_]{30,}\b'), '[REDACTED-GITHUB-TOKEN]', 'github_pat'),
@@ -65,6 +72,13 @@ _SECRET_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r'\bAIza[0-9A-Za-z_-]{35}\b'), '[REDACTED-GOOGLE-API-KEY]', 'google_api_key'),
     # GitLab personal access tokens
     (re.compile(r'\bglpat-[A-Za-z0-9_-]{20,}\b'), '[REDACTED-GITLAB-TOKEN]', 'gitlab_pat'),
+    # SendGrid API keys (SG.<id>.<sig> shape, both segments base64url)
+    (re.compile(r'\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b'), '[REDACTED-SENDGRID-KEY]', 'sendgrid_key'),
+    # Twilio account SIDs (companion auth tokens are unprefixed, so we
+    # match the SID — its presence often indicates the auth token is nearby).
+    (re.compile(r'\bAC[0-9a-fA-F]{32}\b'), '[REDACTED-TWILIO-SID]', 'twilio_sid'),
+    # npm access tokens
+    (re.compile(r'\bnpm_[A-Za-z0-9]{36}\b'), '[REDACTED-NPM-TOKEN]', 'npm_token'),
     # SSH/PEM private keys
     (re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----'), '[REDACTED-PRIVATE-KEY]', 'private_key'),
 ]

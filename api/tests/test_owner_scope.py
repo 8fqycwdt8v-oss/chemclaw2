@@ -19,6 +19,7 @@ from sqlalchemy import text
 from api.db.queries.notifications import create_notification, mark_read
 from api.db.queries.subscriptions import unsubscribe, subscribe
 from api.db.queries.todos import upsert_todos, mark_todo_done
+from api.db.queries.wiki_write import patch_wiki_page
 
 
 # ── notifications ────────────────────────────────────────────────────────────
@@ -113,3 +114,27 @@ async def test_unsubscribe_owner_scoped(session_factory, wiki_page):
     async with session_factory() as db:
         removed = await unsubscribe(db, owner, page_id)
     assert removed is True
+
+
+# ── wiki patch ───────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_patch_wiki_page_owner_scoped(session_factory, wiki_page):
+    """`patch_wiki_page` now repeats the creator predicate in WHERE — a
+    non-owner caller must not be able to flip `archived` (or any other
+    metadata) even if the route's upstream 403 check is bypassed."""
+    slug = wiki_page["slug"]
+    attacker = f"a-{uuid.uuid4().hex[:8]}"
+
+    async with session_factory() as db:
+        result = await patch_wiki_page(db, slug, attacker, archived=True)
+    # Attacker is not the creator → predicate excludes the row, found=False.
+    assert result["found"] is False
+
+    async with session_factory() as db:
+        row = await db.execute(
+            text("SELECT archived FROM wiki_pages WHERE slug = :slug"),
+            {"slug": slug},
+        )
+        assert row.scalar_one() is False
