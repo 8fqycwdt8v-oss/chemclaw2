@@ -22,17 +22,24 @@ logger = logging.getLogger(__name__)
 
 # ── SSRF protection ───────────────────────────────────────────────────────────
 
-async def _assert_not_private(hostname: str) -> None:
-    """Raise if hostname resolves to a private/loopback/non-global IP.
+async def _resolve_to_global_ip(hostname: str) -> str:
+    """Resolve a hostname and return the first public IP, or raise ValueError.
+
+    Single point of DNS resolution: callers should *use this IP* as the
+    connection target (see `_fetch_validated`) rather than passing the
+    hostname back through httpx, which would re-resolve at connect time
+    and open a DNS-rebinding TOCTOU window. CLAUDE.md §security-5.
 
     Uses run_in_executor so the blocking getaddrinfo call does not stall
-    the event loop. Fails closed: a DNS resolution failure raises ValueError.
+    the event loop. Fails closed on DNS error, unrecognised address
+    format, private/loopback/link-local/multicast/etc.
     """
     loop = asyncio.get_running_loop()
     try:
         infos = await loop.run_in_executor(None, socket.getaddrinfo, hostname, None)
     except OSError as e:
         raise ValueError(f"DNS resolution failed for {hostname}: {e}") from e
+    chosen: str | None = None
     for info in infos:
         ip_str = info[4][0]
         try:
@@ -44,6 +51,22 @@ async def _assert_not_private(hostname: str) -> None:
         # a multicast destination.
         if not addr.is_global or addr.is_multicast:
             raise ValueError(f"SSRF blocked: {hostname} resolves to a non-public address ({ip_str})")
+        # Prefer IPv4 (first match) — more libraries handle it cleanly,
+        # and the SNI extension path is identical for v4/v6.
+        if chosen is None or (":" in chosen and ":" not in ip_str):
+            chosen = ip_str
+    if chosen is None:
+        raise ValueError(f"DNS returned no records for {hostname}")
+    return chosen
+
+
+async def _assert_not_private(hostname: str) -> None:
+    """Back-compat alias: validates the hostname but discards the IP.
+
+    Prefer `_resolve_to_global_ip` directly so the resolved IP can be
+    pinned for the actual connection.
+    """
+    await _resolve_to_global_ip(hostname)
 
 
 # ── Allowed domains ───────────────────────────────────────────────────────────
@@ -66,6 +89,92 @@ ALLOWED_DOMAINS = [
 def _is_allowed_domain(hostname: str) -> bool:
     h = hostname.lower()
     return any(h == d or h.endswith('.' + d) for d in ALLOWED_DOMAINS)
+
+
+# ── Validated HTTP fetch with IP pinning ──────────────────────────────────────
+
+
+def _pin_url_to_ip(url: str, ip: str) -> str:
+    """Replace the hostname in `url` with `ip`, preserving scheme/port/path/query.
+
+    IPv6 addresses are wrapped in brackets so the resulting URL is valid.
+    The caller still passes the original hostname via SNI + Host header
+    (see `_fetch_validated`), so TLS verification continues to work.
+    """
+    parsed = urlparse(url)
+    bracketed = f"[{ip}]" if ":" in ip else ip
+    netloc = f"{bracketed}:{parsed.port}" if parsed.port is not None else bracketed
+    if parsed.username:
+        creds = parsed.username + (f":{parsed.password}" if parsed.password else "")
+        netloc = f"{creds}@{netloc}"
+    return parsed._replace(netloc=netloc).geturl()
+
+
+class _SSRFError(ValueError):
+    """Raised by `_fetch_validated` when an SSRF guard rejects the request."""
+
+
+async def _fetch_validated(
+    url: str,
+    *,
+    enforce_domain_allowlist: bool,
+    max_redirects: int = 5,
+    timeout: float = 15.0,
+    headers: dict[str, str] | None = None,
+    user_agent: str = "chemclaw2/1.0 (research assistant)",
+) -> httpx.Response:
+    """Fetch `url` with SSRF guards applied at every hop.
+
+    For each URL in the redirect chain:
+      1. Validate the hostname against `ALLOWED_DOMAINS` if requested.
+      2. Resolve DNS exactly once and reject non-global / multicast IPs.
+      3. Rewrite the URL to point at the resolved IP, pass the original
+         hostname via SNI + Host header so TLS cert verification still
+         matches the certificate's SAN/CN.
+      4. Send the request without httpx-level redirect following — this
+         function handles redirects explicitly so each new hop is
+         re-validated.
+
+    Raises `_SSRFError` (a ValueError subclass) for any guard failure;
+    other exceptions (timeout, connection reset, etc.) propagate as
+    `httpx.HTTPError` for the caller to handle.
+    """
+    current = url
+    base_headers = {"User-Agent": user_agent, **(headers or {})}
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        for _ in range(max_redirects + 1):
+            parsed = urlparse(current)
+            hostname = (parsed.hostname or "").lower()
+            if not hostname:
+                raise _SSRFError(f"Invalid URL: missing hostname in {current[:100]}")
+            if enforce_domain_allowlist and not _is_allowed_domain(hostname):
+                raise _SSRFError(f"Domain '{hostname}' is not in the allowed list")
+            try:
+                ip = await _resolve_to_global_ip(hostname)
+            except ValueError as e:
+                # Re-raise as _SSRFError so callers' single `except _SSRFError`
+                # branch covers both allowlist + DNS rejection paths.
+                raise _SSRFError(str(e)) from e
+            pinned = _pin_url_to_ip(current, ip)
+            # `Host` header preserves the hostname for HTTP routing on the
+            # peer; `sni_hostname` makes httpcore use the hostname for both
+            # TLS SNI and certificate verification (server_hostname).
+            req_headers = {**base_headers, "Host": hostname}
+            response = await client.get(
+                pinned,
+                headers=req_headers,
+                extensions={"sni_hostname": hostname},
+            )
+            if not response.is_redirect:
+                return response
+            location = response.headers.get("location", "").strip()
+            if not location:
+                raise _SSRFError("Redirect response with no Location header")
+            # Resolve relative redirects against the *original* hostname
+            # (not the pinned IP) so the next hop's allowlist check runs
+            # against the real authority.
+            current = str(httpx.URL(f"{parsed.scheme}://{hostname}").join(location))
+        raise _SSRFError("Too many redirects")
 
 
 # ── HTML → text ───────────────────────────────────────────────────────────────
@@ -218,63 +327,28 @@ def build_chemclaw_mcp_server(
         format: str = "markdown",
     ) -> dict[str, Any]:
         """Fetch a scientific document from an allowed domain."""
-        try:
-            parsed = urlparse(url)
-            hostname = parsed.hostname or ""
-        except Exception:
-            return {"error": "Invalid URL"}
-        if not _is_allowed_domain(hostname):
-            return {"error": f"Domain '{hostname}' is not in the allowed list"}
-        try:
-            await _assert_not_private(hostname)
-        except ValueError as e:
-            return {"error": str(e)}
         MAX_BYTES = 500_000
-        # Follow redirects manually: re-validate each hop's domain and IP.
-        current_url = url
-        for _ in range(5):
-            try:
-                async with httpx.AsyncClient(
-                    timeout=15.0,
-                    follow_redirects=False,
-                    headers={"User-Agent": "chemclaw2/1.0 (research assistant)"},
-                ) as client:
-                    r = await client.get(current_url)
-            except Exception:
-                logger.warning("fetch_document_failed url=%s", current_url[:100])
-                return {"error": "Fetch failed"}
-            if r.is_redirect:
-                redir_loc = r.headers.get("location", "")
-                if not redir_loc:
-                    return {"error": "Redirect with no Location header"}
-                try:
-                    redir_parsed = urlparse(redir_loc)
-                    redir_hostname = redir_parsed.hostname or ""
-                except Exception:
-                    return {"error": "Invalid redirect URL"}
-                if not _is_allowed_domain(redir_hostname):
-                    return {"error": f"Redirect to blocked domain: '{redir_hostname}'"}
-                try:
-                    await _assert_not_private(redir_hostname)
-                except ValueError as e:
-                    return {"error": str(e)}
-                current_url = redir_loc
-                continue
-            if not r.is_success:
-                return {"error": f"HTTP {r.status_code}"}
-            content_type = r.headers.get("content-type", "")
-            body = r.content[:MAX_BYTES]
-            if format == "bytes":
-                import base64
-                return {"content_type": content_type, "data": base64.b64encode(body).decode()}
-            if not content_type.startswith("text/"):
-                return {"error": f"Unsupported content-type for {format}: {content_type.split(';')[0].strip()}"}
-            text = body.decode("utf-8", errors="replace")
-            if format == "markdown":
-                text = _html_to_text(text)
-            # 10 K char limit matches TypeScript doc-fetch — keeps context window manageable.
-            return {"content": text[:10_000], "truncated": len(r.content) > MAX_BYTES or len(text) > 10_000}
-        return {"error": "Too many redirects"}
+        try:
+            r = await _fetch_validated(url, enforce_domain_allowlist=True)
+        except _SSRFError as e:
+            return {"error": str(e)}
+        except Exception:
+            logger.warning("fetch_document_failed url=%s", url[:100])
+            return {"error": "Fetch failed"}
+        if not r.is_success:
+            return {"error": f"HTTP {r.status_code}"}
+        content_type = r.headers.get("content-type", "")
+        body = r.content[:MAX_BYTES]
+        if format == "bytes":
+            import base64
+            return {"content_type": content_type, "data": base64.b64encode(body).decode()}
+        if not content_type.startswith("text/"):
+            return {"error": f"Unsupported content-type for {format}: {content_type.split(';')[0].strip()}"}
+        text = body.decode("utf-8", errors="replace")
+        if format == "markdown":
+            text = _html_to_text(text)
+        # 10 K char limit matches TypeScript doc-fetch — keeps context window manageable.
+        return {"content": text[:10_000], "truncated": len(r.content) > MAX_BYTES or len(text) > 10_000}
 
     # ── ELN experiment fetch ──────────────────────────────────────────────────
     @mcp.tool()
@@ -283,32 +357,29 @@ def build_chemclaw_mcp_server(
         eln_base = os.environ.get("ELN_API_BASE_URL", "").rstrip("/")
         if not eln_base:
             return {"error": "ELN_API_BASE_URL not configured"}
-        try:
-            parsed = urlparse(eln_base)
-            hostname = parsed.hostname or ""
-            await _assert_not_private(hostname)
-        except ValueError as e:
-            return {"error": str(e)}
         eln_key = os.environ.get("ELN_API_KEY", "")
         exp_id = experiment_id.strip()
         if not re.match(r'^[A-Za-z0-9_-]{1,64}$', exp_id):
             return {"error": "Invalid experiment_id format"}
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                # Path: TypeScript used /experiments/{id}; Python uses /api/eln/experiments/{id}.
-                # Verify this against the actual ELN API contract before deploying.
-                r = await client.get(
-                    f"{eln_base}/api/eln/experiments/{exp_id}",
-                    headers={"Authorization": f"Bearer {eln_key}"},
-                )
-            if r.status_code == 404:
-                return {"error": f"Experiment {exp_id} not found"}
-            if not r.is_success:
-                return {"error": f"ELN API error: {r.status_code}"}
-            return r.json()
+            # Path: TypeScript used /experiments/{id}; Python uses /api/eln/experiments/{id}.
+            # Verify this against the actual ELN API contract before deploying.
+            r = await _fetch_validated(
+                f"{eln_base}/api/eln/experiments/{exp_id}",
+                enforce_domain_allowlist=False,
+                timeout=10.0,
+                headers={"Authorization": f"Bearer {eln_key}"},
+            )
+        except _SSRFError as e:
+            return {"error": str(e)}
         except Exception as e:
             logger.warning("eln_fetch_failed exp=%s: %s", exp_id, e)
             return {"error": "ELN fetch failed"}
+        if r.status_code == 404:
+            return {"error": f"Experiment {exp_id} not found"}
+        if not r.is_success:
+            return {"error": f"ELN API error: {r.status_code}"}
+        return r.json()
 
     # ── synthesis campaign tools ──────────────────────────────────────────────
     @mcp.tool()
@@ -603,36 +674,18 @@ def build_chemclaw_mcp_server(
                     "cached": True,
                 }
 
-        # Fetch from ich.org — follow redirects manually to re-validate each hop.
+        # Fetch from ich.org via the shared SSRF-pinned helper.
         url = _ICH_URLS.get(guideline_key, "https://www.ich.org/page/quality-guidelines")
         try:
-            current_url = url
-            raw_text = ""
-            for _ in range(5):
-                parsed = urlparse(current_url)
-                hostname = parsed.hostname or ""
-                await _assert_not_private(hostname)
-                async with httpx.AsyncClient(
-                    timeout=15.0,
-                    follow_redirects=False,
-                    headers={"User-Agent": "chemclaw2/1.0 (research assistant)"},
-                ) as client:
-                    r = await client.get(current_url)
-                if r.is_redirect:
-                    redir_loc = r.headers.get("location", "")
-                    if not redir_loc:
-                        return {"error": "Redirect with no Location header", "guideline": guideline_key}
-                    current_url = redir_loc
-                    continue
-                if not r.is_success:
-                    return {"error": f"ICH fetch returned HTTP {r.status_code}", "guideline": guideline_key}
-                raw_text = _html_to_text(r.text)
-                break
-            else:
-                return {"error": "Too many redirects", "guideline": guideline_key}
+            r = await _fetch_validated(url, enforce_domain_allowlist=True)
+        except _SSRFError as e:
+            return {"error": str(e), "guideline": guideline_key}
         except Exception as e:
             logger.warning("regulatory_fetch_failed guideline=%s: %s", guideline_key, e)
             return {"error": "Failed to fetch regulatory guidance", "guideline": guideline_key}
+        if not r.is_success:
+            return {"error": f"ICH fetch returned HTTP {r.status_code}", "guideline": guideline_key}
+        raw_text = _html_to_text(r.text)
 
         excerpt = raw_text[:10_000]
         async with session_factory() as db:

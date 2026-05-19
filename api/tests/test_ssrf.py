@@ -1,8 +1,10 @@
 """Tests for the SSRF guards in `api.agent.tools`.
 
-`_assert_not_private` is the CLAUDE.md template for outbound HTTP — it
-must fail closed on DNS error and reject any record that is not globally
-routable. `_is_allowed_domain` enforces the agent's allowlist.
+`_assert_not_private` / `_resolve_to_global_ip` is the CLAUDE.md template
+for outbound HTTP — must fail closed on DNS error and reject any record
+that is not globally routable. `_is_allowed_domain` enforces the agent's
+allowlist. `_fetch_validated` is the shared helper that pins the resolved
+IP for the actual connection, closing the DNS-rebinding TOCTOU window.
 
 These tests mock `socket.getaddrinfo` so they run without network and
 exercise the full address-classification logic on synthetic A/AAAA records.
@@ -12,9 +14,17 @@ from __future__ import annotations
 import socket
 from typing import Any
 
+import httpx
 import pytest
 
-from api.agent.tools import _assert_not_private, _is_allowed_domain
+from api.agent.tools import (
+    _SSRFError,
+    _assert_not_private,
+    _fetch_validated,
+    _is_allowed_domain,
+    _pin_url_to_ip,
+    _resolve_to_global_ip,
+)
 
 
 def _make_addrinfo(*ips: str) -> list[tuple[Any, ...]]:
@@ -115,3 +125,223 @@ async def test_unrecognised_address_format_rejected(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: fake)
     with pytest.raises(ValueError, match="unrecognised address format"):
         await _assert_not_private("bogus.example.com")
+
+
+# ── _resolve_to_global_ip returns an IP ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_resolve_returns_public_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: _make_addrinfo("8.8.8.8"))
+    assert await _resolve_to_global_ip("dns.google") == "8.8.8.8"
+
+
+@pytest.mark.asyncio
+async def test_resolve_prefers_ipv4_when_both_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When DNS returns both IPv4 and IPv6, IPv4 is preferred — the SNI
+    extension path is identical for both but IPv4 has the widest library
+    support."""
+    monkeypatch.setattr(
+        socket, "getaddrinfo",
+        lambda *a, **kw: _make_addrinfo("2606:4700::1111", "1.1.1.1"),
+    )
+    assert await _resolve_to_global_ip("dns.cloudflare.com") == "1.1.1.1"
+
+
+# ── _pin_url_to_ip ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "url,ip,expected",
+    [
+        ("https://nature.com/path?q=1", "8.8.8.8", "https://8.8.8.8/path?q=1"),
+        ("http://nature.com:8080/x", "8.8.8.8", "http://8.8.8.8:8080/x"),
+        ("https://nature.com/x", "2606:4700::1", "https://[2606:4700::1]/x"),
+        ("https://nature.com:443/x", "2606:4700::1", "https://[2606:4700::1]:443/x"),
+    ],
+)
+def test_pin_url_to_ip(url: str, ip: str, expected: str) -> None:
+    assert _pin_url_to_ip(url, ip) == expected
+
+
+# ── _fetch_validated end-to-end with mocked HTTP ─────────────────────────────
+
+
+class _StubAsyncClient:
+    """Stand-in for httpx.AsyncClient that records what was requested.
+
+    `_fetch_validated` opens one client and calls .get() one or more
+    times (one per redirect hop). The stub captures every call and
+    returns a queued response.
+    """
+
+    def __init__(self, responses: list[httpx.Response]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict[str, Any]] = []
+
+    async def __aenter__(self) -> "_StubAsyncClient":
+        return self
+
+    async def __aexit__(self, *a: Any) -> None:
+        return None
+
+    async def get(self, url: str, *, headers: dict[str, str], extensions: dict[str, Any]) -> httpx.Response:
+        self.calls.append({"url": url, "headers": dict(headers), "extensions": dict(extensions)})
+        return self._responses.pop(0)
+
+
+def _resp(status: int, *, headers: dict[str, str] | None = None, content: bytes = b"") -> httpx.Response:
+    return httpx.Response(status, headers=headers or {}, content=content)
+
+
+@pytest.mark.asyncio
+async def test_fetch_validated_pins_resolved_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The request URL passed to httpx must contain the resolved IP, and
+    the Host header + sni_hostname extension must carry the original
+    hostname. This locks in the DNS-rebinding mitigation."""
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: _make_addrinfo("1.1.1.1"))
+    stub = _StubAsyncClient([_resp(200)])
+    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+
+    await _fetch_validated("https://www.nature.com/articles/x", enforce_domain_allowlist=True)
+
+    assert len(stub.calls) == 1
+    call = stub.calls[0]
+    assert call["url"].startswith("https://1.1.1.1/")
+    assert "www.nature.com" not in call["url"]
+    assert call["headers"]["Host"] == "www.nature.com"
+    assert call["extensions"]["sni_hostname"] == "www.nature.com"
+
+
+@pytest.mark.asyncio
+async def test_fetch_validated_revalidates_redirect_hop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each redirect hop must hit the SSRF guard again. Inject a redirect
+    that points at a blocked domain and assert the helper raises."""
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: _make_addrinfo("1.1.1.1"))
+    stub = _StubAsyncClient([
+        _resp(302, headers={"location": "https://attacker.example.com/"}),
+    ])
+    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+
+    with pytest.raises(_SSRFError, match="not in the allowed list"):
+        await _fetch_validated("https://www.nature.com/x", enforce_domain_allowlist=True)
+
+
+@pytest.mark.asyncio
+async def test_fetch_validated_follows_safe_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A redirect within the allowlist must succeed and the second hop's
+    request must also use IP pinning."""
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: _make_addrinfo("1.1.1.1"))
+    stub = _StubAsyncClient([
+        _resp(301, headers={"location": "https://www.nature.com/landing"}),
+        _resp(200, content=b"ok"),
+    ])
+    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+
+    r = await _fetch_validated("https://nature.com/x", enforce_domain_allowlist=True)
+
+    assert r.status_code == 200
+    assert len(stub.calls) == 2
+    # Both calls must have hit the pinned IP.
+    assert all(c["url"].startswith("https://1.1.1.1/") for c in stub.calls)
+    # Host header is rewritten per hop, not carried over.
+    assert stub.calls[0]["headers"]["Host"] == "nature.com"
+    assert stub.calls[1]["headers"]["Host"] == "www.nature.com"
+
+
+@pytest.mark.asyncio
+async def test_fetch_validated_rejects_private_ip_at_second_hop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the first hop resolves public but a redirect target resolves
+    private, the second resolution must reject. This catches a
+    DNS-rebinding attempt by an allowlisted authority."""
+    resolutions = iter([
+        _make_addrinfo("1.1.1.1"),  # nature.com → public
+        _make_addrinfo("169.254.169.254"),  # www.nature.com → AWS metadata
+    ])
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: next(resolutions))
+    stub = _StubAsyncClient([
+        _resp(301, headers={"location": "https://www.nature.com/x"}),
+    ])
+    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+
+    with pytest.raises(_SSRFError, match="non-public address"):
+        await _fetch_validated("https://nature.com/x", enforce_domain_allowlist=True)
+
+
+@pytest.mark.asyncio
+async def test_fetch_validated_too_many_redirects(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: _make_addrinfo("1.1.1.1"))
+    stub = _StubAsyncClient([
+        _resp(302, headers={"location": "https://nature.com/a"}),
+        _resp(302, headers={"location": "https://nature.com/b"}),
+        _resp(302, headers={"location": "https://nature.com/c"}),
+    ])
+    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+
+    with pytest.raises(_SSRFError, match="Too many redirects"):
+        await _fetch_validated(
+            "https://nature.com/start",
+            enforce_domain_allowlist=True,
+            max_redirects=2,
+        )
+
+
+@pytest.mark.asyncio
+async def test_fetch_validated_redirect_without_location_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: _make_addrinfo("1.1.1.1"))
+    stub = _StubAsyncClient([_resp(302)])
+    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+
+    with pytest.raises(_SSRFError, match="no Location header"):
+        await _fetch_validated("https://nature.com/x", enforce_domain_allowlist=True)
+
+
+@pytest.mark.asyncio
+async def test_fetch_validated_relative_redirect_resolves_against_original_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `Location: /other` redirect must be resolved against the
+    *hostname*, never against the pinned IP. Otherwise a follow-up
+    redirect could be evaluated against an IP that bypasses the
+    allowlist check."""
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: _make_addrinfo("1.1.1.1"))
+    stub = _StubAsyncClient([
+        _resp(302, headers={"location": "/articles/2"}),
+        _resp(200, content=b"ok"),
+    ])
+    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+
+    r = await _fetch_validated("https://nature.com/articles/1", enforce_domain_allowlist=True)
+
+    assert r.status_code == 200
+    assert len(stub.calls) == 2
+    # The second call still targets the pinned IP and still has the
+    # nature.com Host header — the redirect was resolved against
+    # nature.com, not against 1.1.1.1.
+    assert stub.calls[1]["url"].startswith("https://1.1.1.1/")
+    assert stub.calls[1]["headers"]["Host"] == "nature.com"
+
+
+@pytest.mark.asyncio
+async def test_fetch_validated_skips_allowlist_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """For internal allowlists (e.g. ELN_API_BASE_URL configured by an
+    admin), the helper should still pin the IP but skip the
+    public-domain allowlist."""
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: _make_addrinfo("1.1.1.1"))
+    stub = _StubAsyncClient([_resp(200)])
+    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+
+    r = await _fetch_validated(
+        "https://eln.internal-customer.example/api/x",
+        enforce_domain_allowlist=False,
+    )
+
+    assert r.status_code == 200
+    assert stub.calls[0]["url"].startswith("https://1.1.1.1/")
+    # SSRF DNS check still ran — would have failed if IP were private.
