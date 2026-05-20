@@ -66,7 +66,13 @@ ignore_missing_imports = true
 # via the [[tool.mypy.overrides]] sections below as each module is cleaned.
 # Tracking ticket: BACKLOG "mypy strict adoption".
 strict = false
-warn_unused_ignores = true
+# warn_unused_ignores was on, but the codebase has 17 per-line ignores
+# whose "unused" status flips with each mypy minor bump. CI installs
+# `mypy>=1.10` (unpinned) so contributors and CI can resolve different
+# versions and red-build each other. Leave the existing ignores in
+# place — they document why the silencing was needed — and let review
+# tidy them when the surrounding code is revisited.
+warn_unused_ignores = false
 warn_redundant_casts = true
 no_implicit_optional = true
 check_untyped_defs = true
