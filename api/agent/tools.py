@@ -205,6 +205,26 @@ def _html_to_text(html: str) -> str:
 
 # ── paper-chunk ingest ────────────────────────────────────────────────────────
 
+def _resolve_chunk_params() -> tuple[int, int]:
+    """Read PAPER_CHUNK_SIZE / PAPER_CHUNK_OVERLAP env vars with defaults
+    (1500 / 200) and validate. Misconfigured values log a warning and
+    fall back to defaults — never silently land 50-char chunks."""
+    default_size, default_overlap = 1500, 200
+    try:
+        size = int(os.environ.get("PAPER_CHUNK_SIZE", str(default_size)))
+        overlap = int(os.environ.get("PAPER_CHUNK_OVERLAP", str(default_overlap)))
+    except ValueError:
+        logger.warning("invalid PAPER_CHUNK_* env vars (non-numeric); using defaults")
+        return default_size, default_overlap
+    if not (200 <= size <= 5000) or not (0 <= overlap < size):
+        logger.warning(
+            "invalid PAPER_CHUNK_* env vars (size=%d overlap=%d); using defaults",
+            size, overlap,
+        )
+        return default_size, default_overlap
+    return size, overlap
+
+
 async def _ingest_paper_chunks(
     paper_id: str,
     content_text: str,
@@ -212,11 +232,14 @@ async def _ingest_paper_chunks(
 ) -> int:
     """Chunk + embed + persist a paper body. Returns the count written.
 
+    Chunk size + overlap come from PAPER_CHUNK_SIZE / PAPER_CHUNK_OVERLAP
+    env vars (defaults 1500 / 200, validated by `_resolve_chunk_params`).
     Embedding failure is non-fatal: chunks land with embedding=NULL so FTS
     retrieval still works; semantic retrieval will simply skip them.
     """
     from api.db.queries.papers import chunk_paper_text, insert_paper_chunks
-    parts = chunk_paper_text(content_text)
+    chunk_size, overlap = _resolve_chunk_params()
+    parts = chunk_paper_text(content_text, chunk_size=chunk_size, overlap=overlap)
     if not parts:
         return 0
     # Embed in one batch — text-embedding-3-small is happy with arrays.
