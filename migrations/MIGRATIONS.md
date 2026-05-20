@@ -51,10 +51,12 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS my_table_col_idx
 
 **Constraints**: `CONCURRENTLY` cannot run inside a transaction. If a
 migration file mixes index creation with other DDL, split the index out
-into its own file. The CI apply step uses `--single-transaction`, so a
-`CONCURRENTLY` in the same file with other statements will fail —
-make it a one-statement file (no surrounding `BEGIN`/`COMMIT`, no
-other DDL).
+into its own file. The CI apply step detects files containing the word
+`CONCURRENTLY` (case-insensitive grep) and applies them with autocommit
+instead of `--single-transaction`. Such files **must be
+single-statement** — `ON_ERROR_STOP` is per-statement under autocommit,
+so a partial mid-file failure would land partial state otherwise.
+Reference: `migrations/0041_paper_chunks_hnsw.sql`.
 
 **Existing pre-policy indexes** (0001–0036, plus 0036_performance_indexes
 specifically) were created without `CONCURRENTLY`. They are already

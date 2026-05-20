@@ -42,6 +42,8 @@ What it does enforce:
 from __future__ import annotations
 
 import asyncio
+import functools
+import logging
 import os
 import resource
 import shutil
@@ -51,6 +53,8 @@ import tempfile
 import time
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 # Hard caps. Tuned for "reasonable analytical work" — descriptive stats,
@@ -98,13 +102,17 @@ def _set_rlimits(
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 
-def _probe_unshare() -> bool:
+@functools.cache
+def _unshare_available() -> bool:
     """Return True iff `unshare -n -r` actually works on this host.
 
     `unshare -n` needs CAP_SYS_ADMIN; GitHub Actions runners and other
     unprivileged environments will fail with "unshare: operation not
-    permitted". Probe once at module load so the per-call hot path is
-    a single dict lookup.
+    permitted". `functools.cache` means we probe at most once per
+    process — first sandbox call eats the ~ms cost, subsequent calls
+    are dict lookups. Module-import cost stays at zero. The cache is
+    process-lifetime, which is fine: kernel capabilities don't change
+    mid-process in any realistic deploy.
     """
     unshare = shutil.which("unshare")
     if unshare is None:
@@ -115,12 +123,10 @@ def _probe_unshare() -> bool:
             [unshare, "-n", "-r", "true"],
             capture_output=True, timeout=2.0, check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.debug("unshare probe raised: %s", e)
         return False
     return r.returncode == 0
-
-
-_UNSHARE_AVAILABLE: bool = _probe_unshare()
 
 
 def _build_command(code: str, tmpdir: str) -> list[str]:
@@ -131,11 +137,10 @@ def _build_command(code: str, tmpdir: str) -> list[str]:
     PYTHONSTARTUP, doesn't add user site-packages to sys.path. Combined
     with `env={}` in the asyncio call this keeps the child off the
     host's import surface even when unshare isn't available — at the
-    cost of leaving network access intact (logged via `_UNSHARE_AVAILABLE`
-    for operators to notice).
+    cost of leaving network access intact.
     """
     py_argv = [sys.executable, "-I", "-c", code]
-    if _UNSHARE_AVAILABLE:
+    if _unshare_available():
         # `unshare -n` creates a new (empty) network namespace for the
         # child — no DNS, no routes, no inherited sockets. -r runs as
         # an unprivileged user inside the namespace (no UID 0 inside).
@@ -202,72 +207,95 @@ async def run_python(
                 status="error",
             )
 
+        # Outer try/finally: no matter HOW communicate() exits — happy
+        # path, timeout, KeyboardInterrupt, MemoryError, asyncio
+        # CancelledError, BrokenPipeError — the child process gets
+        # reaped. Without this, any exception path other than
+        # TimeoutError leaks the subprocess.
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(), timeout=wall_seconds,
+            try:
+                stdout_b, stderr_b = await asyncio.wait_for(
+                    proc.communicate(), timeout=wall_seconds,
+                )
+                status = "completed"
+            except asyncio.TimeoutError:
+                # Wall-clock blew past the budget — SIGTERM then SIGKILL.
+                # Guard each cleanup step per CLAUDE.md observability rules:
+                # raises inside a finally cancel the outer coroutine.
+                try:
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=2.0)
+                except (asyncio.TimeoutError, ProcessLookupError):
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    try:
+                        await proc.wait()
+                    except Exception:
+                        pass
+                # The pipes may have unread bytes; try one final non-blocking read.
+                try:
+                    stdout_b = await proc.stdout.read() if proc.stdout else b""
+                except Exception:
+                    stdout_b = b""
+                try:
+                    stderr_b = await proc.stderr.read() if proc.stderr else b""
+                except Exception:
+                    stderr_b = b""
+                duration_ms = int((time.monotonic() - start) * 1000)
+                return SandboxResult(
+                    exit_code=EXIT_TIMEOUT,
+                    stdout=stdout_b[:STDOUT_CAP_BYTES].decode("utf-8", errors="replace"),
+                    stderr=(stderr_b[:STDERR_CAP_BYTES].decode("utf-8", errors="replace")
+                            + f"\n[sandbox] wall-clock timeout at {wall_seconds}s"),
+                    duration_ms=duration_ms,
+                    status="timeout",
+                )
+
+            duration_ms = int((time.monotonic() - start) * 1000)
+            rc = proc.returncode if proc.returncode is not None else 1
+            if rc == -signal.SIGKILL or rc == EXIT_KILLED:
+                status = "killed"
+            elif rc != 0:
+                status = "completed"  # non-zero exit is a normal "error in user code"
+
+            stdout_cut = stdout_b[:STDOUT_CAP_BYTES]
+            stderr_cut = stderr_b[:STDERR_CAP_BYTES]
+            if len(stdout_b) > STDOUT_CAP_BYTES:
+                stdout_cut += b"\n[sandbox] stdout truncated"
+            if len(stderr_b) > STDERR_CAP_BYTES:
+                stderr_cut += b"\n[sandbox] stderr truncated"
+
+            return SandboxResult(
+                exit_code=rc,
+                stdout=stdout_cut.decode("utf-8", errors="replace"),
+                stderr=stderr_cut.decode("utf-8", errors="replace"),
+                duration_ms=duration_ms,
+                status=status,
             )
-            status = "completed"
-        except asyncio.TimeoutError:
-            # Wall-clock blew past the budget — SIGTERM then SIGKILL.
-            # Guard each cleanup step per CLAUDE.md observability rules:
-            # raises inside a finally cancel the outer coroutine.
-            try:
-                proc.terminate()
-            except ProcessLookupError:
-                pass
-            except Exception:
-                pass
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
-            except (asyncio.TimeoutError, ProcessLookupError):
+        finally:
+            # Reaper: kill + wait if the child is still alive. Only fires
+            # on exception paths the inner try/except didn't already drain
+            # (CancelledError, MemoryError, KeyboardInterrupt, etc.).
+            # Each step guarded — a raise here would mask the original
+            # exception.
+            if proc.returncode is None:
                 try:
                     proc.kill()
-                except Exception:
+                except ProcessLookupError:
                     pass
+                except Exception as e:
+                    logger.warning("sandbox reaper kill failed: %s", e)
                 try:
                     await proc.wait()
-                except Exception:
-                    pass
-            # The pipes may have unread bytes; try one final non-blocking read.
-            try:
-                stdout_b = await proc.stdout.read() if proc.stdout else b""
-            except Exception:
-                stdout_b = b""
-            try:
-                stderr_b = await proc.stderr.read() if proc.stderr else b""
-            except Exception:
-                stderr_b = b""
-            duration_ms = int((time.monotonic() - start) * 1000)
-            return SandboxResult(
-                exit_code=EXIT_TIMEOUT,
-                stdout=stdout_b[:STDOUT_CAP_BYTES].decode("utf-8", errors="replace"),
-                stderr=(stderr_b[:STDERR_CAP_BYTES].decode("utf-8", errors="replace")
-                        + f"\n[sandbox] wall-clock timeout at {wall_seconds}s"),
-                duration_ms=duration_ms,
-                status="timeout",
-            )
-
-        duration_ms = int((time.monotonic() - start) * 1000)
-        rc = proc.returncode if proc.returncode is not None else 1
-        if rc == -signal.SIGKILL or rc == EXIT_KILLED:
-            status = "killed"
-        elif rc != 0:
-            status = "completed"  # non-zero exit is a normal "error in user code"
-
-        stdout_cut = stdout_b[:STDOUT_CAP_BYTES]
-        stderr_cut = stderr_b[:STDERR_CAP_BYTES]
-        if len(stdout_b) > STDOUT_CAP_BYTES:
-            stdout_cut += b"\n[sandbox] stdout truncated"
-        if len(stderr_b) > STDERR_CAP_BYTES:
-            stderr_cut += b"\n[sandbox] stderr truncated"
-
-        return SandboxResult(
-            exit_code=rc,
-            stdout=stdout_cut.decode("utf-8", errors="replace"),
-            stderr=stderr_cut.decode("utf-8", errors="replace"),
-            duration_ms=duration_ms,
-            status=status,
-        )
+                except Exception as e:
+                    logger.warning("sandbox reaper wait failed: %s", e)
 
 
 def summary(result: SandboxResult) -> dict[str, Any]:

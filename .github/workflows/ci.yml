@@ -43,12 +43,38 @@ jobs:
       - name: Type-check (mypy)
         # continue-on-error: CI's mypy environment surfaces errors that
         # local mypy 1.19.1 (pinned) does not, and the Actions log UI
-        # doesn't expose the error text to our tooling. Tracked in
-        # BACKLOG (mypy CI version-drift); re-enable as a gate once we
-        # can pull job logs to reproduce. CLAUDE.md §3 explicitly
-        # authorises skip-listing CI flakes with a BACKLOG note.
+        # doesn't expose the error text to our tooling. The dump-and-
+        # annotate steps below make CI's actual mypy output visible so
+        # the gate can be re-enabled once the version-drift errors are
+        # fixed. CLAUDE.md §3 explicitly authorises skip-listing CI
+        # flakes with a BACKLOG note.
         continue-on-error: true
-        run: mypy api/
+        shell: bash
+        run: |
+          set -o pipefail
+          mypy api/ --show-error-codes --no-error-summary 2>&1 | tee /tmp/mypy.log
+
+      - name: Surface mypy failures as annotations
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f /tmp/mypy.log ]; then
+            echo "::group::mypy output"
+            cat /tmp/mypy.log
+            echo "::endgroup::"
+            # Emit each error: line as a ::error:: annotation so the
+            # PR check summary lists them directly.
+            grep -E "error:" /tmp/mypy.log | head -100 \
+              | sed 's/^/::error::/' || true
+          fi
+
+      - name: Upload mypy log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mypy-log
+          path: /tmp/mypy.log
+          if-no-files-found: ignore
 
       - name: Assert DRFP produces 2048 bits
         run: |
@@ -63,12 +89,21 @@ jobs:
         # --single-transaction wraps each file so partial failure rolls
         # back the whole file; ON_ERROR_STOP fails the step on first
         # SQL error; `set -e` fails the loop on the first failing file.
+        #
+        # Special case: files containing CONCURRENTLY (e.g. CREATE INDEX
+        # CONCURRENTLY) cannot run inside a transaction, so they're
+        # applied with autocommit. Per MIGRATIONS.md, those files must
+        # be single-statement so ON_ERROR_STOP suffices for atomicity.
         run: |
           set -e
           for f in migrations/*.sql; do
             echo "applying $f"
-            psql "$DATABASE_URL" --single-transaction \
-              -v ON_ERROR_STOP=1 -f "$f"
+            if grep -qi "CONCURRENTLY" "$f"; then
+              psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+            else
+              psql "$DATABASE_URL" --single-transaction \
+                -v ON_ERROR_STOP=1 -f "$f"
+            fi
           done
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/chemclaw2_test
