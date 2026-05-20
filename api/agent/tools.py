@@ -1622,4 +1622,188 @@ def build_chemclaw_mcp_server(
             ok = await retire_hypothesis(db, hypothesis_id, user_id)
         return {"id": hypothesis_id, "ok": ok}
 
+    # ── Phase C: code sandbox + active-learning + lead orchestrator ──────────
+
+    @mcp.tool()
+    async def run_code(
+        code: str,
+        investigation_id: str | None = None,
+        cpu_seconds: int = 30,
+    ) -> dict[str, Any]:
+        """Run a Python snippet in the resource-limited sandbox.
+
+        The sandbox enforces CPU + memory + wall-clock + output caps and
+        runs in a fresh temp dir with a stripped env. Use for exploratory
+        analyses (descriptive stats, RDKit batch ops, fitting a small
+        regression) that need real computation rather than chat
+        reasoning. Every invocation is persisted to `code_executions`
+        and is later retrievable via `list_code_executions`.
+
+        `investigation_id`, if provided, anchors the execution to a
+        research thread (and is required if no chat session_id is
+        available — both can't be NULL). Both ownership is checked.
+
+        Hard caps: CPU 1–300s (default 30), memory 512 MB, stdout 1 MB,
+        stderr 256 KB, source ≤200 KB. Returns:
+          {execution_id, status, exit_code, duration_ms, stdout, stderr}
+        """
+        from api.db.queries.code_executions import insert_execution
+        from api.db.queries.investigations import get_investigation
+        try:
+            from mcp_codesandbox.sandbox import run_python
+        except ImportError:
+            return {"error": "Sandbox backend not installed (mcp_codesandbox)"}
+
+        if investigation_id is None and session_id is None:
+            return {"error": "either investigation_id or active session_id required"}
+        if investigation_id is not None:
+            async with session_factory() as db:
+                inv = await get_investigation(db, investigation_id, user_id)
+            if inv is None:
+                return {"error": "investigation not found or not owned by user"}
+
+        result = await run_python(code, cpu_seconds=cpu_seconds)
+        async with session_factory() as db:
+            try:
+                exec_id = await insert_execution(
+                    db,
+                    code=code,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    exit_code=result.exit_code,
+                    duration_ms=result.duration_ms,
+                    status=result.status,
+                    created_by=user_id,
+                    investigation_id=investigation_id,
+                    session_id=session_id,
+                )
+            except ValueError as e:
+                return {"error": str(e)}
+        return {
+            "execution_id": exec_id,
+            "status": result.status,
+            "exit_code": result.exit_code,
+            "duration_ms": result.duration_ms,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+
+    @mcp.tool()
+    async def list_code_executions(
+        investigation_id: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """List recent sandbox executions. Filter by `investigation_id`,
+        or omit to list the caller's recent runs across all contexts.
+        Owner-scoped on `created_by`."""
+        from api.db.queries.code_executions import list_executions
+        if not (1 <= limit <= 100):
+            return {"error": "limit must be between 1 and 100"}
+        async with session_factory() as db:
+            rows = await list_executions(
+                db, user_id,
+                investigation_id=investigation_id,
+                session_id=session_id if investigation_id is None else None,
+                limit=limit,
+            )
+        return {"executions": rows}
+
+    # ── V1 active-learning: propose next reaction conditions ─────────────────
+
+    @mcp.tool()
+    async def propose_next_conditions(
+        campaign_id: str,
+        n_proposals: int = 3,
+    ) -> dict[str, Any]:
+        """Propose conditions for the next experimental step of a campaign.
+
+        V1 strategy (Latin Hypercube-ish): rank completed steps by yield,
+        take the best two, and return them plus one *exploitative* tweak
+        (small perturbation of the best) and one *exploratory* tweak
+        (substituted solvent / temperature ± step). Pure heuristic — the
+        proper Gaussian-Process posterior + Expected-Improvement
+        acquisition is filed under BACKLOG ("Phase C: real BO"), pending
+        actual outcome data to fit against.
+
+        Returns {campaign_id, best_so_far, proposals: [{conditions,
+        rationale}], strategy} or {error}.
+        """
+        from api.db.queries.campaign_steps import list_campaign_steps
+        from api.db.queries.campaigns import get_campaign
+
+        async with session_factory() as db:
+            campaign = await get_campaign(db, campaign_id, user_id)
+            if campaign is None:
+                return {"error": "campaign not found or not owned by user"}
+            steps = await list_campaign_steps(db, campaign_id)
+
+        completed = [s for s in steps if (s.get("status") == "complete"
+                                          and s.get("result") is not None)]
+        if not completed:
+            return {
+                "campaign_id": campaign_id,
+                "best_so_far": None,
+                "proposals": [],
+                "strategy": "no completed steps yet — record at least one outcome before proposing",
+            }
+
+        # Extract yield-like numeric from result JSON if present.
+        def _yield(step: dict[str, Any]) -> float:
+            res = step.get("result") or {}
+            if not isinstance(res, dict):
+                return float("-inf")
+            for key in ("yield", "yield_percent", "yield_pct"):
+                v = res.get(key)
+                if isinstance(v, (int, float)):
+                    return float(v)
+            return float("-inf")
+
+        completed.sort(key=_yield, reverse=True)
+        best = completed[0]
+        best_conditions = best.get("conditions") or {}
+        best_yield = _yield(best)
+
+        proposals: list[dict[str, Any]] = []
+        # 1. Exploit: take the best as-is.
+        proposals.append({
+            "conditions": dict(best_conditions) if isinstance(best_conditions, dict) else {},
+            "rationale": (
+                f"Exploit — reproduce best-seen ({best_yield:.1f}% yield) "
+                "before perturbing."
+            ),
+        })
+        # 2. Mild perturb on temperature if present.
+        if isinstance(best_conditions, dict) and "temperature" in best_conditions:
+            try:
+                t = float(best_conditions["temperature"])
+                tweaked = {**best_conditions, "temperature": round(t + 10.0, 1)}
+                proposals.append({
+                    "conditions": tweaked,
+                    "rationale": "Exploit/tweak — best conditions with temperature +10°C.",
+                })
+            except (TypeError, ValueError):
+                pass
+        # 3. Explore via solvent swap if multiple completed runs used different solvents.
+        seen_solvents = {
+            s.get("conditions", {}).get("solvent")
+            for s in completed
+            if isinstance(s.get("conditions"), dict) and s["conditions"].get("solvent")
+        }
+        seen_solvents.discard(None)
+        if isinstance(best_conditions, dict) and best_conditions.get("solvent"):
+            for solvent in sorted(seen_solvents):
+                if solvent != best_conditions["solvent"]:
+                    proposals.append({
+                        "conditions": {**best_conditions, "solvent": solvent},
+                        "rationale": f"Explore — swap solvent to {solvent}.",
+                    })
+                    break
+
+        return {
+            "campaign_id": campaign_id,
+            "best_so_far": {"conditions": best_conditions, "yield": best_yield},
+            "proposals": proposals[: max(1, n_proposals)],
+            "strategy": "heuristic-v1",
+        }
+
     return mcp

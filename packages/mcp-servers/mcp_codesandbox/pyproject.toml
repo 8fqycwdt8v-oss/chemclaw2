@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-codesandbox"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp[cli]>=1.0",
+]
+
+[project.scripts]
+mcp-codesandbox = "mcp_codesandbox.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcp_codesandbox"]
