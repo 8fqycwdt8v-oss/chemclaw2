@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from api.db.queries.rate_limit import make_key, pg_rate_limit
+from api.db.queries.rate_limit import make_key, pg_rate_limit, sweep_rate_limit_rows
 
 
 def test_make_key_strips_colons():
@@ -57,3 +57,61 @@ async def test_pg_rate_limit_exactly_at_limit(db):
     assert r1["limited"] is False
     r2 = await pg_rate_limit(db, key, max_requests=1, window_ms=60_000)
     assert r2["limited"] is True
+
+
+# ── sweep_rate_limit_rows ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_sweep_rate_limit_rows_deletes_old(session_factory):
+    """Rows with window_start older than max_age_ms are deleted; fresh
+    rows survive. The cleanup pass is what keeps the rate_limits table
+    from growing unboundedly under the fixed-window upsert pattern."""
+    import time
+
+    from sqlalchemy import text
+
+    old_key = f"sweep-old-{uuid.uuid4().hex[:8]}"
+    fresh_key = f"sweep-fresh-{uuid.uuid4().hex[:8]}"
+    now_ms = int(time.time() * 1000)
+    old_window = now_ms - 10_000_000  # well past the 2-hour cap
+    fresh_window = now_ms - 60_000  # 1 min old — keep
+
+    async with session_factory() as db:
+        async with db.begin():
+            await db.execute(
+                text(
+                    "INSERT INTO rate_limits (key, window_start, count) "
+                    "VALUES (:k, :w, 1)"
+                ),
+                {"k": old_key, "w": old_window},
+            )
+            await db.execute(
+                text(
+                    "INSERT INTO rate_limits (key, window_start, count) "
+                    "VALUES (:k, :w, 1)"
+                ),
+                {"k": fresh_key, "w": fresh_window},
+            )
+
+    async with session_factory() as db:
+        deleted = await sweep_rate_limit_rows(db, max_age_ms=7_200_000)
+    assert deleted >= 1
+
+    async with session_factory() as db:
+        old_row = await db.execute(
+            text("SELECT 1 FROM rate_limits WHERE key = :k"), {"k": old_key}
+        )
+        fresh_row = await db.execute(
+            text("SELECT 1 FROM rate_limits WHERE key = :k"), {"k": fresh_key}
+        )
+    assert old_row.one_or_none() is None
+    assert fresh_row.one_or_none() is not None
+
+
+@pytest.mark.asyncio
+async def test_sweep_rate_limit_rows_noop_when_empty(session_factory):
+    """The sweep over a table with no expired rows returns 0 without erroring."""
+    async with session_factory() as db:
+        deleted = await sweep_rate_limit_rows(db, max_age_ms=7_200_000)
+    assert deleted >= 0  # may delete leftovers from other tests, but doesn't error

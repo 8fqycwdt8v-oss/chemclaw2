@@ -85,6 +85,29 @@ async def pg_rate_limit(
         return {"limited": True}
 
 
+async def sweep_rate_limit_rows(
+    db: AsyncSession, max_age_ms: int = 7_200_000
+) -> int:
+    """Delete rate_limit rows whose window_start is older than `max_age_ms`.
+
+    The pg_rate_limit upsert never expires rows; over time the table grows
+    unboundedly and the GIST/B-tree on (key, window_start) gets slower.
+    Two hours by default — comfortably wider than any rate-limit window
+    actually in use (the longest is 60 s today). Returns the number of
+    rows deleted so the worker can log it.
+
+    Wraps its own transaction. Safe to call from any worker context.
+    """
+    cutoff_ms = int(time.time() * 1000) - max_age_ms
+    async with db.begin():
+        result = await db.execute(
+            text("DELETE FROM rate_limits WHERE window_start < :cutoff"),
+            {"cutoff": cutoff_ms},
+        )
+        # CursorResult.rowcount is populated for DML; mypy doesn't narrow it.
+        return result.rowcount  # type: ignore[attr-defined]
+
+
 # ── FastAPI dependency factory ────────────────────────────────────────────────
 
 

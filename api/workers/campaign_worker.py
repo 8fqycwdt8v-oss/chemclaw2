@@ -265,10 +265,24 @@ async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
                 if _cycle % 5 == 0:
                     async with session_factory() as db:
                         backfilled = await backfill_missing_campaign_wikis(db, session_factory)
-                if retried or updated or backfilled:
+                # Sweep old rate_limit rows once every 60 cycles
+                # (≈ once an hour at the default 60 s interval). The fixed-
+                # window upsert never expires rows on its own, so unbounded
+                # growth would slow the (key, window_start) lookup.
+                swept = 0
+                if _cycle % 60 == 0:
+                    from api.db.queries.rate_limit import sweep_rate_limit_rows
+                    try:
+                        async with session_factory() as db:
+                            swept = await sweep_rate_limit_rows(db)
+                        if swept:
+                            logger.info("rate_limit_rows_swept count=%d", swept)
+                    except Exception:
+                        logger.exception("rate_limit_sweep_error")
+                if retried or updated or backfilled or swept:
                     logger.info(
-                        "campaign_worker_cycle retried=%d updated=%d backfilled=%d",
-                        retried, updated, backfilled,
+                        "campaign_worker_cycle retried=%d updated=%d backfilled=%d swept=%d",
+                        retried, updated, backfilled, swept,
                     )
                 _cycle += 1
                 if _cycle % 10 == 0:
