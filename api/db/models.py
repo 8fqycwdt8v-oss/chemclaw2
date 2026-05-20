@@ -86,6 +86,31 @@ class Reaction(Base):
     created_at: Mapped[datetime] = _now()
     created_by: Mapped[str] = mapped_column(sa.Text, nullable=False)
 
+    outcomes: Mapped[list[ReactionOutcome]] = relationship(back_populates="reaction", cascade="all, delete-orphan")
+
+
+class ReactionOutcome(Base):
+    __tablename__ = "reaction_outcomes"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    reaction_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, ForeignKey("reactions.id", ondelete="CASCADE"), nullable=False
+    )
+    campaign_step_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, ForeignKey("campaign_steps.id", ondelete="SET NULL")
+    )
+    eln_experiment_id: Mapped[str | None] = mapped_column(sa.Text)
+    source: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    status: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    yield_pct: Mapped[float | None] = mapped_column(sa.Numeric)
+    conditions_actual: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    observations: Mapped[str | None] = mapped_column(sa.Text)
+    failure_reason: Mapped[str | None] = mapped_column(sa.Text)
+    recorded_at: Mapped[datetime] = _now()
+    created_by: Mapped[str] = mapped_column(sa.Text, nullable=False)
+
+    reaction: Mapped[Reaction] = relationship(back_populates="outcomes")
+
 
 class ReactionConditionPrediction(Base):
     __tablename__ = "reaction_condition_predictions"

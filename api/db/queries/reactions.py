@@ -16,7 +16,15 @@ async def find_similar_reactions(
     query_fp_bits: str,
     limit: int = 20,
     min_similarity: float = 0.4,
+    include_outcomes: bool = False,
 ) -> list[dict[str, Any]]:
+    """Similarity search over the reactions table by DRFP bit vector.
+
+    When ``include_outcomes=True`` each returned row gains an ``outcomes``
+    list (newest first) sourced from ``reaction_outcomes``. The join runs
+    only for the reactions that survive the Tanimoto rerank, so the cost
+    scales with ``limit``, not the full HNSW candidate pool.
+    """
     safe_limit = max(1, min(limit, 100))
     safe_min = max(0.0, min(min_similarity, 1.0))
 
@@ -32,16 +40,43 @@ async def find_similar_reactions(
     )
     rows = [dict(r._mapping) for r in result]
     ranked = rerank_by_tanimoto(rows, query_fp_bits, safe_min, safe_limit)
-    return [
-        {
+
+    outcomes_by_reaction: dict[str, list[dict[str, Any]]] = {}
+    if include_outcomes and ranked:
+        ids = [r["id"] for r in ranked]
+        out_result = await db.execute(
+            text("""
+                SELECT reaction_id::text AS reaction_id,
+                       id::text AS id,
+                       source, status, yield_pct,
+                       conditions_actual, observations, failure_reason,
+                       recorded_at
+                FROM reaction_outcomes
+                WHERE reaction_id = ANY(CAST(:ids AS uuid[]))
+                ORDER BY recorded_at DESC
+            """),
+            {"ids": ids},
+        )
+        for row in out_result:
+            d = dict(row._mapping)
+            rid = d.pop("reaction_id")
+            if d.get("yield_pct") is not None:
+                d["yield_pct"] = float(d["yield_pct"])
+            outcomes_by_reaction.setdefault(rid, []).append(d)
+
+    out: list[dict[str, Any]] = []
+    for r in ranked:
+        entry: dict[str, Any] = {
             "id": r["id"],
             "rxnSmiles": r["rxn_smiles"],
             "name": r["name"],
             "conditions": r["conditions"],
             "similarity": r["similarity"],
         }
-        for r in ranked
-    ]
+        if include_outcomes:
+            entry["outcomes"] = outcomes_by_reaction.get(r["id"], [])
+        out.append(entry)
+    return out
 
 
 async def find_neighbor_conditions(

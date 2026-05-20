@@ -53,6 +53,14 @@ subagent_type='contradiction-resolver'. The sub-agent reads both citations
 and the chunks that reference them, weighs the evidence, and returns a
 proposed winner + reason that you persist via record_contradiction.
 
+When the user asks what to investigate next, what's untested, which
+variables to vary, or "what's the next experiment" for a specific
+reaction step, dispatch subagent_type='process-gap-analyst'. Pass the
+reaction (SMILES or registry id) plus any lab data the user has
+mentioned. The sub-agent retrieves similar reactions with their
+recorded outcomes and returns a prioritized list of follow-up
+questions.
+
 When the user asks evidence-grounded questions about specific papers
 (or "what does the literature say about X"), prefer `paper_qa` over
 plain `wiki_lookup` / `web_search` — it retrieves paper chunks via
@@ -110,6 +118,41 @@ CONTRADICTION_RESOLVER_PROMPT = """You are a focused dispute-resolution sub-agen
 Your job: weigh two citations on a wiki page and propose which is better supported.
 
 Return exactly: WINNER: <citation_id>\nREASON: <one sentence>"""
+
+PROCESS_GAP_ANALYST_PROMPT = """You are a focused process-development sub-agent for ChemClaw.
+
+Your job: given a specific reaction step and what the lab has tried so far,
+propose which questions about the process should be tackled next.
+
+Inputs you will receive: a reaction (SMILES or registry id) plus a short
+description of what's already been run (conditions tried, yields,
+observations, failure modes).
+
+Procedure:
+1. If the user gave a reaction SMILES, compute its DRFP fingerprint via
+   the mcp-rxnfp tool, then call reaction_similarity_search with
+   include_outcomes=True to retrieve similar reactions AND their recorded
+   experimental outcomes. If the user gave a registry id, also call
+   list_reaction_outcomes for that specific reaction.
+2. Diff what's been tried (across the user's data + the similar
+   reactions' outcomes) against the canonical axes of process variation:
+   solvent class, temperature range, time, stoichiometry, catalyst
+   identity, catalyst loading, base, atmosphere (inert vs ambient),
+   concentration, addition order, workup, and missing controls.
+3. Optionally call wiki_lookup or paper_qa if the org has relevant
+   process notes or literature precedent.
+
+Return a markdown list of 3–7 prioritized follow-up questions. For each:
+  - State the question in one sentence (e.g. "Does switching from toluene
+    to DMF push the yield above 50%?").
+  - One short line of evidence: which similar-reaction outcome, wiki
+    citation, or absence-of-data motivates the question.
+  - A confidence marker: <confidence>high|med|low</confidence>.
+
+Order by expected information value (questions that would most narrow
+the design space first). Never fabricate yields, citations, or
+conditions — if the retrieval came back empty, say so and lower the
+confidence accordingly."""
 
 MAX_PROMPT_BYTES = 100_000
 
@@ -194,6 +237,17 @@ async def run_agent_streaming(
                 "prompt": CONTRADICTION_RESOLVER_PROMPT,
                 "mcpServers": ["chemclaw2-tools"],
                 "maxTurns": 10,
+            },
+            "process-gap-analyst": {
+                "description": (
+                    "Propose what to investigate next for a specific reaction step. "
+                    "Use when the user asks 'what's the next experiment', 'what should "
+                    "we try next', or 'what's untested' for a reaction. Retrieves "
+                    "similar reactions + outcomes and returns prioritized questions."
+                ),
+                "prompt": PROCESS_GAP_ANALYST_PROMPT,
+                "mcpServers": ["chemclaw2-tools", "mcp-rxnfp"],
+                "maxTurns": 15,
             },
         },
     )
