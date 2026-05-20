@@ -23,7 +23,11 @@ dev = [
   "pytest>=8",
   "pytest-asyncio>=0.24",
   "httpx>=0.28",
-  "mypy>=1.10",
+  # Pinned: mypy 1.19 ships meaningfully stricter checks on
+  # SQLAlchemy result types; older 1.x versions silenced things the
+  # new one flags (and vice versa). Pin so CI and contributors see the
+  # same diagnostics.
+  "mypy==1.19.1",
   "ruff>=0.6",
 ]
 chem = [
