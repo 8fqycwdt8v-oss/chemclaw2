@@ -29,32 +29,63 @@ async def insert_execution(
     """Persist one sandbox run. Returns the new row's id.
 
     Either `investigation_id` or `session_id` must be non-None (DB CHECK).
+
+    When `investigation_id` is set, the INSERT is gated by an EXISTS check
+    requiring `investigations.created_by = :uid` — so even if a future
+    caller forgets the tool-layer ownership check, a stranger can't
+    attach an execution to someone else's investigation. The same
+    atomic statement raises ValueError when the investigation isn't
+    owned (or doesn't exist).
     """
     if status not in _VALID_STATUSES:
         raise ValueError(f"status must be one of {sorted(_VALID_STATUSES)}, got {status!r}")
     if investigation_id is None and session_id is None:
         raise ValueError("at least one of investigation_id, session_id must be set")
+    params = {
+        "iid": investigation_id,
+        "sid": session_id,
+        "code": code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "exit_code": exit_code,
+        "duration_ms": duration_ms,
+        "status": status,
+        "uid": created_by,
+    }
     async with db.begin():
+        if investigation_id is not None:
+            # EXISTS-gated INSERT: atomic; no SELECT-then-INSERT race.
+            result = await db.execute(
+                text("""
+                    INSERT INTO code_executions
+                        (investigation_id, session_id, code, stdout, stderr,
+                         exit_code, duration_ms, status, created_by)
+                    SELECT CAST(:iid AS uuid), :sid, :code, :stdout, :stderr,
+                           :exit_code, :duration_ms, :status, :uid
+                    WHERE EXISTS (
+                        SELECT 1 FROM investigations
+                         WHERE id = CAST(:iid AS uuid)
+                           AND created_by = :uid
+                    )
+                    RETURNING id::text
+                """),
+                params,
+            )
+            row = result.first()
+            if row is None:
+                raise ValueError("investigation not found or not owned by created_by")
+            return row[0]
+        # Session-only path — no cross-table check needed.
         result = await db.execute(
             text("""
                 INSERT INTO code_executions
                     (investigation_id, session_id, code, stdout, stderr,
                      exit_code, duration_ms, status, created_by)
-                VALUES (CAST(:iid AS uuid), :sid, :code, :stdout, :stderr,
+                VALUES (NULL, :sid, :code, :stdout, :stderr,
                         :exit_code, :duration_ms, :status, :uid)
                 RETURNING id::text
             """),
-            {
-                "iid": investigation_id,
-                "sid": session_id,
-                "code": code,
-                "stdout": stdout,
-                "stderr": stderr,
-                "exit_code": exit_code,
-                "duration_ms": duration_ms,
-                "status": status,
-                "uid": created_by,
-            },
+            params,
         )
         return result.scalar_one()
 
