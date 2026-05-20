@@ -64,7 +64,18 @@ For chemistry name → structure conversions, use `name_to_structure`
 (NCI CACTUS, 7-day cached). For prior-art reconnaissance on a
 candidate molecule, use `patent_coverage` (PubChem patent xrefs). To
 seed a `confirm_synthesis_plan`, call `propose_retrosynthesis` first
-to get plausible one-step disconnections."""
+to get plausible one-step disconnections.
+
+For open-ended research threads that span multiple sessions, work
+through an *investigation*: `start_investigation` to declare the
+objective, then persist findings with `world_model_add` (kind ∈
+{fact, assumption, open_question, evidence}). Query the world model
+with `world_model_query` and supersede stale entries with
+`world_model_supersede` — the world model is queryable persistent
+state; chat context is not. For competing claims, `propose_hypothesis`
+captures the claim and `rank_hypotheses` compares pairs (Elo-updated
+in place); use evolution chains via `parent_id` when refining a parent
+hypothesis into a sharper child."""
 
 
 # Match <confidence>level</confidence> case-insensitively; allow surrounding

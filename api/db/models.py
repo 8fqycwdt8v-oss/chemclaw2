@@ -443,6 +443,108 @@ class PaperChunk(Base):
     __table_args__ = (sa.UniqueConstraint("paper_id", "chunk_idx", name="paper_chunks_paper_chunk_unique"),)
 
 
+# ── investigations / world model / hypotheses (Phase B) ─────────────────────
+
+class Investigation(Base):
+    """Long-horizon research thread that outlives any single chat session.
+
+    Holds the open-ended objective (Kosmos-style) and groups the world-model
+    entries + hypotheses that arise while pursuing it. Owner-scoped via
+    `created_by`; `session_id` is nullable so sessions can come and go
+    without orphaning investigations.
+    """
+
+    __tablename__ = "investigations"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    session_id: Mapped[str | None] = mapped_column(sa.Text)
+    title: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    objective: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    status: Mapped[str] = mapped_column(sa.Text, nullable=False, server_default=sa.text("'active'"))
+    created_by: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    created_at: Mapped[datetime] = _now()
+    updated_at: Mapped[datetime] = _now()
+
+
+class WorldModelEntry(Base):
+    """Kosmos-style structured persistent state entry.
+
+    One row per atomic fact / assumption / open_question / evidence — kept
+    granular so the agent can mark individual entries superseded as it
+    refines its view rather than rewriting one giant JSON blob. `confidence`
+    is an optional 0–1 self-reported score; `payload` is a JSONB escape
+    hatch for kind-specific extras (citations, fingerprints, etc.).
+    """
+
+    __tablename__ = "world_model_entries"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    investigation_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, ForeignKey("investigations.id", ondelete="CASCADE"), nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    content: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=sa.text("'{}'::jsonb"))
+    confidence: Mapped[float | None] = mapped_column(sa.Float)
+    status: Mapped[str] = mapped_column(sa.Text, nullable=False, server_default=sa.text("'active'"))
+    created_by: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    created_at: Mapped[datetime] = _now()
+    updated_at: Mapped[datetime] = _now()
+
+
+class Hypothesis(Base):
+    """A scientific hypothesis under tournament-style evaluation.
+
+    `parent_id` chains evolved children back to their predecessor (Google
+    AI Co-Scientist's Evolution agent pattern). `elo_rating` is the Co-
+    Scientist Ranking agent's tournament signal; `hypothesis_rankings`
+    stores the audit trail of pairwise comparisons that produced it.
+    """
+
+    __tablename__ = "hypotheses"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    investigation_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, ForeignKey("investigations.id", ondelete="CASCADE"), nullable=False,
+    )
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, ForeignKey("hypotheses.id", ondelete="SET NULL"),
+    )
+    statement: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    rationale: Mapped[str | None] = mapped_column(sa.Text)
+    status: Mapped[str] = mapped_column(sa.Text, nullable=False, server_default=sa.text("'proposed'"))
+    elo_rating: Mapped[float] = mapped_column(sa.Float, nullable=False, server_default=sa.text("1000.0"))
+    created_by: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    created_at: Mapped[datetime] = _now()
+    updated_at: Mapped[datetime] = _now()
+
+
+class HypothesisRanking(Base):
+    """Pairwise hypothesis comparison — Co-Scientist tournament audit log.
+
+    Each row records one judged matchup; the `hypotheses.elo_rating` of
+    both contestants is eager-updated in the same transaction (see
+    api/db/queries/hypotheses.py:record_pairwise_ranking).
+    """
+
+    __tablename__ = "hypothesis_rankings"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    investigation_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, ForeignKey("investigations.id", ondelete="CASCADE"), nullable=False,
+    )
+    hypothesis_a_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, ForeignKey("hypotheses.id", ondelete="CASCADE"), nullable=False,
+    )
+    hypothesis_b_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, ForeignKey("hypotheses.id", ondelete="CASCADE"), nullable=False,
+    )
+    winner: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(sa.Text)
+    decided_by: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    decided_at: Mapped[datetime] = _now()
+
+
 # ── eval runs ─────────────────────────────────────────────────────────────────
 
 class EvalRun(Base):
