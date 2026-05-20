@@ -266,6 +266,89 @@ async def _ingest_paper_chunks(
         return await insert_paper_chunks(db, paper_id, chunks)
 
 
+# ── propose_next_conditions: stage-0 heuristic helper ─────────────────────────
+
+async def _heuristic_propose(
+    session_factory: async_sessionmaker[AsyncSession],
+    campaign_id: str,
+    n_proposals: int,
+) -> dict[str, Any]:
+    """V1 condition-proposer logic. Called when no parameter_spec exists
+    or when BOFIRE isn't installed. Same shape as before this PR: rank
+    completed steps by yield, return best + temperature tweak + solvent
+    swap."""
+    from api.db.queries.campaign_steps import list_campaign_steps
+
+    async with session_factory() as db:
+        steps = await list_campaign_steps(db, campaign_id)
+
+    completed = [s for s in steps if (s.get("status") == "complete"
+                                      and s.get("result") is not None)]
+    if not completed:
+        return {
+            "campaign_id": campaign_id,
+            "best_so_far": None,
+            "proposals": [],
+            "strategy": (
+                "no completed steps yet — record at least one outcome "
+                "before proposing"
+            ),
+        }
+
+    def _yield(step: dict[str, Any]) -> float:
+        res = step.get("result") or {}
+        if not isinstance(res, dict):
+            return float("-inf")
+        for key in ("yield", "yield_percent", "yield_pct"):
+            v = res.get(key)
+            if isinstance(v, (int, float)):
+                return float(v)
+        return float("-inf")
+
+    completed.sort(key=_yield, reverse=True)
+    best = completed[0]
+    best_conditions = best.get("conditions") or {}
+    best_yield = _yield(best)
+
+    proposals: list[dict[str, Any]] = [{
+        "conditions": dict(best_conditions) if isinstance(best_conditions, dict) else {},
+        "rationale": (
+            f"Exploit — reproduce best-seen ({best_yield:.1f}% yield) "
+            "before perturbing."
+        ),
+    }]
+    if isinstance(best_conditions, dict) and "temperature" in best_conditions:
+        try:
+            t = float(best_conditions["temperature"])
+            proposals.append({
+                "conditions": {**best_conditions, "temperature": round(t + 10.0, 1)},
+                "rationale": "Exploit/tweak — best conditions with temperature +10°C.",
+            })
+        except (TypeError, ValueError):
+            pass
+    seen_solvents = {
+        s.get("conditions", {}).get("solvent")
+        for s in completed
+        if isinstance(s.get("conditions"), dict) and s["conditions"].get("solvent")
+    }
+    seen_solvents.discard(None)
+    if isinstance(best_conditions, dict) and best_conditions.get("solvent"):
+        for solvent in sorted(seen_solvents):
+            if solvent != best_conditions["solvent"]:
+                proposals.append({
+                    "conditions": {**best_conditions, "solvent": solvent},
+                    "rationale": f"Explore — swap solvent to {solvent}.",
+                })
+                break
+
+    return {
+        "campaign_id": campaign_id,
+        "best_so_far": {"conditions": best_conditions, "yield": best_yield},
+        "proposals": proposals[: max(1, n_proposals)],
+        "strategy": "heuristic-v1",
+    }
+
+
 # ── Tool factory ──────────────────────────────────────────────────────────────
 
 def build_chemclaw_mcp_server(
@@ -1734,99 +1817,137 @@ def build_chemclaw_mcp_server(
     # ── V1 active-learning: propose next reaction conditions ─────────────────
 
     @mcp.tool()
+    async def declare_campaign_parameter_space(
+        campaign_id: str,
+        parameter_spec: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Declare the input/output parameter space for a campaign's BO loop.
+
+        `parameter_spec` JSON schema:
+          {
+            "inputs": [
+              {"key": "temperature", "type": "continuous", "min": 20, "max": 120, "unit": "C"},
+              {"key": "solvent", "type": "categorical", "categories": ["THF","DMF","EtOH"]},
+              ...
+            ],
+            "outputs": [
+              {"key": "yield_pct", "direction": "maximize", "unit": "%"}
+            ]
+          }
+
+        V1 constraints: categorical ≤ 8 levels; ≤ 20 inputs; ≤ 4 outputs;
+        single-objective only (multiple outputs accepted by schema but
+        rejected by `propose_next_conditions` until MoboStrategy lands).
+        Output key MUST be `yield_pct` — the only outcome the V1
+        dispatcher knows how to feed from `reaction_outcomes` to BOFIRE.
+
+        Once declared, `propose_next_conditions` switches from the V1
+        heuristic to BOFIRE-driven proposals (LHS until ≥10 completed
+        steps; surrogate-driven GP+qLogEI thereafter when the [opt]
+        extras are installed).
+
+        Returns {ok: bool, campaign_id, n_inputs, n_outputs, strategy_hint}.
+        """
+        from api.agent.parameter_spec import ParameterSpec
+        from api.db.queries.optimization import set_campaign_parameter_spec
+        try:
+            spec = ParameterSpec.model_validate(parameter_spec)
+        except Exception as e:
+            return {"ok": False, "error": f"invalid parameter_spec: {e}"}
+        # V1: only yield_pct is supported as an output key by the
+        # outcomes feeder. Reject other names early with a clear message.
+        valid_outputs = {"yield_pct"}
+        for o in spec.outputs:
+            if o.key not in valid_outputs:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"output key {o.key!r} not supported in V1 — "
+                        f"only {sorted(valid_outputs)} can be fed from "
+                        "reaction_outcomes today"
+                    ),
+                }
+        async with session_factory() as db:
+            ok = await set_campaign_parameter_spec(db, campaign_id, user_id, spec)
+        if not ok:
+            return {"ok": False, "error": "campaign not found or not owned by user"}
+        return {
+            "ok": True,
+            "campaign_id": campaign_id,
+            "n_inputs": len(spec.inputs),
+            "n_outputs": len(spec.outputs),
+            "strategy_hint": (
+                "BOFIRE LHS until ≥10 completed steps; GP+qLogEI thereafter "
+                "if [opt] extras are installed."
+            ),
+        }
+
+    @mcp.tool()
     async def propose_next_conditions(
         campaign_id: str,
         n_proposals: int = 3,
     ) -> dict[str, Any]:
         """Propose conditions for the next experimental step of a campaign.
 
-        V1 strategy (Latin Hypercube-ish): rank completed steps by yield,
-        take the best two, and return them plus one *exploitative* tweak
-        (small perturbation of the best) and one *exploratory* tweak
-        (substituted solvent / temperature ± step). Pure heuristic — the
-        proper Gaussian-Process posterior + Expected-Improvement
-        acquisition is filed under BACKLOG ("Phase C: real BO"), pending
-        actual outcome data to fit against.
+        Three-stage dispatch:
 
-        Returns {campaign_id, best_so_far, proposals: [{conditions,
-        rationale}], strategy} or {error}.
+          0  Heuristic (no parameter_spec declared): rank completed steps
+             by yield, return best + temperature tweak + solvent swap.
+          1  BOFIRE LHS (parameter_spec exists, < 10 completed outcomes
+             OR botorch not installed): structured Latin-Hypercube
+             samples from the declared input space. Better diversity
+             than the V1 heuristic; no surrogate fit.
+          2  BOFIRE GP+qLogEI (parameter_spec + ≥ 10 completed outcomes
+             + botorch installed via [opt] extras): MixedSingleTaskGP
+             surrogate + qLogExpectedImprovement acquisition.
+
+        Use `declare_campaign_parameter_space` first to unlock stages 1/2.
+
+        Returns {campaign_id, strategy, proposals, best_so_far?, n_experiments_fitted?}.
         """
-        from api.db.queries.campaign_steps import list_campaign_steps
         from api.db.queries.campaigns import get_campaign
+        from api.db.queries.optimization import (
+            get_campaign_parameter_spec,
+            load_campaign_experiments,
+            propose_via_bofire,
+        )
+
+        if not (1 <= n_proposals <= 20):
+            return {"error": "n_proposals must be between 1 and 20"}
 
         async with session_factory() as db:
             campaign = await get_campaign(db, campaign_id, user_id)
             if campaign is None:
                 return {"error": "campaign not found or not owned by user"}
-            steps = await list_campaign_steps(db, campaign_id)
+            spec = await get_campaign_parameter_spec(db, campaign_id, user_id)
 
-        completed = [s for s in steps if (s.get("status") == "complete"
-                                          and s.get("result") is not None)]
-        if not completed:
-            return {
-                "campaign_id": campaign_id,
-                "best_so_far": None,
-                "proposals": [],
-                "strategy": "no completed steps yet — record at least one outcome before proposing",
-            }
-
-        # Extract yield-like numeric from result JSON if present.
-        def _yield(step: dict[str, Any]) -> float:
-            res = step.get("result") or {}
-            if not isinstance(res, dict):
-                return float("-inf")
-            for key in ("yield", "yield_percent", "yield_pct"):
-                v = res.get(key)
-                if isinstance(v, (int, float)):
-                    return float(v)
-            return float("-inf")
-
-        completed.sort(key=_yield, reverse=True)
-        best = completed[0]
-        best_conditions = best.get("conditions") or {}
-        best_yield = _yield(best)
-
-        proposals: list[dict[str, Any]] = []
-        # 1. Exploit: take the best as-is.
-        proposals.append({
-            "conditions": dict(best_conditions) if isinstance(best_conditions, dict) else {},
-            "rationale": (
-                f"Exploit — reproduce best-seen ({best_yield:.1f}% yield) "
-                "before perturbing."
-            ),
-        })
-        # 2. Mild perturb on temperature if present.
-        if isinstance(best_conditions, dict) and "temperature" in best_conditions:
+        # ── Stage 1/2 (BOFIRE-driven) when a parameter_spec is declared ───
+        if spec is not None:
+            async with session_factory() as db:
+                experiments = await load_campaign_experiments(db, campaign_id, spec)
             try:
-                t = float(best_conditions["temperature"])
-                tweaked = {**best_conditions, "temperature": round(t + 10.0, 1)}
-                proposals.append({
-                    "conditions": tweaked,
-                    "rationale": "Exploit/tweak — best conditions with temperature +10°C.",
-                })
-            except (TypeError, ValueError):
-                pass
-        # 3. Explore via solvent swap if multiple completed runs used different solvents.
-        seen_solvents = {
-            s.get("conditions", {}).get("solvent")
-            for s in completed
-            if isinstance(s.get("conditions"), dict) and s["conditions"].get("solvent")
-        }
-        seen_solvents.discard(None)
-        if isinstance(best_conditions, dict) and best_conditions.get("solvent"):
-            for solvent in sorted(seen_solvents):
-                if solvent != best_conditions["solvent"]:
-                    proposals.append({
-                        "conditions": {**best_conditions, "solvent": solvent},
-                        "rationale": f"Explore — swap solvent to {solvent}.",
-                    })
-                    break
+                result = propose_via_bofire(spec, experiments, n_proposals)
+                return {"campaign_id": campaign_id, **result}
+            except ImportError:
+                logger.info(
+                    "campaign=%s falling back to heuristic — bofire not installed; "
+                    "pip install chemclaw2-backend[opt] to enable",
+                    campaign_id,
+                )
+                # Fall through to heuristic; preserve the same response shape
+                # the agent expects but flag the install hint in the strategy.
+                heuristic = await _heuristic_propose(
+                    session_factory, campaign_id, n_proposals,
+                )
+                heuristic["strategy"] = (
+                    "heuristic-v1-bofire-unavailable "
+                    "(install chemclaw2-backend[opt] for BO)"
+                )
+                return heuristic
+            except ValueError as e:
+                return {"error": str(e)}
 
-        return {
-            "campaign_id": campaign_id,
-            "best_so_far": {"conditions": best_conditions, "yield": best_yield},
-            "proposals": proposals[: max(1, n_proposals)],
-            "strategy": "heuristic-v1",
-        }
+        # ── Stage 0 (V1 heuristic) when no parameter_spec ─────────────────
+        return await _heuristic_propose(session_factory, campaign_id, n_proposals)
 
     return mcp
