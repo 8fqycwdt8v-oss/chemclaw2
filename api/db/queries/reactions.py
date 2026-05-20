@@ -28,6 +28,9 @@ async def find_similar_reactions(
     safe_limit = max(1, min(limit, 100))
     safe_min = max(0.0, min(min_similarity, 1.0))
 
+    # bit_string_to_pg_bytes packs the 2048-char 0/1 string into 256 bytes.
+    # asyncpg's binary protocol rejects str for bit(2048) param binds even
+    # with CAST(); bytes pass through cleanly.
     result = await db.execute(
         text("""
             SELECT id::text, rxn_smiles, name, conditions, drfp::text AS fp

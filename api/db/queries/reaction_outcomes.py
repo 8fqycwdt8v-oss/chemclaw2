@@ -106,9 +106,9 @@ async def insert_outcome(
     # ON CONFLICT swallowed the insert — RETURNING is empty. Fetch the
     # winning row's id so the caller can still link to it.
     if eln_experiment_id is None:
-        # No conflict target hit (no eln_experiment_id supplied), but
-        # RETURNING came back empty anyway — that shouldn't happen with
-        # a valid INSERT. Surface as a programming error.
+        # No conflict target hit (no eln_experiment_id supplied) but
+        # RETURNING came back empty anyway — shouldn't happen with a
+        # valid INSERT. Surface as a programming error.
         raise RuntimeError("insert_outcome: INSERT returned no row and no conflict target applied")
     existing = await db.execute(
         text("""

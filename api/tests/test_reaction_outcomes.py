@@ -15,7 +15,7 @@ from sqlalchemy import text
 
 from api.db.queries.fp_utils import bit_string_to_pg_bytes
 from api.db.queries.reaction_outcomes import insert_outcome, list_outcomes_for_reaction
-from api.db.queries.reactions import find_similar_reactions, insert_reaction
+from api.db.queries.reactions import find_similar_reactions
 
 
 # Two 2048-bit DRFP fingerprints, chosen to be near-identical (Tanimoto ~ 1)
@@ -24,33 +24,50 @@ _FP_ALL_ONES = "1" * 2048
 _FP_MOSTLY_ONES = "1" * 2047 + "0"  # differs by 1 bit
 
 
-async def _set_reaction_fp(session_factory, reaction_id: str, bits: str) -> None:
-    """Backfill the drfp column for a freshly inserted reaction.
+async def _insert_reaction(
+    session_factory,
+    user_id: str,
+    rxn_smiles: str,
+    name: str | None = None,
+    drfp_bits: str | None = None,
+) -> str:
+    """Insert a reaction (optionally with a 2048-bit DRFP) via raw SQL.
 
-    asyncpg refuses a Python str for bit(2048) parameter binds even with
-    CAST(); pack to bytes via the canonical helper.
+    The ORM helper in api/db/queries/reactions.py works fine for NULL
+    drfp, but tests that want to seed a specific fingerprint need to
+    bypass it: asyncpg's binary protocol rejects a Python str for
+    bit(2048) parameter binds even when wrapped in CAST(); the canonical
+    fix is to pack the bits to bytes via ``bit_string_to_pg_bytes``.
     """
-    bits_bytes = bit_string_to_pg_bytes(bits)
     async with session_factory() as db:
         async with db.begin():
-            await db.execute(
+            result = await db.execute(
                 text("""
-                    UPDATE reactions
-                    SET drfp = :bits,
-                        fp_computed_at = now()
-                    WHERE id = CAST(:rid AS uuid)
+                    INSERT INTO reactions (rxn_smiles, name, created_by)
+                    VALUES (:smi, :name, :uid)
+                    RETURNING id::text
                 """),
-                {"rid": reaction_id, "bits": bits_bytes},
+                {"smi": rxn_smiles, "name": name, "uid": user_id},
             )
+            rid = result.scalar_one()
+            if drfp_bits is not None:
+                await db.execute(
+                    text("""
+                        UPDATE reactions
+                        SET drfp = CAST(:bits AS bit(2048)),
+                            fp_computed_at = now()
+                        WHERE id = CAST(:rid AS uuid)
+                    """),
+                    {"bits": bit_string_to_pg_bytes(drfp_bits), "rid": rid},
+                )
+            return rid
 
 
 @pytest.mark.asyncio
 async def test_insert_outcome_roundtrip(session_factory, user_id: str) -> None:
-    async with session_factory() as db:
-        async with db.begin():
-            reaction_id = await insert_reaction(
-                db, rxn_smiles="CC>>CCO", created_by=user_id, name="test_rxn",
-            )
+    reaction_id = await _insert_reaction(
+        session_factory, user_id, rxn_smiles="CC>>CCO", name="test_rxn",
+    )
 
     async with session_factory() as db:
         async with db.begin():
@@ -82,11 +99,9 @@ async def test_insert_outcome_roundtrip(session_factory, user_id: str) -> None:
 @pytest.mark.asyncio
 async def test_insert_outcome_eln_is_idempotent(session_factory, user_id: str) -> None:
     """Re-ingesting the same ELN experiment id must not duplicate."""
-    async with session_factory() as db:
-        async with db.begin():
-            reaction_id = await insert_reaction(
-                db, rxn_smiles="CC>>CCBr", created_by=user_id,
-            )
+    reaction_id = await _insert_reaction(
+        session_factory, user_id, rxn_smiles="CC>>CCBr",
+    )
 
     eln_exp_id = f"EXP-{uuid.uuid4().hex[:10]}"
     async with session_factory() as db:
@@ -123,11 +138,9 @@ async def test_insert_outcome_eln_is_idempotent(session_factory, user_id: str) -
 
 @pytest.mark.asyncio
 async def test_insert_outcome_rejects_bad_inputs(session_factory, user_id: str) -> None:
-    async with session_factory() as db:
-        async with db.begin():
-            reaction_id = await insert_reaction(
-                db, rxn_smiles="A>>B", created_by=user_id,
-            )
+    reaction_id = await _insert_reaction(
+        session_factory, user_id, rxn_smiles="A>>B",
+    )
 
     async with session_factory() as db:
         with pytest.raises(ValueError, match="source"):
@@ -155,16 +168,14 @@ async def test_insert_outcome_rejects_bad_inputs(session_factory, user_id: str) 
 @pytest.mark.asyncio
 async def test_find_similar_reactions_includes_outcomes(session_factory, user_id: str) -> None:
     """When include_outcomes=True the returned hits carry their outcome list."""
-    async with session_factory() as db:
-        async with db.begin():
-            rid_a = await insert_reaction(
-                db, rxn_smiles="CC>>CCO", created_by=user_id, name="rxn_a",
-            )
-            rid_b = await insert_reaction(
-                db, rxn_smiles="CC>>CCBr", created_by=user_id, name="rxn_b",
-            )
-    await _set_reaction_fp(session_factory, rid_a, _FP_ALL_ONES)
-    await _set_reaction_fp(session_factory, rid_b, _FP_MOSTLY_ONES)
+    rid_a = await _insert_reaction(
+        session_factory, user_id, rxn_smiles="CC>>CCO",
+        name="rxn_a", drfp_bits=_FP_ALL_ONES,
+    )
+    rid_b = await _insert_reaction(
+        session_factory, user_id, rxn_smiles="CC>>CCBr",
+        name="rxn_b", drfp_bits=_FP_MOSTLY_ONES,
+    )
 
     async with session_factory() as db:
         async with db.begin():
