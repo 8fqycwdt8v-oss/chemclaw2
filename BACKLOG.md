@@ -45,6 +45,10 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - ~~Migration numbering: there are two `0029_*` files~~ — resolved by renaming `0029_wiki_tables_cleanup.sql` → `0029a_wiki_tables_cleanup.sql` in the review-fixes-A PR.
 - `api/db/connection.py` pool: `pool_size=5, max_overflow=10` is the Python equivalent of the Wave-3h `DB_POOL_MAX=15` total. Document upstream Postgres `max_connections` headroom if running without a pooler at scale.
 
+### Property predictions (May 2026 — V2 PR 3)
+
+- ~~Spec §3.5 property predictions (deterministic descriptors)~~ — shipped `compute_descriptors(smiles)` in `mcp_molfp`: Crippen logP, exact/avg MW, TPSA, H-bond donors/acceptors, rotatable bonds, aromatic rings, heavy atoms, Lipinski Rule-of-Five pass + violation count. All values come from RDKit (no ML, no external calls, deterministic). The agent SDK auto-discovers it via the existing `mcp-molfp` stdio routing in `api/agent/runner.py`. ML-based predictions (yield, tox, hazards) remain deferred per the operating principles.
+
 ### Migration policy (May 2026 — review-fix PR F)
 
 - ~~46 `CREATE INDEX` statements lack `CONCURRENTLY`~~ — policy now documented in `migrations/MIGRATIONS.md`. Historical migrations 0001–0036 are already applied; rewriting them retroactively has no effect. New index migrations on populated tables must use `CREATE INDEX CONCURRENTLY` and live in a single-statement file (CI's `--single-transaction` apply forbids mixing `CONCURRENTLY` with other DDL). CLAUDE.md updated to point at the policy file.
