@@ -1,6 +1,7 @@
 """Persist + list `code_executions` — the agent-sandbox audit log."""
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -25,6 +26,7 @@ async def insert_execution(
     created_by: str,
     investigation_id: str | None = None,
     session_id: str | None = None,
+    artifacts: list[dict[str, Any]] | None = None,
 ) -> str:
     """Persist one sandbox run. Returns the new row's id.
 
@@ -36,6 +38,9 @@ async def insert_execution(
     attach an execution to someone else's investigation. The same
     atomic statement raises ValueError when the investigation isn't
     owned (or doesn't exist).
+
+    `artifacts` (Tier 3 §M): list of `{filename, mime, size_bytes, b64}`
+    captured PNG figures from the sandbox tempdir. Stored as JSONB.
     """
     if status not in _VALID_STATUSES:
         raise ValueError(f"status must be one of {sorted(_VALID_STATUSES)}, got {status!r}")
@@ -51,6 +56,7 @@ async def insert_execution(
         "duration_ms": duration_ms,
         "status": status,
         "uid": created_by,
+        "artifacts": json.dumps(artifacts or []),
     }
     async with db.begin():
         if investigation_id is not None:
@@ -59,9 +65,10 @@ async def insert_execution(
                 text("""
                     INSERT INTO code_executions
                         (investigation_id, session_id, code, stdout, stderr,
-                         exit_code, duration_ms, status, created_by)
+                         exit_code, duration_ms, status, artifacts, created_by)
                     SELECT CAST(:iid AS uuid), :sid, :code, :stdout, :stderr,
-                           :exit_code, :duration_ms, :status, :uid
+                           :exit_code, :duration_ms, :status,
+                           CAST(:artifacts AS jsonb), :uid
                     WHERE EXISTS (
                         SELECT 1 FROM investigations
                          WHERE id = CAST(:iid AS uuid)
@@ -80,14 +87,33 @@ async def insert_execution(
             text("""
                 INSERT INTO code_executions
                     (investigation_id, session_id, code, stdout, stderr,
-                     exit_code, duration_ms, status, created_by)
+                     exit_code, duration_ms, status, artifacts, created_by)
                 VALUES (NULL, :sid, :code, :stdout, :stderr,
-                        :exit_code, :duration_ms, :status, :uid)
+                        :exit_code, :duration_ms, :status,
+                        CAST(:artifacts AS jsonb), :uid)
                 RETURNING id::text
             """),
             params,
         )
         return result.scalar_one()
+
+
+def _strip_artifact_payload(artifacts: Any) -> list[dict[str, Any]]:
+    """Drop the b64 payload from each artefact dict — keeps list responses
+    paginatable. Tolerant of stringified JSONB (older driver paths)."""
+    if isinstance(artifacts, str):
+        try:
+            artifacts = json.loads(artifacts)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(artifacts, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for a in artifacts:
+        if not isinstance(a, dict):
+            continue
+        out.append({k: v for k, v in a.items() if k != "b64"})
+    return out
 
 
 async def list_executions(
@@ -98,7 +124,10 @@ async def list_executions(
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     """List executions for the caller, optionally filtered by investigation
-    or chat session. Owner-scoped on `created_by`."""
+    or chat session. Owner-scoped on `created_by`.
+
+    `artifacts` returned with the b64 payload stripped — keeps list
+    responses small. Use `get_execution(id)` for the full payload."""
     safe_limit = min(max(1, limit), 100)
     params: dict[str, Any] = {"uid": user_id, "lim": safe_limit}
     clauses = ["created_by = :uid"]
@@ -112,7 +141,8 @@ async def list_executions(
     result = await db.execute(
         text(f"""
             SELECT id::text, investigation_id::text, session_id, code,
-                   stdout, stderr, exit_code, duration_ms, status, created_at
+                   stdout, stderr, exit_code, duration_ms, status,
+                   artifacts, created_at
             FROM code_executions
             WHERE {where}
             ORDER BY created_at DESC, id DESC
@@ -120,7 +150,12 @@ async def list_executions(
         """),
         params,
     )
-    return [dict(r._mapping) for r in result]
+    rows = []
+    for r in result:
+        d = dict(r._mapping)
+        d["artifacts"] = _strip_artifact_payload(d.get("artifacts"))
+        rows.append(d)
+    return rows
 
 
 async def get_execution(
@@ -128,11 +163,13 @@ async def get_execution(
     execution_id: str,
     user_id: str,
 ) -> dict[str, Any] | None:
-    """Owner-scoped single-row fetch."""
+    """Owner-scoped single-row fetch. Includes full artefact payloads
+    (b64). Pair with `list_executions` for paginated overview."""
     result = await db.execute(
         text("""
             SELECT id::text, investigation_id::text, session_id, code,
-                   stdout, stderr, exit_code, duration_ms, status, created_at
+                   stdout, stderr, exit_code, duration_ms, status,
+                   artifacts, created_at
             FROM code_executions
             WHERE id = CAST(:eid AS uuid)
               AND created_by = :uid
@@ -140,4 +177,17 @@ async def get_execution(
         {"eid": execution_id, "uid": user_id},
     )
     row = result.one_or_none()
-    return dict(row._mapping) if row else None
+    if row is None:
+        return None
+    d = dict(row._mapping)
+    # JSONB columns come back as parsed Python lists most of the time,
+    # but stringified depending on the driver/pgvector combo. Normalise.
+    artifacts = d.get("artifacts")
+    if isinstance(artifacts, str):
+        try:
+            d["artifacts"] = json.loads(artifacts)
+        except json.JSONDecodeError:
+            d["artifacts"] = []
+    elif not isinstance(artifacts, list):
+        d["artifacts"] = []
+    return d

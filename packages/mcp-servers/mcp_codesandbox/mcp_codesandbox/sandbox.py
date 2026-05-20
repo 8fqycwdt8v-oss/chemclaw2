@@ -42,6 +42,7 @@ What it does enforce:
 from __future__ import annotations
 
 import asyncio
+import base64
 import functools
 import logging
 import os
@@ -51,7 +52,8 @@ import signal
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -75,6 +77,26 @@ CODE_BYTE_CAP = 200 * 1024                   # 200 KB source code
 EXIT_TIMEOUT = 124   # `timeout(1)` convention
 EXIT_KILLED = 137    # 128 + SIGKILL(9)
 
+# Figure-capture caps (§M, Tier 3 plan). PNG only in V1 — SVG/PDF/HTML
+# expand the parser surface and weren't worth it for the 80% case.
+ARTIFACTS_TOTAL_CAP_BYTES = 1_500_000   # 1.5 MB across all attached PNGs
+ARTIFACTS_PER_FILE_CAP_BYTES = 1_000_000  # any single file > 1 MB is dropped
+ARTIFACT_EXTENSIONS = (".png",)
+
+# Prelude script prepended to every user submission so matplotlib defaults
+# to a headless backend before pyplot is imported anywhere. Wrapped in
+# try/except so hosts without matplotlib don't crash the prelude — user
+# code that doesn't import matplotlib still runs normally. Users who
+# explicitly call `matplotlib.use("...")` afterwards can still override
+# (and will fail at draw time inside the sandbox — no display).
+_FIGURE_PRELUDE = (
+    "try:\n"
+    "    import matplotlib as _mpl\n"
+    "    _mpl.use('Agg')\n"
+    "except ImportError:\n"
+    "    pass\n"
+)
+
 
 @dataclass(slots=True)
 class SandboxResult:
@@ -83,6 +105,7 @@ class SandboxResult:
     stderr: str
     duration_ms: int
     status: str  # 'completed' | 'timeout' | 'killed' | 'error'
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _set_rlimits(
@@ -138,14 +161,65 @@ def _build_command(code: str, tmpdir: str) -> list[str]:
     with `env={}` in the asyncio call this keeps the child off the
     host's import surface even when unshare isn't available — at the
     cost of leaving network access intact.
+
+    User code is prepended with `_FIGURE_PRELUDE` so matplotlib runs
+    headless. Users who don't import matplotlib at all pay only the
+    cost of `import matplotlib`; figure capture is opt-in by the user
+    code's own `plt.savefig(...)` call.
     """
-    py_argv = [sys.executable, "-I", "-c", code]
+    wrapped = _FIGURE_PRELUDE + code
+    py_argv = [sys.executable, "-I", "-c", wrapped]
     if _unshare_available():
         # `unshare -n` creates a new (empty) network namespace for the
         # child — no DNS, no routes, no inherited sockets. -r runs as
         # an unprivileged user inside the namespace (no UID 0 inside).
         return [shutil.which("unshare") or "unshare", "-n", "-r", *py_argv]
     return py_argv
+
+
+def _scan_artifacts(tmpdir: str) -> tuple[list[dict[str, Any]], bool]:
+    """Walk `tmpdir` for PNG figures and return them base64-encoded.
+
+    Returns (artifacts, truncated). `truncated` is True iff the cap was
+    hit and at least one PNG was dropped. Each artifact is a dict:
+        {filename, mime, size_bytes, b64}
+
+    Quietly drops files that exceed `ARTIFACTS_PER_FILE_CAP_BYTES`
+    individually (≥ 1 MB single PNG = user is misusing figures as
+    data dumps).
+    """
+    artifacts: list[dict[str, Any]] = []
+    total = 0
+    truncated = False
+    try:
+        # Deterministic order so multi-figure tests are stable.
+        files = sorted(Path(tmpdir).iterdir())
+    except OSError:
+        return artifacts, False
+    for path in files:
+        try:
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in ARTIFACT_EXTENSIONS:
+                continue
+            size = path.stat().st_size
+            if size > ARTIFACTS_PER_FILE_CAP_BYTES:
+                truncated = True
+                continue
+            if total + size > ARTIFACTS_TOTAL_CAP_BYTES:
+                truncated = True
+                continue
+            data = path.read_bytes()
+        except OSError:
+            continue
+        artifacts.append({
+            "filename": path.name,
+            "mime": "image/png",
+            "size_bytes": size,
+            "b64": base64.b64encode(data).decode("ascii"),
+        })
+        total += size
+    return artifacts, truncated
 
 
 async def run_python(
@@ -272,12 +346,25 @@ async def run_python(
             if len(stderr_b) > STDERR_CAP_BYTES:
                 stderr_cut += b"\n[sandbox] stderr truncated"
 
+            # Capture PNG artefacts from the tempdir. Only on the happy
+            # path — timeout / killed runs skip the scan (their tempdir
+            # state is undefined). Failure to scan never crashes the run.
+            artifacts: list[dict[str, Any]] = []
+            if status == "completed":
+                try:
+                    artifacts, art_truncated = _scan_artifacts(tmpdir)
+                    if art_truncated:
+                        stderr_cut += b"\n[sandbox] artifact truncated"
+                except Exception as e:
+                    logger.warning("sandbox artifact scan failed: %s", e)
+
             return SandboxResult(
                 exit_code=rc,
                 stdout=stdout_cut.decode("utf-8", errors="replace"),
                 stderr=stderr_cut.decode("utf-8", errors="replace"),
                 duration_ms=duration_ms,
                 status=status,
+                artifacts=artifacts,
             )
         finally:
             # Reaper: kill + wait if the child is still alive. Only fires
@@ -300,13 +387,16 @@ async def run_python(
 
 def summary(result: SandboxResult) -> dict[str, Any]:
     """Convenience: convert a SandboxResult to a JSON-serialisable dict
-    matching what the agent tool exposes."""
+    matching what the agent tool exposes. Includes the full artefact
+    payloads (b64). Callers that want metadata-only — e.g.
+    `list_code_executions` — should strip `b64` from each artefact."""
     return {
         "exit_code": result.exit_code,
         "status": result.status,
         "duration_ms": result.duration_ms,
         "stdout": result.stdout,
         "stderr": result.stderr,
+        "artifacts": result.artifacts,
     }
 
 

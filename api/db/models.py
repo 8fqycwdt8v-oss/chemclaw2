@@ -615,6 +615,11 @@ class CodeExecution(Base):
     exit_code: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     duration_ms: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default=sa.text("0"))
     status: Mapped[str] = mapped_column(sa.Text, nullable=False, server_default=sa.text("'completed'"))
+    # PNG artefacts captured from the sandbox tempdir. Shape:
+    # [{filename, mime, size_bytes, b64}]. See Tier 3 §M.
+    artifacts: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default=sa.text("'[]'::jsonb"),
+    )
     created_by: Mapped[str] = mapped_column(sa.Text, nullable=False)
     created_at: Mapped[datetime] = _now()
 

@@ -1745,13 +1745,21 @@ def build_chemclaw_mcp_server(
         reasoning. Every invocation is persisted to `code_executions`
         and is later retrievable via `list_code_executions`.
 
+        Figure capture (matplotlib): the sandbox prepends
+        `matplotlib.use("Agg")` so any `plt.savefig("foo.png")` call
+        lands in the tempdir and is base64-encoded into the response.
+        Total cap 1.5 MB across all PNGs per run; single files > 1 MB
+        are dropped. Stderr gains a `[sandbox] artifact truncated`
+        line when the cap fires.
+
         `investigation_id`, if provided, anchors the execution to a
         research thread (and is required if no chat session_id is
         available — both can't be NULL). Both ownership is checked.
 
         Hard caps: CPU 1–300s (default 30), memory 512 MB, stdout 1 MB,
         stderr 256 KB, source ≤200 KB. Returns:
-          {execution_id, status, exit_code, duration_ms, stdout, stderr}
+          {execution_id, status, exit_code, duration_ms, stdout, stderr,
+           artifacts: [{filename, mime, size_bytes, b64}]}
         """
         from api.db.queries.code_executions import insert_execution
         from api.db.queries.investigations import get_investigation
@@ -1782,6 +1790,7 @@ def build_chemclaw_mcp_server(
                     created_by=user_id,
                     investigation_id=investigation_id,
                     session_id=session_id,
+                    artifacts=result.artifacts,
                 )
             except ValueError as e:
                 return {"error": str(e)}
@@ -1792,7 +1801,27 @@ def build_chemclaw_mcp_server(
             "duration_ms": result.duration_ms,
             "stdout": result.stdout,
             "stderr": result.stderr,
+            # Full artefact payloads (b64 included). The agent just ran
+            # the code; it gets the figures immediately so it can render
+            # them. `list_code_executions` strips b64 to keep list
+            # responses paginatable.
+            "artifacts": result.artifacts,
         }
+
+    @mcp.tool()
+    async def get_code_execution(execution_id: str) -> dict[str, Any]:
+        """Fetch a single past execution with FULL artefact payloads.
+
+        Owner-scoped via `created_by`. Returns {execution} on success or
+        {error} when the id is unknown / not owned. Use to recover the
+        b64 PNG payload from an execution that was listed without it.
+        """
+        from api.db.queries.code_executions import get_execution
+        async with session_factory() as db:
+            row = await get_execution(db, execution_id, user_id)
+        if row is None:
+            return {"error": "execution not found or not owned by user"}
+        return {"execution": row}
 
     @mcp.tool()
     async def list_code_executions(
@@ -1801,7 +1830,11 @@ def build_chemclaw_mcp_server(
     ) -> dict[str, Any]:
         """List recent sandbox executions. Filter by `investigation_id`,
         or omit to list the caller's recent runs across all contexts.
-        Owner-scoped on `created_by`."""
+        Owner-scoped on `created_by`.
+
+        Artefacts in the response carry metadata only (filename, mime,
+        size_bytes) — no b64 payload, to keep list responses small.
+        Fetch the full payload via `get_code_execution(execution_id)`."""
         from api.db.queries.code_executions import list_executions
         if not (1 <= limit <= 100):
             return {"error": "limit must be between 1 and 100"}
