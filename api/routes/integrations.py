@@ -18,6 +18,14 @@ from api.db.connection import get_db
 from api.db.queries.compounds import insert_compound
 from api.db.queries.knowledge import upsert_external_fact, upsert_paper
 from api.db.queries.rate_limit import pg_rate_limit, rate_limit
+from api.db.queries.wiki_write import upsert_wiki_page
+from api.embeddings import embed_texts
+from api.integrations.document_enrichment import (
+    extract_doi,
+    fetch_crossref_metadata,
+    first_nonempty_line,
+    slugify_doi,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,29 +154,47 @@ async def upload_document(
         text = content.decode("utf-8", errors="replace")
 
     source_id = hashlib.sha256(content).hexdigest()
+    doi = extract_doi(text)
+
+    # Enrich with CrossRef metadata when a DOI is present. Network call is
+    # best-effort: a CrossRef miss or timeout falls back to the
+    # first-non-empty-line heuristic — the upload still succeeds.
+    metadata: dict[str, Any] = {}
+    if doi:
+        crossref = await fetch_crossref_metadata(doi)
+        if crossref:
+            metadata = crossref
+
+    title = metadata.get("title") or first_nonempty_line(text)
+    abstract = metadata.get("abstract")
 
     fact_id, _ = await upsert_external_fact(
         db,
         source_type="document",
         source_id=source_id,
-        payload={"filename": file.filename, "content_type": content_type},
+        payload={
+            "filename": file.filename,
+            "content_type": content_type,
+            "doi": doi,
+            "title": title,
+            "abstract": abstract,
+            "authors": metadata.get("authors") or [],
+            "container_title": metadata.get("container_title"),
+            "published_year": metadata.get("published_year"),
+        },
         content_text=text[:500_000],
         fetched_by=user_id,
     )
-
-    title: str | None = None
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped:
-            title = stripped[:200]
-            break
 
     if title:
         try:
             await upsert_paper(
                 db,
-                url=f"upload:{source_id}",
+                url=(f"https://doi.org/{doi}" if doi else f"upload:{source_id}"),
                 title=title,
+                doi=doi,
+                abstract=abstract,
+                content_text=text[:500_000] if not abstract else None,
                 created_by=user_id,
             )
         except Exception:
@@ -176,4 +202,59 @@ async def upload_document(
                 "doc_upload_upsert_paper_failed source_id=%s", source_id
             )
 
-    return {"fact_id": fact_id, "chars": len(text), "title": title}
+    # Wiki page draft (needs_review=True so the curator queue surfaces it).
+    # Idempotent: stable slug per (doi or content hash) means re-uploading
+    # the same paper updates rather than duplicates.
+    wiki_slug: str | None = None
+    if title:
+        slug_base = slugify_doi(doi) if doi else f"doc-{source_id[:12]}"
+        # Truncate to wiki slug length budget; the regex requires alnum endpoints.
+        wiki_slug = slug_base[:80].rstrip("-") or f"doc-{source_id[:12]}"
+        try:
+            authors_str = ", ".join(metadata.get("authors") or [])
+            container = metadata.get("container_title")
+            year = metadata.get("published_year")
+            body_lines = [
+                f"# {title}",
+                "",
+                f"**Source:** {file.filename or 'uploaded document'}",
+            ]
+            if doi:
+                body_lines.append(f"**DOI:** [{doi}](https://doi.org/{doi})")
+            if authors_str:
+                body_lines.append(f"**Authors:** {authors_str}")
+            if container:
+                body_lines.append(f"**Journal:** {container}")
+            if year:
+                body_lines.append(f"**Year:** {year}")
+            if abstract:
+                body_lines.extend(["", "## Abstract", "", abstract])
+            body_lines.extend(["", "## Extracted text (excerpt)", "", text[:5000]])
+            wiki_text = "\n".join(body_lines)
+            await upsert_wiki_page(
+                db,
+                slug=wiki_slug,
+                title=title,
+                content={"type": "doc", "content": []},
+                content_text=wiki_text,
+                created_by=user_id,
+                citations=[],
+                embed_fn=embed_texts,
+                project="papers",
+                needs_review=True,
+            )
+        except Exception:
+            logger.exception(
+                "doc_upload_upsert_wiki_failed source_id=%s slug=%s",
+                source_id, wiki_slug,
+            )
+            wiki_slug = None
+
+    return {
+        "fact_id": fact_id,
+        "chars": len(text),
+        "title": title,
+        "doi": doi,
+        "wiki_slug": wiki_slug,
+        "abstract": abstract,
+    }
