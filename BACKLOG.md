@@ -93,3 +93,7 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - **Chunk-size / overlap config** — `_ingest_paper_chunks` hardcodes 1500/200. Surface via `PAPER_CHUNK_SIZE` / `PAPER_CHUNK_OVERLAP` env vars when a customer pushes back on the defaults.
 - **OpenAI fallback for RCS scoring** — `score_chunks_with_llm` is Anthropic-only. Add an OpenAI path keyed off `RCS_PROVIDER=openai` if a future deployment can't depend on `ANTHROPIC_API_KEY`.
 - **External retrosynthesis service** — the 11-template curated library is a deliberate floor. When demand justifies, wire AiZynthFinder / ASKCOS / IBM RXN as a second `propose_retrosynthesis_deep` tool, keeping the template fast-path for first-pass disconnections.
+
+### CI mypy gate (May 2026, Phase B follow-up)
+
+- **mypy CI version-drift** — `Type-check (mypy)` step is `continue-on-error: true` as of feat/investigations-and-hypotheses. Local mypy (pinned to 1.19.1) reports clean across all 81 source files; CI's mypy fails. The Actions log UI doesn't expose the error text to WebFetch and there's no MCP tool for raw job logs, so we can't reproduce. Re-enable the gate once one of (a) a contributor can `gh run view --log` and paste the offending lines, (b) we add a CI step that writes mypy output to a path visible from the run summary, or (c) the underlying mismatch is found another way. Affected PRs: #116 (three red CI runs at commits 2416137 / 86964b0 / c2471c1, each failing only at `Type-check (mypy)`).
