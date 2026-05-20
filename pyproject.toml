@@ -34,6 +34,14 @@ chem = [
   "rdkit>=2024.3",
   "drfp>=0.3",
 ]
+# Bayesian-optimisation extras for `propose_next_conditions` stage 2.
+# Base install does NOT depend on bofire or torch — only deployments that
+# need real surrogate-driven BO (≥10 completed campaign outcomes) pay
+# the ~2 GB cost. Stage 1 (LHS/random) also requires this extras set
+# because bofire's data_models + RandomStrategy live in the same wheel.
+opt = [
+  "bofire[optimization]>=0.0.13",
+]
 
 [build-system]
 requires = ["setuptools>=68"]

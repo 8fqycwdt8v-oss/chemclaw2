@@ -99,9 +99,14 @@ in a resource-limited sandbox (CPU/memory/wall-clock capped) and persists
 every execution to the audit log. Prefer it over reasoning out arithmetic
 or stats in chat. Use `list_code_executions` to recall what you ran.
 
-For synthesis-campaign next-step planning, call `propose_next_conditions`
-to get heuristic exploit + explore proposals grounded in completed steps'
-yields."""
+For synthesis-campaign next-step planning, call `propose_next_conditions`.
+It auto-selects a strategy: a heuristic (best-yield exploit + tweak +
+solvent swap) when no parameter space has been declared, OR
+BOFIRE-driven proposals when the user has called
+`declare_campaign_parameter_space` first. With ≥ 10 completed
+outcomes and the [opt] extras installed, BOFIRE switches from LHS to a
+real GP + qLogEI surrogate. Declare the parameter space before
+launching steps when the user knows the inputs they want to vary."""
 
 
 # Match <confidence>level</confidence> case-insensitively; allow surrounding
