@@ -69,42 +69,43 @@ async def test_list_wiki_needs_review_owner_scoped(session_factory, user_id):
 @pytest.mark.asyncio
 async def test_list_wiki_needs_review_excludes_archived(session_factory, user_id):
     """Pages marked archived must not surface in the inbox even when needs_review."""
+    archived_slug = f"a-{uuid.uuid4().hex[:8]}"
     async with session_factory() as db:
         async with db.begin():
             await db.execute(
                 text("""
                     INSERT INTO wiki_pages (slug, title, content, content_text,
                                             created_by, updated_by, needs_review, archived)
-                    VALUES (:slug, 'Archived', '{}'::jsonb, 'x',
+                    VALUES (:slug, 'Archived', CAST('{}' AS jsonb), 'x',
                             :uid, :uid, true, true)
                 """),
-                {"slug": f"a-{uuid.uuid4().hex[:8]}", "uid": user_id},
+                {"slug": archived_slug, "uid": user_id},
             )
 
     async with session_factory() as db:
         inbox = await list_wiki_needs_review(db, user_id)
-    archived_slugs = {p["slug"] for p in inbox}
-    assert all(not s.startswith("a-") or not s for s in archived_slugs)
+    assert all(p["slug"] != archived_slug for p in inbox)
 
 
 @pytest.mark.asyncio
 async def test_list_wiki_needs_review_excludes_clean_pages(session_factory, user_id):
     """A page with needs_review=false should not appear."""
+    clean_slug = f"clean-{uuid.uuid4().hex[:8]}"
     async with session_factory() as db:
         async with db.begin():
             await db.execute(
                 text("""
                     INSERT INTO wiki_pages (slug, title, content, content_text,
                                             created_by, updated_by, needs_review)
-                    VALUES (:slug, 'Clean', '{}'::jsonb, 'x',
+                    VALUES (:slug, 'Clean', CAST('{}' AS jsonb), 'x',
                             :uid, :uid, false)
                 """),
-                {"slug": f"clean-{uuid.uuid4().hex[:8]}", "uid": user_id},
+                {"slug": clean_slug, "uid": user_id},
             )
 
     async with session_factory() as db:
         inbox = await list_wiki_needs_review(db, user_id)
-    assert all(p["title"] != "Clean" for p in inbox)
+    assert all(p["slug"] != clean_slug for p in inbox)
 
 
 @pytest.mark.asyncio
@@ -142,17 +143,19 @@ async def test_curator_inbox_endpoint_aggregates_buckets(
                 db, cid, 0, "C>>C", "test", status="pending_approval"
             )
 
-    # 3. Seed an unresolved contradiction.
+    # 3. Seed an unresolved contradiction. Look up page_id in one session,
+    # then call create_contradiction (which manages its own tx) in another
+    # to avoid nesting tx contexts.
     async with session_factory() as db:
         page_row = await db.execute(
             text("SELECT id::text FROM wiki_pages WHERE slug = :slug"),
             {"slug": wiki_slug},
         )
         page_id = page_row.scalar_one()
-        async with db.begin():
-            await create_contradiction(
-                db, page_id, "cit-a", "cit-b", "inconclusive", "test conflict"
-            )
+    async with session_factory() as db:
+        await create_contradiction(
+            db, page_id, "cit-a", "cit-b", "inconclusive", "test conflict"
+        )
 
     resp = client.get("/api/curator/inbox", headers=auth_header)
     assert resp.status_code == 200
