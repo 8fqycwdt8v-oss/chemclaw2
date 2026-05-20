@@ -19,7 +19,7 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 ### Tier F — Long-horizon / blocked (kept as reference, not on the work plan)
 
 - **Multi-tenant RLS** — every policy still `USING(true)`; migration 0034 dropped the truly permissive stubs but the remaining ones need per-tenant `USING (org_id = current_setting('app.org_id')::uuid)` bodies. Trigger: tenants > 1.
-- **Wiki audit-read** — read-side audit table for compliance §3.8. Trigger: regulated customer asks. Write side already covered via revisions.
+- ~~Wiki audit-read~~ — shipped in feat/wiki-audit-read PR. `GET /api/audit/wiki/{slug}` returns the current page metadata (version, created_by/updated_by, bi-temporal valid_from/valid_to, maturity, archived, needs_review) bundled with the full revision list ordered newest-first. Admin-only (uses `_AUDIT_WIKI` deps — admin check before rate-limit so non-admins still see 403 not 429). Pairs with the existing `GET /api/wiki/{slug}/revisions/{version}` for full revision bodies when a diff is needed.
 - **RLS on `notifications`** — enable with per-user predicate. Trigger: tenants > 1.
 - **Skills catalog in DB** — promote filesystem skill packs to a table with scope (personal/project/org) + maturity tier. Trigger: skill count grows.
 - **Tool forging** — NL tool synthesis with sandboxed execution (§3.13). v3 only.
