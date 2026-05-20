@@ -7,13 +7,28 @@ Trust boundary:
     a determined exploit can still:
       - read files the calling user can read (cwd is a fresh tempdir,
         but / is still visible).
+      - `import` any package installed in the host's *system*
+        site-packages — `python -I` only blocks PYTHONPATH / user-site,
+        not system-installed deps. The chemclaw2 `api` module IS
+        importable inside the sandbox on hosts where `pip install -e .`
+        has placed it in system site-packages.
       - make outbound connections unless `unshare -n` is available
-        (best-effort — we try, fall back to no net-namespace).
+        (best-effort — we probe at module load, fall back to no
+        net-namespace on hosts without CAP_SYS_ADMIN).
       - exhaust CPU below the RLIMIT_CPU ceiling.
+
+    What is enforced:
+      - resource caps (CPU, memory, fs writes, fds, output bytes)
+      - wall-clock SIGKILL backstop
+      - clean env: only HOME, TMPDIR, PATH passed in; no API keys,
+        DATABASE_URL, or other host secrets leak in
+      - fresh cwd: agent-written files vanish when the run ends
+      - PYTHONPATH / user-site stripped via `python -I`
 
     BACKLOG entry tracks the move to Docker / firejail / nsjail for full
     isolation. Until then, the agent's prompt safety gates + this set of
-    rlimits + the agent SDK's tool-use hooks are the layered defenses.
+    rlimits + the env-strip + the SDK's tool-use hooks are the layered
+    defenses.
 
 What it does enforce:
     - CPU seconds (RLIMIT_CPU)         — kills runaway loops

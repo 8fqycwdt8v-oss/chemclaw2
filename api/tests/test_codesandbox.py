@@ -87,18 +87,23 @@ async def test_stdout_truncated_at_cap() -> None:
         assert "truncated" in result.stdout
 
 
-async def test_isolated_no_pythonpath_inheritance() -> None:
-    """`python -I` mode means PYTHONPATH on the host doesn't leak into
-    the child. The empty cwd has no `chemclaw2` package, so importing
-    it must fail."""
+async def test_env_isolation_blocks_inherited_secrets() -> None:
+    """The sandbox launches the child with `env={"HOME": tmpdir,
+    "TMPDIR": tmpdir, "PATH": "/usr/bin:/bin"}` — no ANTHROPIC_API_KEY,
+    DATABASE_URL, AWS keys, or anything else from the host.
+
+    (Note: `python -I` blocks PYTHONPATH but not the system
+    site-packages, so installed packages remain importable — the
+    sandbox's trust boundary explicitly carves that out.)
+    """
     code = (
-        "try:\n"
-        "    import api  # the chemclaw2 backend package\n"
-        "    print('LEAKED')\n"
-        "except ImportError:\n"
-        "    print('isolated')\n"
+        "import os\n"
+        "leaked = [k for k in os.environ "
+        "if k.startswith(('ANTHROPIC_', 'OPENAI_', 'DATABASE_', 'CLERK_', 'AWS_'))]\n"
+        "print('LEAKED:' + ','.join(leaked) if leaked else 'isolated')\n"
     )
     result = await run_python(code)
+    assert result.status == "completed"
     assert "isolated" in result.stdout
     assert "LEAKED" not in result.stdout
 
