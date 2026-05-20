@@ -128,14 +128,15 @@ async def test_load_campaign_experiments_joins_reaction_outcomes(
     # Seed one completed campaign step + its reaction + outcome.
     async with session_factory() as db:
         async with db.begin():
-            # campaign_steps row
+            # campaign_steps row. `conditions` is a TEXT column — pass the
+            # JSON as a string; the loader parses it back via json.loads.
             await db.execute(
                 text("""
                     INSERT INTO campaign_steps
                         (campaign_id, step_idx, reaction_smiles,
                          conditions, status)
                     VALUES (CAST(:cid AS uuid), 0, 'CC>>CCC',
-                            CAST(:c AS jsonb), 'complete')
+                            :c, 'complete')
                 """),
                 {"cid": cid, "c": json.dumps({"temperature": 60.0, "solvent": "THF"})},
             )
@@ -147,10 +148,11 @@ async def test_load_campaign_experiments_joins_reaction_outcomes(
                 {"cid": cid},
             )
             step_id = step_row.scalar_one()
-            # reactions row (FK target for reaction_outcomes)
+            # reactions row (FK target for reaction_outcomes). The column
+            # is `rxn_smiles`, not `reaction_smiles`.
             rxn_row = await db.execute(
                 text("""
-                    INSERT INTO reactions (reaction_smiles, created_by)
+                    INSERT INTO reactions (rxn_smiles, created_by)
                     VALUES ('CC>>CCC', :uid)
                     RETURNING id::text
                 """),
@@ -199,7 +201,7 @@ async def test_load_campaign_experiments_skips_step_without_outcome(
                         (campaign_id, step_idx, reaction_smiles,
                          conditions, status)
                     VALUES (CAST(:cid AS uuid), 0, 'CC>>CCC',
-                            CAST(:c AS jsonb), 'complete')
+                            :c, 'complete')
                 """),
                 {"cid": cid, "c": json.dumps({"temperature": 60.0, "solvent": "THF"})},
             )
