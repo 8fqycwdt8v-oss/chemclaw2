@@ -327,6 +327,9 @@ async def run_agent_streaming(
             "mcp-codesandbox": McpStdioServerConfig(
                 type="stdio", command="python", args=["-m", "mcp_codesandbox.server"],
             ),
+            "mcp-tabular": McpStdioServerConfig(
+                type="stdio", command="python", args=["-m", "mcp_tabular.server"],
+            ),
         },
         hooks=build_hooks(user_id, project_key, session_factory),
         agents={
