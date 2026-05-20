@@ -113,7 +113,119 @@ async def test_result_shape_via_summary() -> None:
     from mcp_codesandbox.sandbox import summary
     result = await run_python("print('ok')")
     out = summary(result)
-    assert set(out.keys()) == {"exit_code", "status", "duration_ms", "stdout", "stderr"}
+    assert set(out.keys()) == {
+        "exit_code", "status", "duration_ms", "stdout", "stderr", "artifacts",
+    }
     assert out["exit_code"] == 0
     assert out["status"] == "completed"
     assert out["duration_ms"] >= 0
+    assert out["artifacts"] == []
+
+
+# ── §M figure capture ────────────────────────────────────────────────────────
+
+
+async def test_no_artifacts_when_user_code_writes_nothing() -> None:
+    """A user run that doesn't call savefig returns artifacts=[]."""
+    result = await run_python("print('no figure produced')")
+    assert result.status == "completed"
+    assert result.artifacts == []
+
+
+async def test_matplotlib_figure_captured_as_png() -> None:
+    """End-to-end: user calls plt.savefig, sandbox finds the PNG and
+    returns it as a base64-encoded artefact. Skips if matplotlib isn't
+    importable (the host might not have it; figure capture is opt-in
+    by the user code's own matplotlib import)."""
+    import base64
+
+    code = (
+        "try:\n"
+        "    import matplotlib.pyplot as plt\n"
+        "except ImportError:\n"
+        "    print('NOMATPLOTLIB')\n"
+        "else:\n"
+        "    plt.figure()\n"
+        "    plt.plot([1, 2, 3], [1, 4, 9])\n"
+        "    plt.savefig('plot.png')\n"
+        "    print('saved')\n"
+    )
+    result = await run_python(code)
+    assert result.status == "completed"
+    if "NOMATPLOTLIB" in result.stdout:
+        pytest.skip("matplotlib not installed in the sandbox's import path")
+    assert "saved" in result.stdout
+    assert len(result.artifacts) == 1
+    art = result.artifacts[0]
+    assert art["filename"] == "plot.png"
+    assert art["mime"] == "image/png"
+    assert art["size_bytes"] > 0
+    # b64 decodes to a real PNG (magic header 89 50 4E 47)
+    raw = base64.b64decode(art["b64"])
+    assert raw[:4] == b"\x89PNG"
+
+
+async def test_non_png_files_are_ignored() -> None:
+    """Only *.png is captured. A *.txt the user writes shouldn't surface."""
+    code = (
+        "open('notes.txt', 'w').write('not a figure')\n"
+        "print('done')\n"
+    )
+    result = await run_python(code)
+    assert result.status == "completed"
+    assert result.artifacts == []
+
+
+async def test_artifact_per_file_cap_drops_giant_png(
+    tmp_path: object, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A PNG written that exceeds the single-file cap is dropped with the
+    truncated marker. We can't easily generate a real >1 MB PNG inline,
+    so monkeypatch the cap down for this test."""
+    import mcp_codesandbox.sandbox as sb
+    monkeypatch.setattr(sb, "ARTIFACTS_PER_FILE_CAP_BYTES", 50)
+    code = (
+        "with open('big.png', 'wb') as f:\n"
+        "    f.write(b'\\x89PNG' + b'X' * 200)\n"
+        "print('wrote')\n"
+    )
+    result = await run_python(code)
+    assert result.status == "completed"
+    assert result.artifacts == []
+    assert "[sandbox] artifact truncated" in result.stderr
+
+
+async def test_artifact_total_cap_drops_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multiple PNGs that exceed the total cap are dropped past the
+    threshold. Per-file is fine; total isn't."""
+    import mcp_codesandbox.sandbox as sb
+    # Two ~100 byte files but total cap of 150 → first lands, second drops.
+    monkeypatch.setattr(sb, "ARTIFACTS_PER_FILE_CAP_BYTES", 200)
+    monkeypatch.setattr(sb, "ARTIFACTS_TOTAL_CAP_BYTES", 150)
+    code = (
+        "with open('a.png', 'wb') as f:\n"
+        "    f.write(b'\\x89PNG' + b'A' * 100)\n"
+        "with open('b.png', 'wb') as f:\n"
+        "    f.write(b'\\x89PNG' + b'B' * 100)\n"
+        "print('wrote')\n"
+    )
+    result = await run_python(code)
+    assert result.status == "completed"
+    assert len(result.artifacts) == 1
+    assert result.artifacts[0]["filename"] in ("a.png", "b.png")
+    assert "[sandbox] artifact truncated" in result.stderr
+
+
+async def test_artifacts_skipped_on_timeout() -> None:
+    """Killed / timeout runs don't scan — tempdir state is undefined."""
+    code = (
+        "with open('plot.png', 'wb') as f:\n"
+        "    f.write(b'\\x89PNG' + b'data')\n"
+        "while True:\n"
+        "    pass\n"
+    )
+    result = await run_python(code, cpu_seconds=2, wall_seconds=3)
+    assert result.status in ("timeout", "killed")
+    assert result.artifacts == []
