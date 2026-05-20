@@ -26,7 +26,7 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - **Hybrid FTS + semantic with RRF fusion for wiki** — single mode today. Trigger: measurable recall failure when SMILES and paraphrase queries both miss.
 - **`papers` / `properties` extraction pipeline** — tables exist (migrations 0026 / 0027) but nothing writes to them after the entity-extractor sub-agent was removed. Right shape is a post-`wiki_upsert` pg-boss job, deferred until demand.
 - **LLM-level eval against a golden chemistry Q&A set** — `eval_runs` was scoped to deterministic probes only; LLM scoring deferred per §3.9 trigger (prompt iteration becomes the measured bottleneck).
-- **Campaign approval UI** — `POST /api/campaigns/[id]/steps/[idx]/approve` exists but no UI. Build a campaign dashboard before adding interactive approval.
+- ~~Campaign approval API~~ — shipped in feat/campaign-step-approval PR. Backend `POST /api/campaigns/{id}/steps/{idx}/approve` + `/reject` + `GET /api/campaigns/steps/awaiting-approval` with owner-scope + source-state predicate. Agent tool `confirm_synthesis_plan` now accepts `requires_approval: bool` per step. UI surface deferred.
 - **ORD export for reactions** — admin-only endpoint `/api/admin/reactions/export-ord` when an external partner asks for ORD interchange.
 - **E2. ELN fetch path verification** (`api/agent/tools.py`) — path is `{ELN_API_BASE_URL}/api/eln/experiments/{id}`; confirm against the real ELN contract before connecting an ELN. Blocked on customer.
 - **E3. CAS regex bound** (`api/agent/hooks.py`) — currently `\d{2,7}` prefix. Align with CAS registry growth past 9 999 999. No current pressure.

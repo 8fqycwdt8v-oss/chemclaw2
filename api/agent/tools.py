@@ -401,22 +401,40 @@ def build_chemclaw_mcp_server(
         plan: dict[str, Any],
         steps: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """Confirm a synthesis plan and add steps to the campaign."""
+        """Confirm a synthesis plan and add steps to the campaign.
+
+        Each step in `steps` may include a `requires_approval: bool` flag
+        (default False). When True, the step is inserted with
+        status='pending_approval' — the worker will skip it until the user
+        approves via POST /api/campaigns/{cid}/steps/{idx}/approve. Use
+        for steps that are high-risk, ambiguous, or where the agent's
+        confidence is low and a human should review before commitment.
+        """
         from api.db.queries.campaigns import add_campaign_step, update_campaign_status
         # Single transaction: status flip + step inserts are atomic.
         # If any step insert fails the whole operation rolls back.
         async with session_factory() as db:
             async with db.begin():
                 await update_campaign_status(db, campaign_id, user_id, "running", plan=plan)
+                pending_approval = 0
                 for step in steps:
+                    requires_approval = bool(step.get("requires_approval", False))
+                    if requires_approval:
+                        pending_approval += 1
                     await add_campaign_step(
                         db,
                         campaign_id,
                         int(step.get("step_idx", 0)),
                         step.get("reaction_smiles"),
                         step.get("conditions"),
+                        status="pending_approval" if requires_approval else "pending",
                     )
-        return {"campaign_id": campaign_id, "status": "running", "steps_added": len(steps)}
+        return {
+            "campaign_id": campaign_id,
+            "status": "running",
+            "steps_added": len(steps),
+            "steps_awaiting_approval": pending_approval,
+        }
 
     # ── record feedback ───────────────────────────────────────────────────────
     @mcp.tool()

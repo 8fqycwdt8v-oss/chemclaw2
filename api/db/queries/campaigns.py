@@ -23,11 +23,14 @@ from api.db.queries.campaign_steps import (  # noqa: F401
     add_campaign_step,
     all_complete_for_campaigns,
     all_steps_complete,
+    approve_step,
     get_pending_campaign_steps,
     get_pending_steps_for_campaigns,
     get_steps_for_retry,
+    list_steps_awaiting_approval,
     mark_step_complete,
     mark_step_failed,
+    reject_step,
     reset_steps_for_retry,
 )
 

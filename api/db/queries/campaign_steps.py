@@ -26,15 +26,22 @@ async def add_campaign_step(
     step_idx: int,
     reaction_smiles: str | None = None,
     conditions: str | None = None,
+    status: str = "pending",
 ) -> str:
-    """Insert a campaign step. Does NOT commit — caller manages the transaction."""
+    """Insert a campaign step. Does NOT commit — caller manages the transaction.
+
+    `status` accepts 'pending' (default — worker runs it automatically) or
+    'pending_approval' (worker skips until the user calls /approve). The
+    DB CHECK constraint rejects any other value at insert time.
+    """
     result = await db.execute(
         text("""
-            INSERT INTO campaign_steps (campaign_id, step_idx, reaction_smiles, conditions)
-            VALUES (CAST(:campaign_id AS uuid), :step_idx, :reaction_smiles, :conditions)
+            INSERT INTO campaign_steps (campaign_id, step_idx, reaction_smiles, conditions, status)
+            VALUES (CAST(:campaign_id AS uuid), :step_idx, :reaction_smiles, :conditions, :status)
             ON CONFLICT (campaign_id, step_idx) DO UPDATE
                 SET reaction_smiles = EXCLUDED.reaction_smiles,
-                    conditions      = EXCLUDED.conditions
+                    conditions      = EXCLUDED.conditions,
+                    status          = EXCLUDED.status
             RETURNING id::text
         """),
         {
@@ -42,6 +49,7 @@ async def add_campaign_step(
             "step_idx": step_idx,
             "reaction_smiles": reaction_smiles,
             "conditions": conditions,
+            "status": status,
         },
     )
     return result.scalar_one()
@@ -222,3 +230,93 @@ async def reset_steps_for_retry(db: AsyncSession, step_ids: list[str]) -> None:
         """),
         {"ids": step_ids},
     )
+
+
+async def approve_step(
+    db: AsyncSession, campaign_id: str, step_idx: int, user_id: str
+) -> bool:
+    """Promote a step from 'pending_approval' to 'pending' so the worker
+    picks it up on its next tick.
+
+    Owner-scoped via the parent campaign: joins `synthesis_campaigns`
+    with `created_by = :uid` so a non-owner cannot approve another user's
+    step. Source-state predicate (`status = 'pending_approval'`) prevents
+    re-approving a step that's already running or terminal.
+
+    Returns True iff the row was promoted. Wraps its own transaction.
+    """
+    async with db.begin():
+        result = await db.execute(
+            text("""
+                UPDATE campaign_steps cs
+                SET status = 'pending', updated_at = now()
+                FROM synthesis_campaigns c
+                WHERE cs.campaign_id = c.id
+                  AND c.id = CAST(:cid AS uuid)
+                  AND c.created_by = :uid
+                  AND cs.step_idx = :idx
+                  AND cs.status = 'pending_approval'
+                RETURNING cs.id
+            """),
+            {"cid": campaign_id, "uid": user_id, "idx": step_idx},
+        )
+        return result.one_or_none() is not None
+
+
+async def reject_step(
+    db: AsyncSession, campaign_id: str, step_idx: int, user_id: str
+) -> bool:
+    """Transition a step from 'pending_approval' to 'failed' (with
+    retry_count clamped to MAX_STEP_RETRIES so it is never auto-retried).
+
+    Same owner-scoping + source-state predicate as `approve_step`.
+    Returns True iff the row was rejected.
+    """
+    async with db.begin():
+        result = await db.execute(
+            text("""
+                UPDATE campaign_steps cs
+                SET status = 'failed',
+                    retry_count = :max_retries,
+                    updated_at = now()
+                FROM synthesis_campaigns c
+                WHERE cs.campaign_id = c.id
+                  AND c.id = CAST(:cid AS uuid)
+                  AND c.created_by = :uid
+                  AND cs.step_idx = :idx
+                  AND cs.status = 'pending_approval'
+                RETURNING cs.id
+            """),
+            {
+                "cid": campaign_id,
+                "uid": user_id,
+                "idx": step_idx,
+                "max_retries": MAX_STEP_RETRIES,
+            },
+        )
+        return result.one_or_none() is not None
+
+
+async def list_steps_awaiting_approval(
+    db: AsyncSession, user_id: str, limit: int = 50
+) -> list[dict[str, Any]]:
+    """Return steps in 'pending_approval' status owned by user_id.
+
+    Drives the user-facing "needs my approval" inbox. Owner-scoped via
+    the parent campaign.
+    """
+    result = await db.execute(
+        text("""
+            SELECT cs.id::text, cs.campaign_id::text, cs.step_idx,
+                   cs.reaction_smiles, cs.conditions, cs.updated_at,
+                   c.target_smiles
+            FROM campaign_steps cs
+            JOIN synthesis_campaigns c ON c.id = cs.campaign_id
+            WHERE cs.status = 'pending_approval'
+              AND c.created_by = :uid
+            ORDER BY cs.updated_at DESC
+            LIMIT :lim
+        """),
+        {"uid": user_id, "lim": limit},
+    )
+    return [dict(r._mapping) for r in result]

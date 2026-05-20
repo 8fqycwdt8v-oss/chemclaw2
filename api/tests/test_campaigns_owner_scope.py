@@ -18,7 +18,10 @@ import pytest
 from sqlalchemy import text
 
 from api.db.queries.campaigns import (
+    add_campaign_step,
+    approve_step,
     cancel_campaign,
+    reject_step,
     system_advance_campaign,
     update_campaign_status,
 )
@@ -138,3 +141,107 @@ async def test_cancel_after_complete_is_noop(session_factory):
 
     assert ok is False
     assert await _status(session_factory, cid) == "complete"
+
+
+# ── Step approval ────────────────────────────────────────────────────────────
+
+
+async def _step_status(session_factory, campaign_id: str, step_idx: int) -> str:
+    async with session_factory() as db:
+        row = await db.execute(
+            text(
+                "SELECT status FROM campaign_steps "
+                "WHERE campaign_id = CAST(:cid AS uuid) AND step_idx = :idx"
+            ),
+            {"cid": campaign_id, "idx": step_idx},
+        )
+        return row.scalar_one()
+
+
+async def _add_step_awaiting_approval(
+    session_factory, campaign_id: str, step_idx: int
+) -> None:
+    async with session_factory() as db:
+        async with db.begin():
+            await add_campaign_step(
+                db,
+                campaign_id,
+                step_idx,
+                "C>>C",
+                "test conditions",
+                status="pending_approval",
+            )
+
+
+@pytest.mark.asyncio
+async def test_approve_step_owner_succeeds(session_factory):
+    """The campaign owner promotes a step from pending_approval to pending."""
+    owner = f"owner-{uuid.uuid4().hex[:8]}"
+    cid = await _new_campaign(session_factory, owner, status="running")
+    await _add_step_awaiting_approval(session_factory, cid, 0)
+
+    async with session_factory() as db:
+        ok = await approve_step(db, cid, 0, owner)
+
+    assert ok is True
+    assert await _step_status(session_factory, cid, 0) == "pending"
+
+
+@pytest.mark.asyncio
+async def test_approve_step_denies_other_user(session_factory):
+    """A non-owner cannot promote another user's step."""
+    owner = f"owner-{uuid.uuid4().hex[:8]}"
+    attacker = f"attacker-{uuid.uuid4().hex[:8]}"
+    cid = await _new_campaign(session_factory, owner, status="running")
+    await _add_step_awaiting_approval(session_factory, cid, 0)
+
+    async with session_factory() as db:
+        ok = await approve_step(db, cid, 0, attacker)
+
+    assert ok is False
+    assert await _step_status(session_factory, cid, 0) == "pending_approval"
+
+
+@pytest.mark.asyncio
+async def test_approve_step_rejects_wrong_source_state(session_factory):
+    """A step already in 'pending' (not 'pending_approval') cannot be re-approved."""
+    owner = f"owner-{uuid.uuid4().hex[:8]}"
+    cid = await _new_campaign(session_factory, owner, status="running")
+    # Insert as 'pending' directly.
+    async with session_factory() as db:
+        async with db.begin():
+            await add_campaign_step(db, cid, 0, "C>>C", "x", status="pending")
+
+    async with session_factory() as db:
+        ok = await approve_step(db, cid, 0, owner)
+
+    # Source-state predicate fails — no update.
+    assert ok is False
+    assert await _step_status(session_factory, cid, 0) == "pending"
+
+
+@pytest.mark.asyncio
+async def test_reject_step_owner_succeeds(session_factory):
+    owner = f"owner-{uuid.uuid4().hex[:8]}"
+    cid = await _new_campaign(session_factory, owner, status="running")
+    await _add_step_awaiting_approval(session_factory, cid, 0)
+
+    async with session_factory() as db:
+        ok = await reject_step(db, cid, 0, owner)
+
+    assert ok is True
+    assert await _step_status(session_factory, cid, 0) == "failed"
+
+
+@pytest.mark.asyncio
+async def test_reject_step_denies_other_user(session_factory):
+    owner = f"owner-{uuid.uuid4().hex[:8]}"
+    attacker = f"attacker-{uuid.uuid4().hex[:8]}"
+    cid = await _new_campaign(session_factory, owner, status="running")
+    await _add_step_awaiting_approval(session_factory, cid, 0)
+
+    async with session_factory() as db:
+        ok = await reject_step(db, cid, 0, attacker)
+
+    assert ok is False
+    assert await _step_status(session_factory, cid, 0) == "pending_approval"
