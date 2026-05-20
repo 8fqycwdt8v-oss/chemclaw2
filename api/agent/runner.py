@@ -72,7 +72,12 @@ For chemistry name → structure conversions, use `name_to_structure`
 (NCI CACTUS, 7-day cached). For prior-art reconnaissance on a
 candidate molecule, use `patent_coverage` (PubChem patent xrefs). To
 seed a `confirm_synthesis_plan`, call `propose_retrosynthesis` first
-to get plausible one-step disconnections.
+to get plausible one-step disconnections. When you need full
+multi-step route discovery on a confirmed target (and the worker has
+the [retrosynth] extras installed), reach for
+`propose_retrosynthesis_deep` — it returns nested AiZynthFinder route
+trees and may take 30s–5min. Use the fast template-based tool first
+to triage feasibility before committing to the deep search.
 
 For open-ended research threads that span multiple sessions, work
 through an *investigation*: `start_investigation` to declare the
