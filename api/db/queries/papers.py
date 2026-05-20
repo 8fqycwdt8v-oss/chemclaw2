@@ -361,10 +361,11 @@ def _extract_json_object(text_body: str) -> str | None:
     return None
 
 
-# Module-level lazy client matching the api/embeddings.py pattern. Each
-# paper_qa call would otherwise construct a fresh AsyncAnthropic; reusing
-# the instance avoids repeated TLS handshakes for sequential queries.
+# Module-level lazy clients matching the api/embeddings.py pattern. Each
+# paper_qa call would otherwise construct a fresh client; reusing the
+# instance avoids repeated TLS handshakes for sequential queries.
 _anthropic_client: Any = None
+_openai_client: Any = None
 
 
 def _get_anthropic_client() -> Any:
@@ -379,6 +380,66 @@ def _get_anthropic_client() -> Any:
         return None
     _anthropic_client = AsyncAnthropic(api_key=api_key)
     return _anthropic_client
+
+
+def _get_openai_client() -> Any:
+    global _openai_client
+    if _openai_client is not None:
+        return _openai_client
+    import os
+
+    from openai import AsyncOpenAI
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        return None
+    _openai_client = AsyncOpenAI(api_key=api_key)
+    return _openai_client
+
+
+async def _rcs_via_anthropic(
+    client: Any,
+    model: str,
+    prompt: str,
+    c: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    """Return (text_body, rcs_error). text_body=None on failure."""
+    try:
+        resp = await client.messages.create(
+            model=model,
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except Exception as e:
+        logger.warning("rcs_anthropic_call_failed chunk=%s err=%s", c.get("id"), e)
+        return None, "LLM call failed"
+    text_body = ""
+    for block in resp.content:
+        if getattr(block, "type", None) == "text":
+            text_body += getattr(block, "text", "")
+    return text_body, None
+
+
+async def _rcs_via_openai(
+    client: Any,
+    model: str,
+    prompt: str,
+    c: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    """OpenAI Chat Completions equivalent — same prompt, same JSON contract."""
+    try:
+        resp = await client.chat.completions.create(
+            model=model,
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except Exception as e:
+        logger.warning("rcs_openai_call_failed chunk=%s err=%s", c.get("id"), e)
+        return None, "LLM call failed"
+    try:
+        text_body = resp.choices[0].message.content or ""
+    except (AttributeError, IndexError):
+        return None, "openai response shape unexpected"
+    return text_body, None
 
 
 async def score_chunks_with_llm(
@@ -396,24 +457,46 @@ async def score_chunks_with_llm(
     chunk's other fields intact. Caller can filter on `relevance_score`
     presence to drop those.
 
-    Uses Anthropic for scoring (`claude-haiku-4-5` by default — override via
-    `ANTHROPIC_RCS_MODEL`) because ANTHROPIC_API_KEY is already required by
-    the agent runtime; OpenAI is reserved for embeddings.
+    Provider is picked from `RCS_PROVIDER` env (default: `anthropic`).
+    Both paths use the same prompt + JSON contract. Models override via
+    `ANTHROPIC_RCS_MODEL` / `OPENAI_RCS_MODEL`. The chosen provider
+    fails closed when its key/SDK is absent — no silent fallback to the
+    other provider so misconfiguration is visible.
     """
     if not chunks:
         return []
-    try:
-        import anthropic  # noqa: F401 — import-side import-check only
-    except ImportError:
-        logger.warning("anthropic_unavailable for RCS — returning chunks unscored")
-        return [{**c, "rcs_error": "anthropic SDK not installed"} for c in chunks]
     import os
 
-    client = _get_anthropic_client()
-    if client is None:
-        logger.warning("ANTHROPIC_API_KEY missing — returning chunks unscored")
-        return [{**c, "rcs_error": "ANTHROPIC_API_KEY not configured"} for c in chunks]
-    model = os.environ.get("ANTHROPIC_RCS_MODEL", "claude-haiku-4-5-20251001")
+    provider = os.environ.get("RCS_PROVIDER", "anthropic").strip().lower()
+    if provider not in ("anthropic", "openai"):
+        logger.warning("invalid RCS_PROVIDER=%r — defaulting to anthropic", provider)
+        provider = "anthropic"
+
+    if provider == "anthropic":
+        try:
+            import anthropic  # noqa: F401 — import-side import-check only
+        except ImportError:
+            logger.warning("anthropic_unavailable for RCS — returning chunks unscored")
+            return [{**c, "rcs_error": "anthropic SDK not installed"} for c in chunks]
+        client = _get_anthropic_client()
+        if client is None:
+            logger.warning("ANTHROPIC_API_KEY missing — returning chunks unscored")
+            return [{**c, "rcs_error": "ANTHROPIC_API_KEY not configured"} for c in chunks]
+        model = os.environ.get("ANTHROPIC_RCS_MODEL", "claude-haiku-4-5-20251001")
+    else:  # openai
+        try:
+            import openai  # noqa: F401
+        except ImportError:
+            logger.warning("openai_unavailable for RCS — returning chunks unscored")
+            return [{**c, "rcs_error": "openai SDK not installed"} for c in chunks]
+        client = _get_openai_client()
+        if client is None:
+            logger.warning("OPENAI_API_KEY missing — returning chunks unscored")
+            return [{**c, "rcs_error": "OPENAI_API_KEY not configured"} for c in chunks]
+        # Default kept generic so we don't pin a model that may be deprecated;
+        # explicit OPENAI_RCS_MODEL is recommended in production.
+        model = os.environ.get("OPENAI_RCS_MODEL", "gpt-4o-mini")
+
     sem = asyncio.Semaphore(max_concurrency)
 
     async def score_one(c: dict[str, Any]) -> dict[str, Any]:
@@ -425,19 +508,12 @@ async def score_chunks_with_llm(
             excerpt=c["text"][:4000],
         )
         async with sem:
-            try:
-                resp = await client.messages.create(
-                    model=model,
-                    max_tokens=600,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-            except Exception as e:  # network, auth, rate-limit
-                logger.warning("rcs_llm_call_failed chunk=%s err=%s", c.get("id"), e)
-                return {**c, "rcs_error": "LLM call failed"}
-        text_body = ""
-        for block in resp.content:
-            if getattr(block, "type", None) == "text":
-                text_body += getattr(block, "text", "")
+            if provider == "anthropic":
+                text_body, err = await _rcs_via_anthropic(client, model, prompt, c)
+            else:
+                text_body, err = await _rcs_via_openai(client, model, prompt, c)
+        if err is not None or text_body is None:
+            return {**c, "rcs_error": err or "no response"}
         # Prefer ```json fenced extraction, fall back to balanced-brace scan
         # so nested braces in the summary don't truncate the parse.
         raw = _extract_json_object(text_body)
