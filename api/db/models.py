@@ -87,6 +87,26 @@ class Reaction(Base):
     created_by: Mapped[str] = mapped_column(sa.Text, nullable=False)
 
 
+class ReactionConditionPrediction(Base):
+    __tablename__ = "reaction_condition_predictions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    reaction_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, ForeignKey("reactions.id", ondelete="CASCADE")
+    )
+    rxn_smiles: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    drfp_bits: Mapped[str | None] = mapped_column(sa.Text)
+    conditions: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    model: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(sa.Double)
+    source: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    used_in_step_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, ForeignKey("campaign_steps.id", ondelete="SET NULL")
+    )
+    created_by: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    created_at: Mapped[datetime] = _now()
+
+
 # ── wiki ──────────────────────────────────────────────────────────────────────
 
 class WikiPage(Base):

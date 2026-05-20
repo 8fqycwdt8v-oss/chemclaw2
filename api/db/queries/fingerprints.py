@@ -12,6 +12,8 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries.fp_utils import bit_string_to_pg_bytes
+
 
 async def fetch_compounds_missing_fp(
     db: AsyncSession, limit: int
@@ -71,7 +73,7 @@ async def write_compound_fp(
             WHERE id = CAST(:id AS uuid) AND morgan_fp IS NULL
             """
         ),
-        {"bits": bits, "pc": popcount, "id": compound_id},
+        {"bits": bit_string_to_pg_bytes(bits), "pc": popcount, "id": compound_id},
     )
 
 
@@ -88,5 +90,5 @@ async def write_reaction_fp(
             WHERE id = CAST(:id AS uuid) AND drfp IS NULL
             """
         ),
-        {"bits": bits, "id": reaction_id},
+        {"bits": bit_string_to_pg_bytes(bits), "id": reaction_id},
     )

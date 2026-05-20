@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-rxn-conditions"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp[cli]>=1.0",
+  "RXN4Chemistry>=1.14",
+]
+
+[project.scripts]
+mcp-rxn-conditions = "mcp_rxn_conditions.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcp_rxn_conditions"]

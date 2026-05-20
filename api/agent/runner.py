@@ -174,6 +174,9 @@ async def run_agent_streaming(
             "mcp-retrosynth": McpStdioServerConfig(
                 type="stdio", command="python", args=["-m", "mcp_retrosynth.server"],
             ),
+            "mcp-rxn-conditions": McpStdioServerConfig(
+                type="stdio", command="python", args=["-m", "mcp_rxn_conditions.server"]
+            ),
         },
         hooks=build_hooks(user_id, project_key, session_factory),
         agents={

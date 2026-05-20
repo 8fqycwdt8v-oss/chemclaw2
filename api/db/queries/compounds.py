@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.models import Compound
-from api.db.queries.fp_utils import rerank_by_tanimoto, validate_fp_bits
+from api.db.queries.fp_utils import bit_string_to_pg_bytes, rerank_by_tanimoto
 
 
 async def count_pending_fingerprints(db: AsyncSession) -> dict[str, int]:
@@ -39,12 +39,11 @@ async def find_similar_compounds(
     created_after: str | None = None,
     has_cas: bool = False,
 ) -> list[dict[str, Any]]:
-    validate_fp_bits(query_fp_bits)
     safe_limit = max(1, min(limit, 100))
     safe_min = max(0.0, min(min_tanimoto, 1.0))
 
     where_clauses = ["morgan_fp IS NOT NULL"]
-    params: dict[str, Any] = {"bits": query_fp_bits}
+    params: dict[str, Any] = {"bits": bit_string_to_pg_bytes(query_fp_bits)}
     if created_after:
         dt = datetime.fromisoformat(created_after)
         where_clauses.append("created_at >= :created_after")

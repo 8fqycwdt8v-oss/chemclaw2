@@ -18,9 +18,18 @@ from urllib.parse import urlparse
 
 import httpx
 from claude_agent_sdk import create_sdk_mcp_server
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger(__name__)
+
+
+class _PredictedConditionsPayload(BaseModel):
+    """Schema for the `record_predicted_conditions` tool's nested conditions arg."""
+    catalysts: list[str] = Field(default_factory=list)
+    solvents: list[str] = Field(default_factory=list)
+    reagents: list[str] = Field(default_factory=list)
+    temperature_c: float | None = None
 
 # ── SSRF protection ───────────────────────────────────────────────────────────
 
@@ -276,6 +285,28 @@ def build_chemclaw_mcp_server(
         async with session_factory() as db:
             results = await find_similar_reactions(db, rxn_fingerprint_bits, limit, min_similarity)
         return {"type": "reaction_similarity", "results": results}
+
+    # ── condition precedent from neighbors ────────────────────────────────────
+    @mcp.tool()
+    async def suggest_conditions_from_neighbors(
+        rxn_fingerprint_bits: str,
+        limit: int = 10,
+        min_similarity: float = 0.4,
+    ) -> dict[str, Any]:
+        """Aggregate free-text conditions from top-K DRFP neighbors.
+
+        Call this BEFORE invoking a predictor — it is cheaper, grounded in
+        the registry's actual reactions, and the returned reaction ids can
+        be cited. Compute the DRFP bits with mcp-rxnfp.compute_drfp first.
+        """
+        from api.db.queries.reactions import find_neighbor_conditions
+        if not re.match(r'^[01]{2048}$', rxn_fingerprint_bits):
+            return {"error": "rxn_fingerprint_bits must be exactly 2048 binary digits"}
+        async with session_factory() as db:
+            neighbors = await find_neighbor_conditions(
+                db, rxn_fingerprint_bits, limit, min_similarity
+            )
+        return {"type": "neighbor_conditions", "neighbors": neighbors}
 
     # ── substructure search ───────────────────────────────────────────────────
     @mcp.tool()
@@ -709,6 +740,58 @@ def build_chemclaw_mcp_server(
                 source_citation_id=source_citation_id,
             )
         return {"id": prop_id}
+
+    # ── record_predicted_conditions ───────────────────────────────────────────
+    @mcp.tool()
+    async def record_predicted_conditions(
+        rxn_smiles: str,
+        conditions: dict[str, Any],
+        model: str,
+        source: str,
+        confidence: float | None = None,
+        reaction_id: str | None = None,
+        drfp_bits: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist a reaction condition prediction for caching and feedback.
+
+        Call this after `mcp-rxn-conditions.predict_conditions` or
+        `suggest_conditions_from_neighbors` returns, so the next turn (and
+        future campaigns over the same reaction) hit the cache instead of
+        re-paying the predictor API.
+
+        `conditions` must be an object shaped like:
+          {catalysts: [str], solvents: [str], reagents: [str],
+           temperature_c: float|null}
+        `model` should identify both backend and version, e.g.
+          'rxn4chemistry:v2025-04' or 'neighbor-aggregation:v1'.
+        `source` is the high-level origin: 'rxn4chemistry' |
+          'neighbor_aggregation' | 'manual'.
+        """
+        try:
+            payload = _PredictedConditionsPayload.model_validate(conditions)
+        except ValidationError as e:
+            return {"error": f"invalid conditions payload: {e.errors()[0]['msg']}"}
+
+        if not rxn_smiles or ">>" not in rxn_smiles:
+            return {"error": "rxn_smiles must contain '>>' separator"}
+        if drfp_bits is not None and not re.match(r'^[01]{2048}$', drfp_bits):
+            return {"error": "drfp_bits must be exactly 2048 binary digits if provided"}
+
+        from api.db.queries.reaction_conditions import insert_prediction
+        async with session_factory() as db:
+            async with db.begin():
+                prediction_id = await insert_prediction(
+                    db,
+                    rxn_smiles=rxn_smiles,
+                    conditions=payload.model_dump(),
+                    model=model,
+                    source=source,
+                    created_by=user_id,
+                    confidence=confidence,
+                    reaction_id=reaction_id,
+                    drfp_bits=drfp_bits,
+                )
+        return {"id": prediction_id}
 
     # ── verify_citation ───────────────────────────────────────────────────────
     @mcp.tool()
