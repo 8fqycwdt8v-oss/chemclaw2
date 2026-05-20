@@ -229,3 +229,86 @@ async def test_artifacts_skipped_on_timeout() -> None:
     result = await run_python(code, cpu_seconds=2, wall_seconds=3)
     assert result.status in ("timeout", "killed")
     assert result.artifacts == []
+
+
+# ── §B bubblewrap isolation tier ─────────────────────────────────────────────
+
+
+def test_bwrap_probe_returns_bool() -> None:
+    """The probe must always return a bool — no exceptions allowed even
+    on hosts without bwrap. Cached via functools.cache so repeated calls
+    are dict lookups."""
+    from mcp_codesandbox.sandbox import _bwrap_available
+    result = _bwrap_available()
+    assert isinstance(result, bool)
+    # Cached — second call yields same value.
+    assert _bwrap_available() is result
+
+
+def test_build_command_uses_bwrap_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the bwrap probe reports True, the argv must start with the
+    bwrap binary and include --unshare-all + --cap-drop ALL."""
+    import mcp_codesandbox.sandbox as sb
+
+    monkeypatch.setattr(sb, "_bwrap_available", lambda: True)
+    monkeypatch.setattr(sb, "_unshare_available", lambda: False)
+    # `shutil.which` resolves bwrap's path; stub to a known string for
+    # the assertion to be portable.
+    monkeypatch.setattr(sb.shutil, "which",
+                        lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+
+    argv = sb._build_command("print('x')", tmpdir="/tmp/test-sbx")
+    assert argv[0] == "/usr/bin/bwrap"
+    assert "--unshare-all" in argv
+    assert "--die-with-parent" in argv
+    assert "--cap-drop" in argv and "ALL" in argv
+    assert "--chdir" in argv
+    # Tempdir bound writable inside the sandbox.
+    assert argv[argv.index("--bind") + 1] == "/tmp/test-sbx"
+
+
+def test_build_command_falls_back_to_unshare_when_bwrap_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bwrap missing → unshare path. Same trust boundary as pre-§B."""
+    import mcp_codesandbox.sandbox as sb
+
+    monkeypatch.setattr(sb, "_bwrap_available", lambda: False)
+    monkeypatch.setattr(sb, "_unshare_available", lambda: True)
+    monkeypatch.setattr(sb.shutil, "which",
+                        lambda name: "/usr/bin/unshare" if name == "unshare" else None)
+
+    argv = sb._build_command("print('x')", tmpdir="/tmp/test-sbx")
+    assert argv[0] == "/usr/bin/unshare"
+    assert "-n" in argv and "-r" in argv
+    assert "--unshare-all" not in argv  # no bwrap involvement
+
+
+def test_build_command_falls_back_to_plain_when_neither_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neither isolator works → plain `python -I` with stripped env.
+    Last-resort tier 3."""
+    import mcp_codesandbox.sandbox as sb
+
+    monkeypatch.setattr(sb, "_bwrap_available", lambda: False)
+    monkeypatch.setattr(sb, "_unshare_available", lambda: False)
+
+    argv = sb._build_command("print('x')", tmpdir="/tmp/test-sbx")
+    # First arg is the Python interpreter; -I is the isolation flag.
+    assert argv[0].endswith("python") or "python" in argv[0]
+    assert "-I" in argv
+    assert "bwrap" not in " ".join(argv)
+    assert "unshare" not in " ".join(argv)
+
+
+async def test_sandbox_run_succeeds_under_whichever_tier_is_active() -> None:
+    """End-to-end: regardless of which tier the host supports, a simple
+    `print` should run successfully. This pins the contract that no
+    tier's argv has a typo or missing required flag."""
+    result = await run_python("print('tier-check')")
+    assert result.status == "completed"
+    assert result.exit_code == 0
+    assert "tier-check" in result.stdout
