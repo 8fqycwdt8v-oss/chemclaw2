@@ -13,6 +13,7 @@ from api.routes.audit import router as audit_router
 from api.routes.budgets import router as budgets_router
 from api.routes.campaigns import router as campaigns_router
 from api.routes.chat import router as chat_router
+from api.routes.curator import router as curator_router
 from api.routes.feedback import router as feedback_router
 from api.routes.health import router as health_router
 from api.routes.integrations import router as integrations_router
@@ -86,6 +87,7 @@ def create_app() -> FastAPI:
     app.include_router(notifications_router)
     app.include_router(integrations_router)
     app.include_router(audit_router)
+    app.include_router(curator_router)
 
     return app
 

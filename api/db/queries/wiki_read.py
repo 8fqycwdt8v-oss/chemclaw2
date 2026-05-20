@@ -158,6 +158,37 @@ async def hybrid_search_wiki(
     return scored[:safe_limit]
 
 
+async def list_wiki_needs_review(
+    db: AsyncSession,
+    user_id: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return wiki pages with `needs_review=true` created by `user_id`.
+
+    Drives the curator inbox. Owner-scoped because uploads + agent-
+    authored pages should land in their creator's inbox — anyone can
+    edit them once they're public, but the original author owns the
+    triage queue.
+
+    Archived pages are excluded; updates within the last 30 days come
+    first so freshly-created drafts surface ahead of stale ones.
+    """
+    result = await db.execute(
+        text("""
+            SELECT id::text, slug, title, content_text, project,
+                   updated_at, maturity, created_by
+            FROM wiki_pages
+            WHERE needs_review = true
+              AND archived = false
+              AND created_by = :uid
+            ORDER BY updated_at DESC
+            LIMIT :lim
+        """),
+        {"uid": user_id, "lim": min(max(1, limit), 200)},
+    )
+    return [dict(r._mapping) for r in result]
+
+
 async def list_wiki_pages(
     db: AsyncSession,
     page_size: int = 50,

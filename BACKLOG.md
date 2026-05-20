@@ -45,6 +45,10 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - ~~Migration numbering: there are two `0029_*` files~~ — resolved by renaming `0029_wiki_tables_cleanup.sql` → `0029a_wiki_tables_cleanup.sql` in the review-fixes-A PR.
 - `api/db/connection.py` pool: `pool_size=5, max_overflow=10` is the Python equivalent of the Wave-3h `DB_POOL_MAX=15` total. Document upstream Postgres `max_connections` headroom if running without a pooler at scale.
 
+### Curator inbox (May 2026 — V3 PR 1)
+
+- ~~Curator queue / inbox~~ — shipped. `GET /api/curator/inbox` aggregates wiki pages with `needs_review=true` (owner-scoped), campaign steps in `pending_approval` (owner-scoped), and unresolved wiki contradictions (collaborative) into a single response with `total_pending` count. New query `list_wiki_needs_review(db, user_id, limit)` in `api/db/queries/wiki_read.py`. New router `api/routes/curator.py` registered in `main.py`.
+
 ### Document ingestion LLM extraction (May 2026 — V2 PR 4b)
 
 - ~~Document ingestion: LLM-driven compound + citation extraction~~ — shipped. `extract_entities_from_text(text)` calls Claude Haiku 4.5 with a structured tool-use schema (`extract_entities` forced via `tool_choice`) to pull compound mentions + citation identifiers from the document body. Input bounded to 8 K chars; total budget 20 s timeout. `resolve_compound_name_to_smiles(name)` follows up with PubChem REST (already on `ALLOWED_DOMAINS`) via `_fetch_validated`. Enrichment is opt-in via `POST /api/integrations/documents?extract=full` — `basic` (default) keeps the PR 4a behaviour for cheap/fast uploads. The wiki page draft now includes auto-extracted compound + citation sections; `external_facts.payload` carries the raw entities + resolved SMILES for later reuse.
