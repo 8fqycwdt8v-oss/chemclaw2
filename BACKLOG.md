@@ -45,6 +45,10 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - ~~Migration numbering: there are two `0029_*` files~~ — resolved by renaming `0029_wiki_tables_cleanup.sql` → `0029a_wiki_tables_cleanup.sql` in the review-fixes-A PR.
 - `api/db/connection.py` pool: `pool_size=5, max_overflow=10` is the Python equivalent of the Wave-3h `DB_POOL_MAX=15` total. Document upstream Postgres `max_connections` headroom if running without a pooler at scale.
 
+### Document ingestion baseline (May 2026 — V2 PR 4a)
+
+- ~~Document ingestion: DOI detection + CrossRef metadata + wiki page draft~~ — shipped. `api/integrations/document_enrichment.py` houses `extract_doi`, `slugify_doi`, `fetch_crossref_metadata`, `normalize_crossref_response`. The `/api/integrations/documents` route now (a) detects a DOI in the extracted PDF text, (b) fetches CrossRef metadata when one is present (via the existing SSRF-pinned `_fetch_validated` — `crossref.org` already on the allowlist), (c) enriches the `upsert_paper` call with abstract + content_text, and (d) creates a wiki page draft with `needs_review=True` so the curator queue surfaces it. CrossRef calls fail-open: a network blip or 404 falls through to the first-non-empty-line title heuristic so the upload still succeeds. PR 4b will add LLM-driven entity extraction (compound name → SMILES via PubChem, citation cross-ref) on top of this baseline.
+
 ### Property predictions (May 2026 — V2 PR 3)
 
 - ~~Spec §3.5 property predictions (deterministic descriptors)~~ — shipped `compute_descriptors(smiles)` in `mcp_molfp`: Crippen logP, exact/avg MW, TPSA, H-bond donors/acceptors, rotatable bonds, aromatic rings, heavy atoms, Lipinski Rule-of-Five pass + violation count. All values come from RDKit (no ML, no external calls, deterministic). The agent SDK auto-discovers it via the existing `mcp-molfp` stdio routing in `api/agent/runner.py`. ML-based predictions (yield, tox, hazards) remain deferred per the operating principles.
