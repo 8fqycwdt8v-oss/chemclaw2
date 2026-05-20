@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-retrosynth"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp[cli]>=1.0",
+  "rdkit>=2024.3",
+]
+
+[project.scripts]
+mcp-retrosynth = "mcp_retrosynth.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcp_retrosynth"]

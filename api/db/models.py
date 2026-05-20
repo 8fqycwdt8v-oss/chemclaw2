@@ -415,6 +415,25 @@ class Paper(Base):
     created_at: Mapped[datetime] = _now()
     created_by: Mapped[str | None] = mapped_column(sa.Text)
 
+    chunks: Mapped[list[PaperChunk]] = relationship(back_populates="paper", cascade="all, delete-orphan")
+
+
+class PaperChunk(Base):
+    __tablename__ = "paper_chunks"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    paper_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, ForeignKey("papers.id", ondelete="CASCADE"), nullable=False)
+    chunk_idx: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    section: Mapped[str | None] = mapped_column(sa.Text)
+    page: Mapped[int | None] = mapped_column(sa.Integer)
+    text: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536))
+    created_at: Mapped[datetime] = _now()
+
+    paper: Mapped[Paper] = relationship(back_populates="chunks")
+
+    __table_args__ = (sa.UniqueConstraint("paper_id", "chunk_idx", name="paper_chunks_paper_chunk_unique"),)
+
 
 # ── eval runs ─────────────────────────────────────────────────────────────────
 

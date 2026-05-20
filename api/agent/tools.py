@@ -83,6 +83,7 @@ ALLOWED_DOMAINS = [
     'sciencedirect.com',
     'elsevier.com',
     'ich.org',
+    'cactus.nci.nih.gov',  # NCI CACTUS — name↔SMILES↔CAS resolver
 ]
 
 
@@ -188,6 +189,46 @@ def _html_to_text(html: str) -> str:
     text = html_lib.unescape(text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
+
+
+# ── paper-chunk ingest ────────────────────────────────────────────────────────
+
+async def _ingest_paper_chunks(
+    paper_id: str,
+    content_text: str,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> int:
+    """Chunk + embed + persist a paper body. Returns the count written.
+
+    Embedding failure is non-fatal: chunks land with embedding=NULL so FTS
+    retrieval still works; semantic retrieval will simply skip them.
+    """
+    from api.db.queries.papers import chunk_paper_text, insert_paper_chunks
+    parts = chunk_paper_text(content_text)
+    if not parts:
+        return 0
+    # Embed in one batch — text-embedding-3-small is happy with arrays.
+    embeddings: list[list[float] | None]
+    try:
+        from api.embeddings import embed_texts
+        raw = await embed_texts([p[2] for p in parts])
+        embeddings = list(raw)
+    except Exception:
+        logger.exception("paper_chunk_embed_failed paper_id=%s", paper_id)
+        embeddings = [None] * len(parts)
+    chunks = [
+        {
+            "chunk_idx": idx,
+            "section": section,
+            "page": None,
+            "text": txt,
+            "embedding": emb,
+        }
+        for (idx, section, txt), emb in zip(parts, embeddings)
+    ]
+    async with session_factory() as db:
+        async with db.begin():
+            return await insert_paper_chunks(db, paper_id, chunks)
 
 
 # ── Tool factory ──────────────────────────────────────────────────────────────
@@ -521,14 +562,104 @@ def build_chemclaw_mcp_server(
         title: str,
         doi: str | None = None,
         abstract: str | None = None,
+        content_text: str | None = None,
+        ingest_chunks: bool = False,
     ) -> dict[str, Any]:
-        """Persist a fetched paper's metadata into the knowledge base for future retrieval."""
+        """Persist a fetched paper's metadata into the knowledge base.
+
+        When `content_text` is provided and `ingest_chunks=True`, the body is
+        sliding-window-chunked (1500 chars, 200 char overlap), embedded with
+        OpenAI text-embedding-3-small, and persisted to `paper_chunks` for
+        later semantic / hybrid retrieval via `paper_qa`.
+
+        Returns {id, already_existed, chunks_written}.
+        """
         from api.db.queries.knowledge import upsert_paper
         async with session_factory() as db:
             paper_id, already_existed = await upsert_paper(
-                db, url, title, doi=doi, abstract=abstract, created_by=user_id
+                db, url, title, doi=doi, abstract=abstract,
+                content_text=content_text, created_by=user_id,
             )
-        return {"id": paper_id, "already_existed": already_existed}
+        chunks_written = 0
+        if ingest_chunks and content_text and content_text.strip():
+            chunks_written = await _ingest_paper_chunks(paper_id, content_text, session_factory)
+        return {"id": paper_id, "already_existed": already_existed, "chunks_written": chunks_written}
+
+    # ── paper_qa (PaperQA2-style) ────────────────────────────────────────────
+    @mcp.tool()
+    async def paper_qa(
+        query: str,
+        max_chunks: int = 8,
+        rcs_min_score: int = 6,
+        paper_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Retrieve + rerank paper excerpts with PaperQA2-style RCS.
+
+        1. Hybrid (FTS + semantic via pgvector) retrieval over `paper_chunks`.
+        2. For each top-k chunk, an LLM produces a 1-10 relevance score and a
+           ≤300-word query-conditioned summary.
+        3. Returns chunks at or above `rcs_min_score`, sorted by score, each
+           with its paper title / DOI / section so the agent can cite.
+
+        Restrict to one paper via `paper_id`. Without RCS-eligible chunks (no
+        ANTHROPIC_API_KEY, no embedding, etc.), falls back to retrieval-only
+        results with `rcs_error` set per chunk.
+        """
+        from api.db.queries.papers import (
+            hybrid_search_paper_chunks,
+            score_chunks_with_llm,
+        )
+        q = query.strip()
+        if not q or len(q) > 500:
+            return {"error": "query must be 1-500 chars"}
+        if not (1 <= max_chunks <= 30):
+            return {"error": "max_chunks must be between 1 and 30"}
+        if not (1 <= rcs_min_score <= 10):
+            return {"error": "rcs_min_score must be between 1 and 10"}
+
+        from api.embeddings import embed_texts
+        try:
+            embeddings = await embed_texts([q])
+        except Exception:
+            logger.exception("paper_qa_embedding_failed")
+            return {"error": "Embedding service unavailable"}
+        async with session_factory() as db:
+            candidates = await hybrid_search_paper_chunks(
+                db, q, embeddings[0], limit=max_chunks, paper_id=paper_id,
+            )
+        if not candidates:
+            return {"query": q, "results": [], "total_candidates": 0}
+        scored = await score_chunks_with_llm(candidates, q)
+        accepted = [
+            r for r in scored
+            if r.get("relevance_score") is not None and r["relevance_score"] >= rcs_min_score
+        ]
+        accepted.sort(key=lambda r: r["relevance_score"], reverse=True)
+        # When RCS failed for every candidate, fall back to retrieval order
+        # so the tool still returns something useful.
+        if not accepted and all(r.get("rcs_error") for r in scored):
+            accepted = scored
+        return {
+            "query": q,
+            "results": [
+                {
+                    "paper_id": r.get("paper_id"),
+                    "title": r.get("title"),
+                    "doi": r.get("doi"),
+                    "url": r.get("url"),
+                    "section": r.get("section"),
+                    "page": r.get("page"),
+                    "chunk_idx": r.get("chunk_idx"),
+                    "excerpt": (r.get("text") or "")[:1200],
+                    "relevance_score": r.get("relevance_score"),
+                    "summary": r.get("summary"),
+                    "rcs_error": r.get("rcs_error"),
+                }
+                for r in accepted
+            ],
+            "total_candidates": len(candidates),
+            "total_accepted": len(accepted),
+        }
 
     # ── record_external_fact ──────────────────────────────────────────────────
     @mcp.tool()
@@ -740,6 +871,198 @@ def build_chemclaw_mcp_server(
             "summary": result_text[:3000],
             "url": url,
             "cached": False,
+        }
+
+    # ── name → structure (CACTUS) ────────────────────────────────────────────
+    @mcp.tool()
+    async def name_to_structure(name: str) -> dict[str, Any]:
+        """Resolve a chemical name to SMILES + CAS via the NCI CACTUS service.
+
+        Cached in external_facts under source_id=cactus:<name-normalised> with
+        7-day TTL. Returns {smiles, cas, iupac_name} or {error} on failure.
+        """
+        from datetime import datetime as _dt
+        from datetime import timedelta, timezone
+
+        from api.db.queries.knowledge import get_external_fact_by_source_id, upsert_external_fact
+
+        q = name.strip()
+        if not q or len(q) > 200:
+            return {"error": "name must be 1-200 chars"}
+        # Normalise for caching: lowercase, collapse whitespace.
+        norm = re.sub(r"\s+", " ", q.lower())
+        cache_key = f"cactus:{norm}"
+        cutoff = _dt.now(tz=timezone.utc) - timedelta(days=7)
+        async with session_factory() as db:
+            cached = await get_external_fact_by_source_id(db, cache_key)
+        if cached:
+            last_seen = cached.get("last_seen")
+            if last_seen is not None and last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=timezone.utc)
+            if last_seen and last_seen >= cutoff:
+                payload = cached.get("payload") or {}
+                if isinstance(payload, str):
+                    import json as _json
+                    try:
+                        payload = _json.loads(payload)
+                    except Exception:
+                        payload = {}
+                return {**payload, "cached": True}
+
+        # CACTUS endpoints return plain text (one value per request) or 404.
+        # URL-encode the name so spaces/special chars in user input survive.
+        import urllib.parse as _up
+        encoded = _up.quote(q, safe="")
+        endpoints = {
+            "smiles": f"https://cactus.nci.nih.gov/chemical/structure/{encoded}/smiles",
+            "cas": f"https://cactus.nci.nih.gov/chemical/structure/{encoded}/cas",
+            "iupac_name": f"https://cactus.nci.nih.gov/chemical/structure/{encoded}/iupac_name",
+        }
+        result: dict[str, Any] = {"name": q}
+        for field, url in endpoints.items():
+            try:
+                r = await _fetch_validated(url, enforce_domain_allowlist=True, timeout=10.0)
+            except _SSRFError as e:
+                return {"error": str(e)}
+            except Exception as e:
+                logger.warning("cactus_fetch_failed field=%s name=%s: %s", field, q[:50], e)
+                result[field] = None
+                continue
+            if r.status_code == 404:
+                result[field] = None
+                continue
+            if not r.is_success:
+                result[field] = None
+                continue
+            # CACTUS may return multiple values newline-separated (e.g. several CAS
+            # numbers for one structure). Take the first non-empty line.
+            text_body = r.text.strip()
+            first = next((ln.strip() for ln in text_body.splitlines() if ln.strip()), None)
+            result[field] = first
+
+        if result.get("smiles") is None and result.get("cas") is None:
+            return {"error": f"CACTUS could not resolve '{q}'", "name": q}
+
+        # Cache success for 7 days; cache key encodes the normalised name.
+        async with session_factory() as db:
+            await upsert_external_fact(
+                db, "cactus", cache_key,
+                result, f"name={q} smiles={result.get('smiles')} cas={result.get('cas')}",
+                fetched_by=user_id,
+            )
+        return {**result, "cached": False}
+
+    # ── patent coverage (PubChem) ────────────────────────────────────────────
+    @mcp.tool()
+    async def patent_coverage(smiles: str) -> dict[str, Any]:
+        """Count patents referencing a compound via PubChem.
+
+        Resolves SMILES → CID, then queries the PubChem patent count endpoint.
+        Returns {cid, patent_count, sample_patent_ids} or {error}.
+        High patent count is a signal the chemotype is well-explored
+        commercially; zero indicates open IP space (but is also a hint the
+        compound may be obscure or unregistered).
+        """
+        s = smiles.strip()
+        if not s or len(s) > 1000:
+            return {"error": "smiles must be 1-1000 chars"}
+        import urllib.parse as _up
+        encoded_smiles = _up.quote(s, safe="")
+        try:
+            r = await _fetch_validated(
+                f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/{encoded_smiles}/cids/JSON",
+                enforce_domain_allowlist=True, timeout=15.0,
+            )
+        except _SSRFError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.warning("pubchem_cid_lookup_failed smiles_len=%d: %s", len(s), e)
+            return {"error": "PubChem CID lookup failed"}
+        if r.status_code == 404:
+            return {"error": "SMILES not found in PubChem", "smiles": s}
+        if not r.is_success:
+            return {"error": f"PubChem returned HTTP {r.status_code}"}
+        try:
+            cids = (r.json().get("IdentifierList") or {}).get("CID") or []
+        except Exception:
+            return {"error": "PubChem response could not be parsed"}
+        if not cids:
+            return {"cid": None, "patent_count": 0, "sample_patent_ids": []}
+        cid = cids[0]
+        try:
+            pr = await _fetch_validated(
+                f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/xrefs/PatentID/JSON",
+                enforce_domain_allowlist=True, timeout=20.0,
+            )
+        except _SSRFError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.warning("pubchem_patent_lookup_failed cid=%s: %s", cid, e)
+            return {"cid": cid, "error": "Patent xref fetch failed"}
+        if pr.status_code == 404:
+            return {"cid": cid, "patent_count": 0, "sample_patent_ids": []}
+        if not pr.is_success:
+            return {"cid": cid, "error": f"PubChem patent lookup returned HTTP {pr.status_code}"}
+        try:
+            info_list = (pr.json().get("InformationList") or {}).get("Information") or []
+        except Exception:
+            return {"cid": cid, "error": "Patent response could not be parsed"}
+        patent_ids: list[str] = []
+        for entry in info_list:
+            pid_list = entry.get("PatentID") or []
+            if isinstance(pid_list, list):
+                patent_ids.extend(p for p in pid_list if isinstance(p, str))
+        return {
+            "cid": cid,
+            "patent_count": len(patent_ids),
+            "sample_patent_ids": patent_ids[:10],
+        }
+
+    # ── retrosynthesis disconnection proposals ───────────────────────────────
+    @mcp.tool()
+    async def propose_retrosynthesis(
+        target_smiles: str,
+        max_routes: int = 5,
+    ) -> dict[str, Any]:
+        """Propose one-step retrosynthetic disconnections for a target SMILES.
+
+        Calls the mcp-retrosynth subprocess (RDKit + curated reaction-template
+        library) and returns precursor sets keyed by transform name. Use the
+        output to seed `confirm_synthesis_plan` or for further analog work.
+        Returns {target, routes: [{transform, precursors, confidence}], total}.
+        """
+        # Delegate to the standalone MCP server via subprocess JSON-RPC. Doing
+        # the call here (rather than in the MCP server directly) keeps the
+        # agent-visible tool surface uniform and lets us reuse caching /
+        # logging at the api layer.
+        import asyncio as _asyncio
+
+        s = target_smiles.strip()
+        if not s or len(s) > 1000:
+            return {"error": "target_smiles must be 1-1000 chars"}
+        if max_routes < 1 or max_routes > 20:
+            return {"error": "max_routes must be between 1 and 20"}
+
+        # Use the in-process retrosynthesis library directly when available —
+        # the same code the stdio MCP server runs. Avoids subprocess overhead
+        # for what is a pure CPU + RDKit call.
+        try:
+            from mcp_retrosynth.disconnect import propose_disconnections
+        except ImportError:
+            return {"error": "Retrosynthesis backend not installed (mcp_retrosynth)"}
+        try:
+            routes = await _asyncio.get_running_loop().run_in_executor(
+                None, propose_disconnections, s, max_routes,
+            )
+        except ValueError as e:
+            return {"error": str(e)}
+        except Exception:
+            logger.exception("retrosynth_failed smiles_len=%d", len(s))
+            return {"error": "Retrosynthesis proposal failed"}
+        return {
+            "target": s,
+            "routes": routes,
+            "total": len(routes),
         }
 
     return mcp

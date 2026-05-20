@@ -118,6 +118,9 @@ async def run_agent_streaming(
             "chemclaw2-tools": McpSdkServerConfig(server=mcp_server),
             "mcp-molfp": McpStdioServerConfig(type="stdio", command="python", args=["-m", "mcp_molfp.server"]),
             "mcp-rxnfp": McpStdioServerConfig(type="stdio", command="python", args=["-m", "mcp_rxnfp.server"]),
+            "mcp-retrosynth": McpStdioServerConfig(
+                type="stdio", command="python", args=["-m", "mcp_retrosynth.server"],
+            ),
         },
         hooks=build_hooks(user_id, project_key, session_factory),
         agents={
