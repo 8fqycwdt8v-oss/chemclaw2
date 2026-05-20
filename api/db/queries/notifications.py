@@ -89,7 +89,7 @@ async def mark_read(
         )
         # SQLAlchemy 2.0 annotates rowcount only on CursorResult; DML
         # always returns one but mypy can't narrow the runtime type.
-        return result.rowcount  # type: ignore[attr-defined]
+        return result.rowcount
 
 
 async def mark_all_read(db: AsyncSession, user_id: str) -> int:
@@ -105,4 +105,4 @@ async def mark_all_read(db: AsyncSession, user_id: str) -> int:
             ),
             {"uid": user_id},
         )
-        return result.rowcount  # type: ignore[attr-defined]
+        return result.rowcount

@@ -83,4 +83,4 @@ async def mark_todo_done(db: AsyncSession, todo_id: str, user_id: str) -> bool:
         )
         # SQLAlchemy 2.0 annotates Result.rowcount only on CursorResult.
         # For DML it is always populated; mypy can't narrow the runtime type.
-        return result.rowcount > 0  # type: ignore[attr-defined]
+        return result.rowcount > 0

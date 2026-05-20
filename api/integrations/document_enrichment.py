@@ -270,7 +270,7 @@ async def extract_entities_from_text(
         # plain-dict tool/tool_choice/messages shapes without a cast;
         # the runtime API accepts them fine.
         response = await asyncio.wait_for(
-            client.messages.create(  # type: ignore[call-overload]
+            client.messages.create(
                 model=model,
                 max_tokens=2000,
                 system=_EXTRACTION_SYSTEM_PROMPT,

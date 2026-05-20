@@ -105,7 +105,7 @@ async def sweep_rate_limit_rows(
             {"cutoff": cutoff_ms},
         )
         # CursorResult.rowcount is populated for DML; mypy doesn't narrow it.
-        return result.rowcount  # type: ignore[attr-defined]
+        return result.rowcount
 
 
 # ── FastAPI dependency factory ────────────────────────────────────────────────
