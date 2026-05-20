@@ -42,6 +42,15 @@ chem = [
 opt = [
   "bofire[optimization]>=0.0.13",
 ]
+# Deep retrosynthesis via AiZynthFinder (Tier 3 §H). Opt-in like [opt]
+# above — only workers that need full multi-step route search install
+# this. AiZynthFinder downloads ~500 MB of demo policy + filter models
+# on first call; the cache landing point depends on
+# AIZYNTH_CONFIG_PATH (set by the operator if a custom bundle is in
+# use, otherwise AiZynthFinder picks a sensible default).
+retrosynth = [
+  "aizynthfinder>=4.0",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
