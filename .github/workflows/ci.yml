@@ -74,9 +74,39 @@ jobs:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/chemclaw2_test
 
       - name: Test
-        run: pytest api/ -v
+        # `tee` so the full pytest output lands in a file we can both upload
+        # as an artifact and tail into ::error annotations on failure.
+        # set -o pipefail so pytest's exit code reaches the shell.
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest api/ -v --tb=long --color=no 2>&1 | tee /tmp/pytest.log
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chemclaw2_test
           ANTHROPIC_API_KEY: sk-ant-placeholder
           OPENAI_API_KEY: sk-placeholder
           CLERK_SECRET_KEY: sk_test_placeholder
+
+      - name: Surface pytest failures as annotations
+        if: failure()
+        shell: bash
+        run: |
+          # Emit the last 200 lines of pytest output as a GH Actions error
+          # annotation so it's visible in the PR check summary even when
+          # the raw log is paywalled behind sign-in.
+          if [ -f /tmp/pytest.log ]; then
+            echo "::group::pytest tail"
+            tail -200 /tmp/pytest.log
+            echo "::endgroup::"
+            # Single annotation with the failing-test summary.
+            grep -E "FAILED|ERROR" /tmp/pytest.log | tail -50 \
+              | sed 's/^/::error::/' || true
+          fi
+
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log
+          path: /tmp/pytest.log
+          if-no-files-found: ignore
