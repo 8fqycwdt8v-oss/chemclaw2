@@ -115,6 +115,191 @@ def normalize_crossref_response(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def resolve_compound_name_to_smiles(name: str) -> str | None:
+    """Look up a compound name on PubChem and return its canonical SMILES.
+
+    Uses the PubChem PUG REST API (already on `ALLOWED_DOMAINS`) via the
+    SSRF-pinned `_fetch_validated` helper. Returns None on any failure —
+    a name that PubChem can't resolve is common (typos, internal codenames,
+    novel compounds) and shouldn't bubble up as an error.
+
+    Names get URL-encoded; the caller is responsible for not passing
+    empty strings.
+    """
+    from urllib.parse import quote
+
+    from api.agent.tools import _SSRFError, _fetch_validated
+
+    name = name.strip()
+    if not name or len(name) > 200:
+        return None
+
+    encoded = quote(name, safe="")
+    url = (
+        f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/"
+        f"{encoded}/property/CanonicalSMILES/JSON"
+    )
+    try:
+        response = await _fetch_validated(
+            url,
+            enforce_domain_allowlist=True,
+            timeout=8.0,
+            headers={"Accept": "application/json"},
+        )
+    except _SSRFError as e:
+        logger.warning("pubchem_ssrf_rejected name=%s err=%s", name, e)
+        return None
+    except Exception:
+        logger.warning("pubchem_fetch_failed name=%s", name, exc_info=True)
+        return None
+    if not response.is_success:
+        return None
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    props = (
+        body.get("PropertyTable", {}).get("Properties", [])
+        if isinstance(body, dict)
+        else []
+    )
+    if not props or not isinstance(props[0], dict):
+        return None
+    smiles = props[0].get("CanonicalSMILES") or props[0].get("SMILES")
+    return smiles if isinstance(smiles, str) and smiles else None
+
+
+# ── LLM-driven entity extraction ─────────────────────────────────────────────
+
+_EXTRACTION_SYSTEM_PROMPT = """\
+You extract chemistry-relevant entities from a document excerpt for a \
+pharma R&D knowledge base. Be conservative — only emit entities the text \
+explicitly mentions or directly implies.
+
+Compounds: every distinct chemical compound (drug name, common name, \
+IUPAC, code like "GSK1234") mentioned in the text. Include a one-sentence \
+context snippet from the source so the curator can verify the mention.
+
+Citations: every DOI mentioned other than the paper's own DOI (which the \
+caller already extracted). PubMed IDs are acceptable too — emit them as \
+"PMID:12345678".
+
+Be brief: at most 20 compounds and 20 citations. Use canonical names where \
+the text gives them; otherwise the literal string the text uses."""
+
+
+_EXTRACTION_TOOL_SCHEMA: dict[str, Any] = {
+    "name": "extract_entities",
+    "description": "Emit the structured entity list for this document.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "compounds": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "maxLength": 200},
+                        "context": {"type": "string", "maxLength": 400},
+                    },
+                    "required": ["name", "context"],
+                },
+            },
+            "citations": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "identifier": {"type": "string", "maxLength": 200},
+                        "context": {"type": "string", "maxLength": 400},
+                    },
+                    "required": ["identifier", "context"],
+                },
+            },
+        },
+        "required": ["compounds", "citations"],
+    },
+}
+
+
+# Default to Haiku 4.5 — entity extraction is a low-difficulty structured-
+# output task; the cost/latency on Haiku is much better than Sonnet/Opus
+# for this workload. Override via ENTITY_EXTRACTION_MODEL env if needed.
+_DEFAULT_EXTRACTION_MODEL = "claude-haiku-4-5-20251001"
+
+
+async def extract_entities_from_text(
+    text: str,
+    *,
+    max_chars: int = 8000,
+    timeout_sec: float = 20.0,
+) -> dict[str, Any]:
+    """Ask Claude to pull compounds + citations out of a doc excerpt.
+
+    Returns ``{"compounds": [...], "citations": [...]}`` or
+    ``{"compounds": [], "citations": [], "error": str}`` on any failure.
+    Best-effort: the upload path should never raise out of this call.
+
+    Input is truncated to ``max_chars`` (default 8000) to keep tokens
+    bounded; entity extraction off the first ~2000 words of a paper is
+    typically sufficient for the abstract + intro + first results.
+
+    Imports `anthropic` lazily so the broader app can import this module
+    even when the SDK isn't available (e.g. unit tests).
+    """
+    import asyncio
+    import os
+
+    if not text or not text.strip():
+        return {"compounds": [], "citations": []}
+
+    try:
+        from anthropic import AsyncAnthropic
+    except ImportError:
+        logger.warning("entity_extraction_anthropic_sdk_missing")
+        return {"compounds": [], "citations": [], "error": "anthropic SDK missing"}
+
+    snippet = text[:max_chars]
+    model = os.environ.get("ENTITY_EXTRACTION_MODEL") or _DEFAULT_EXTRACTION_MODEL
+    client = AsyncAnthropic()
+
+    try:
+        # The Anthropic SDK's overloaded TypedDicts don't accept our
+        # plain-dict tool/tool_choice/messages shapes without a cast;
+        # the runtime API accepts them fine.
+        response = await asyncio.wait_for(
+            client.messages.create(  # type: ignore[call-overload]
+                model=model,
+                max_tokens=2000,
+                system=_EXTRACTION_SYSTEM_PROMPT,
+                tools=[_EXTRACTION_TOOL_SCHEMA],
+                tool_choice={"type": "tool", "name": "extract_entities"},
+                messages=[{"role": "user", "content": snippet}],
+            ),
+            timeout=timeout_sec,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("entity_extraction_timed_out chars=%d", len(snippet))
+        return {"compounds": [], "citations": [], "error": "timeout"}
+    except Exception as e:
+        logger.warning("entity_extraction_failed err=%s", e)
+        return {"compounds": [], "citations": [], "error": str(e)[:200]}
+
+    # The response.content is a list of blocks; pull the tool_use block.
+    for block in response.content:
+        if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == "extract_entities":
+            tool_input = getattr(block, "input", {}) or {}
+            if isinstance(tool_input, dict):
+                return {
+                    "compounds": tool_input.get("compounds") or [],
+                    "citations": tool_input.get("citations") or [],
+                }
+    logger.warning("entity_extraction_no_tool_block model=%s", model)
+    return {"compounds": [], "citations": [], "error": "no tool block"}
+
+
 async def fetch_crossref_metadata(doi: str) -> dict[str, Any] | None:
     """Fetch + normalize CrossRef metadata for `doi`.
 

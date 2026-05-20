@@ -7,9 +7,9 @@ import io
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,8 +22,10 @@ from api.db.queries.wiki_write import upsert_wiki_page
 from api.embeddings import embed_texts
 from api.integrations.document_enrichment import (
     extract_doi,
+    extract_entities_from_text,
     fetch_crossref_metadata,
     first_nonempty_line,
+    resolve_compound_name_to_smiles,
     slugify_doi,
 )
 
@@ -106,6 +108,16 @@ async def eln_webhook(
 @router.post("/api/integrations/documents", dependencies=[Depends(rate_limit("doc-upload", 5))])
 async def upload_document(
     file: UploadFile = File(...),
+    extract: Literal["basic", "full"] = Query(
+        "basic",
+        description=(
+            "'basic' (default) extracts text, detects DOI, and fetches "
+            "CrossRef metadata. 'full' additionally runs an LLM entity-"
+            "extraction pass to pull compound mentions and citations out "
+            "of the body text and resolve compound names to SMILES via "
+            "PubChem. 'full' adds ~10-20 s of latency and costs LLM tokens."
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -168,6 +180,31 @@ async def upload_document(
     title = metadata.get("title") or first_nonempty_line(text)
     abstract = metadata.get("abstract")
 
+    # Optional LLM entity extraction. Best-effort: any failure is logged
+    # but the upload still succeeds with the basic-mode payload.
+    entities: dict[str, Any] = {"compounds": [], "citations": []}
+    resolved_smiles: list[dict[str, Any]] = []
+    if extract == "full":
+        entities = await extract_entities_from_text(text)
+        # Resolve each compound name through PubChem in parallel. Cap to
+        # 20 (the schema limit) so we never fan out unboundedly.
+        compound_names = [
+            c.get("name", "").strip()
+            for c in (entities.get("compounds") or [])
+            if isinstance(c, dict) and c.get("name")
+        ][:20]
+        if compound_names:
+            import asyncio
+            results = await asyncio.gather(
+                *(resolve_compound_name_to_smiles(n) for n in compound_names),
+                return_exceptions=True,
+            )
+            for name, result in zip(compound_names, results, strict=False):
+                if isinstance(result, str):
+                    resolved_smiles.append({"name": name, "smiles": result})
+                # Failures (None or exception) are silently dropped — the
+                # name still appears in `entities.compounds` for curator review.
+
     fact_id, _ = await upsert_external_fact(
         db,
         source_type="document",
@@ -181,6 +218,9 @@ async def upload_document(
             "authors": metadata.get("authors") or [],
             "container_title": metadata.get("container_title"),
             "published_year": metadata.get("published_year"),
+            "extracted_compounds": entities.get("compounds") or [],
+            "extracted_citations": entities.get("citations") or [],
+            "resolved_smiles": resolved_smiles,
         },
         content_text=text[:500_000],
         fetched_by=user_id,
@@ -229,6 +269,32 @@ async def upload_document(
                 body_lines.append(f"**Year:** {year}")
             if abstract:
                 body_lines.extend(["", "## Abstract", "", abstract])
+            # Surface LLM-extracted entities so the curator sees them
+            # without having to dig through external_facts.
+            if resolved_smiles:
+                body_lines.extend(["", "## Compounds (auto-extracted)", ""])
+                for cs in resolved_smiles:
+                    body_lines.append(f"- **{cs['name']}** — `{cs['smiles']}`")
+            unresolved = [
+                c for c in (entities.get("compounds") or [])
+                if isinstance(c, dict)
+                and c.get("name")
+                and not any(r["name"] == c["name"] for r in resolved_smiles)
+            ]
+            if unresolved:
+                body_lines.extend(["", "## Compound mentions (unresolved)", ""])
+                for c in unresolved[:10]:
+                    body_lines.append(f"- {c['name']} — _{c.get('context', '')[:120]}_")
+            extracted_citations = entities.get("citations") or []
+            if extracted_citations:
+                body_lines.extend(["", "## Citations (auto-extracted)", ""])
+                for cit in extracted_citations[:10]:
+                    if not isinstance(cit, dict):
+                        continue
+                    ident = cit.get("identifier", "").strip()
+                    if not ident:
+                        continue
+                    body_lines.append(f"- `{ident}` — _{cit.get('context', '')[:120]}_")
             body_lines.extend(["", "## Extracted text (excerpt)", "", text[:5000]])
             wiki_text = "\n".join(body_lines)
             await upsert_wiki_page(
@@ -257,4 +323,7 @@ async def upload_document(
         "doi": doi,
         "wiki_slug": wiki_slug,
         "abstract": abstract,
+        "extracted_compounds": entities.get("compounds") or [],
+        "extracted_citations": entities.get("citations") or [],
+        "resolved_smiles": resolved_smiles,
     }
