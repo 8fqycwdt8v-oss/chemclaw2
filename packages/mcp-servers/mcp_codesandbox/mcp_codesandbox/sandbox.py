@@ -83,24 +83,48 @@ def _set_rlimits(
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 
+def _probe_unshare() -> bool:
+    """Return True iff `unshare -n -r` actually works on this host.
+
+    `unshare -n` needs CAP_SYS_ADMIN; GitHub Actions runners and other
+    unprivileged environments will fail with "unshare: operation not
+    permitted". Probe once at module load so the per-call hot path is
+    a single dict lookup.
+    """
+    unshare = shutil.which("unshare")
+    if unshare is None:
+        return False
+    import subprocess
+    try:
+        r = subprocess.run(
+            [unshare, "-n", "-r", "true"],
+            capture_output=True, timeout=2.0, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
+
+
+_UNSHARE_AVAILABLE: bool = _probe_unshare()
+
+
 def _build_command(code: str, tmpdir: str) -> list[str]:
-    """Build the subprocess argv. Uses `unshare -n` when available to
-    drop network access; falls back to plain `python -I -c` otherwise.
+    """Build the subprocess argv. Uses `unshare -n -r` when the host
+    permits it; falls back to plain `python -I -c` otherwise.
 
     `python -I` runs in isolated mode: ignores PYTHONPATH, PYTHONHOME,
     PYTHONSTARTUP, doesn't add user site-packages to sys.path. Combined
     with `env={}` in the asyncio call this keeps the child off the
-    host's import surface.
+    host's import surface even when unshare isn't available — at the
+    cost of leaving network access intact (logged via `_UNSHARE_AVAILABLE`
+    for operators to notice).
     """
     py_argv = [sys.executable, "-I", "-c", code]
-    unshare = shutil.which("unshare")
-    if unshare is not None:
+    if _UNSHARE_AVAILABLE:
         # `unshare -n` creates a new (empty) network namespace for the
         # child — no DNS, no routes, no inherited sockets. -r runs as
         # an unprivileged user inside the namespace (no UID 0 inside).
-        # If unshare lacks CAP_SYS_ADMIN this exec will fail at startup;
-        # we catch the error and surface "error" status.
-        return [unshare, "-n", "-r", *py_argv]
+        return [shutil.which("unshare") or "unshare", "-n", "-r", *py_argv]
     return py_argv
 
 
