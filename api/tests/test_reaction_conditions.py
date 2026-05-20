@@ -13,6 +13,7 @@ import uuid
 import pytest
 from sqlalchemy import text
 
+from api.db.queries.fp_utils import bit_string_to_pg_bytes
 from api.db.queries.reaction_conditions import (
     get_cached_prediction,
     insert_prediction,
@@ -36,19 +37,23 @@ def _drfp_bits(seed: int = 0) -> str:
 async def _insert_reaction_row(
     session_factory, rxn_smiles: str, conditions: str | None, drfp: str, user_id: str
 ) -> str:
+    """Insert a reaction with a 2048-bit DRFP. asyncpg's binary protocol
+    refuses to bind a Python str to a bit(2048) column even when wrapped
+    in CAST() — pass the packed bytes representation instead."""
+    drfp_bytes = bit_string_to_pg_bytes(drfp)
     async with session_factory() as db:
         async with db.begin():
             result = await db.execute(
                 text("""
                     INSERT INTO reactions (rxn_smiles, name, conditions, drfp, created_by)
-                    VALUES (:smiles, :name, :cond, CAST(:bits AS bit(2048)), :uid)
+                    VALUES (:smiles, :name, :cond, :bits, :uid)
                     RETURNING id::text
                 """),
                 {
                     "smiles": rxn_smiles,
                     "name": f"test-{uuid.uuid4().hex[:6]}",
                     "cond": conditions,
-                    "bits": drfp,
+                    "bits": drfp_bytes,
                     "uid": user_id,
                 },
             )

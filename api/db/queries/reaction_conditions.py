@@ -71,16 +71,20 @@ async def insert_prediction(
     Returns the new prediction id as a string.
     """
     new_id = uuid.uuid4()
-    await db.execute(
+    # asyncpg's binary protocol refuses to bind a Python str to a
+    # bit(2048) column even with CAST(); pack to bytes if provided.
+    from api.db.queries.fp_utils import bit_string_to_pg_bytes
+    drfp_bytes = bit_string_to_pg_bytes(drfp_bits) if drfp_bits is not None else None
+    result = await db.execute(
         text("""
             INSERT INTO reaction_condition_predictions (
                 id, reaction_id, rxn_smiles, drfp_bits, conditions,
                 model, confidence, source, created_by
             ) VALUES (
                 CAST(:id AS uuid),
-                CASE WHEN :rid IS NULL THEN NULL ELSE CAST(:rid AS uuid) END,
+                CAST(:rid AS uuid),
                 :smiles,
-                CASE WHEN :bits IS NULL THEN NULL ELSE CAST(:bits AS bit(2048)) END,
+                CAST(:bits AS bit(2048)),
                 CAST(:cond AS jsonb),
                 :model,
                 :conf,
@@ -102,7 +106,7 @@ async def insert_prediction(
             "id": str(new_id),
             "rid": reaction_id,
             "smiles": rxn_smiles,
-            "bits": drfp_bits,
+            "bits": drfp_bytes,
             "cond": _json_dumps(conditions),
             "model": model,
             "conf": confidence,
@@ -110,7 +114,10 @@ async def insert_prediction(
             "uid": created_by,
         },
     )
-    return str(new_id)
+    # ON CONFLICT DO UPDATE returns the existing row's id, not new_id —
+    # surface whichever id the row actually has so callers can link to it.
+    returned = result.scalar_one_or_none()
+    return returned or str(new_id)
 
 
 async def record_used_prediction(

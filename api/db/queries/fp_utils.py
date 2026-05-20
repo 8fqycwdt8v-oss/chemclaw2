@@ -11,6 +11,16 @@ def validate_fp_bits(bits: str) -> None:
         raise ValueError("fp_bits must be exactly 2048 binary characters (0/1)")
 
 
+def bit_string_to_pg_bytes(bits: str) -> bytes:
+    """Convert a 0/1 bit string to the packed bytes asyncpg requires for
+    bit(N) column binds. asyncpg's binary protocol rejects str even
+    with `CAST(:bits AS bit(2048))` — the cast is applied after
+    parameter encoding. Validates the bits first.
+    """
+    validate_fp_bits(bits)
+    return bytes(bit_string_to_bytes(bits))
+
+
 def bit_string_to_bytes(bits: str) -> bytearray:
     n = len(bits)
     out = bytearray((n + 7) // 8)
