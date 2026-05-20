@@ -100,16 +100,18 @@ async def hybrid_search_wiki(
     predict whether the query benefits from lexical or semantic recall
     (the common case for natural-language wiki questions).
     """
-    import asyncio
-
     safe_limit = min(max(1, limit), 50)
     # Over-fetch from each leg so RRF has enough candidates to fuse.
     leg_limit = safe_limit * 3
-    fts_rows, sem_rows = await asyncio.gather(
-        search_wiki_by_fts(db, query, limit=leg_limit, include_archived=include_archived),
-        semantic_search_wiki(
-            db, embedding, limit=leg_limit, include_archived=include_archived
-        ),
+    # Sequential — same SQLAlchemy AsyncSession can't safely run two
+    # concurrent queries (`IllegalStateChangeError`). Both legs hit the
+    # same Postgres connection pool anyway, so gather was theatre.
+    # Matches the fix in hybrid_search_paper_chunks.
+    fts_rows = await search_wiki_by_fts(
+        db, query, limit=leg_limit, include_archived=include_archived,
+    )
+    sem_rows = await semantic_search_wiki(
+        db, embedding, limit=leg_limit, include_archived=include_archived,
     )
 
     K = 60  # RRF damping constant — standard value.

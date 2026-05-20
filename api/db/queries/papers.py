@@ -245,12 +245,19 @@ async def hybrid_search_paper_chunks(
 
     Returns rows keyed by chunk id with a `score` field used downstream by
     the RCS reranker.
+
+    Queries run sequentially on the shared session. `asyncio.gather` looks
+    appealing but SQLAlchemy's AsyncSession doesn't support concurrent
+    use of one connection — wiki_read.hybrid_search_wiki has the same
+    latent bug; its tests mock both legs so it never fires. Both legs
+    hit the same Postgres connection pool anyway, so the "parallelism"
+    of gather is theatre, not real wall-time saving.
     """
     safe_limit = min(max(1, limit), 50)
     leg_limit = safe_limit * 3
-    fts_rows, sem_rows = await asyncio.gather(
-        search_paper_chunks_fts(db, query, limit=leg_limit, paper_id=paper_id),
-        semantic_search_paper_chunks(db, embedding, limit=leg_limit, paper_id=paper_id),
+    fts_rows = await search_paper_chunks_fts(db, query, limit=leg_limit, paper_id=paper_id)
+    sem_rows = await semantic_search_paper_chunks(
+        db, embedding, limit=leg_limit, paper_id=paper_id,
     )
 
     K = 60  # RRF damping constant — matches wiki hybrid search.
