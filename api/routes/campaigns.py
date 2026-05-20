@@ -13,9 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth import get_current_user
 from api.db.connection import get_db
 from api.db.queries.campaigns import (
+    approve_step,
     cancel_campaign,
     get_campaign_with_steps,
+    list_steps_awaiting_approval,
     list_user_campaigns,
+    reject_step,
 )
 from api.db.queries.rate_limit import rate_limit
 
@@ -89,4 +92,71 @@ async def patch_campaign(
     if not cancelled:
         raise HTTPException(status_code=404, detail="Campaign not found or already in a terminal state")
 
+    return {"ok": True}
+
+
+# ── Step approval ────────────────────────────────────────────────────────────
+
+@router.get(
+    "/api/campaigns/steps/awaiting-approval",
+    dependencies=[Depends(rate_limit("campaigns-approval-list", 60))],
+)
+async def get_steps_awaiting_approval(
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    """Return campaign steps in 'pending_approval' that the caller owns.
+
+    Drives the "needs my approval" inbox. Steps stay here until the
+    user calls POST .../approve or .../reject.
+    """
+    steps = await list_steps_awaiting_approval(db, user_id)
+    return {"steps": steps}
+
+
+@router.post(
+    "/api/campaigns/{campaign_id}/steps/{step_idx}/approve",
+    dependencies=[Depends(rate_limit("campaigns-step-approve", 30))],
+)
+async def approve_campaign_step(
+    campaign_id: str,
+    step_idx: int,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    """Promote a step from 'pending_approval' to 'pending'. Owner-scoped."""
+    if not _UUID_RE.match(campaign_id):
+        raise HTTPException(status_code=400, detail="Invalid campaign id")
+    if step_idx < 0:
+        raise HTTPException(status_code=400, detail="step_idx must be non-negative")
+    ok = await approve_step(db, campaign_id, step_idx, user_id)
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail="Step not found, not awaiting approval, or not owned by you",
+        )
+    return {"ok": True}
+
+
+@router.post(
+    "/api/campaigns/{campaign_id}/steps/{step_idx}/reject",
+    dependencies=[Depends(rate_limit("campaigns-step-reject", 30))],
+)
+async def reject_campaign_step(
+    campaign_id: str,
+    step_idx: int,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    """Mark a step as 'failed' (no retries). Owner-scoped."""
+    if not _UUID_RE.match(campaign_id):
+        raise HTTPException(status_code=400, detail="Invalid campaign id")
+    if step_idx < 0:
+        raise HTTPException(status_code=400, detail="step_idx must be non-negative")
+    ok = await reject_step(db, campaign_id, step_idx, user_id)
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail="Step not found, not awaiting approval, or not owned by you",
+        )
     return {"ok": True}
