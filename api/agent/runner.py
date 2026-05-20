@@ -51,7 +51,20 @@ markdown report — you then persist it via finalize_deep_research.
 For citation-conflict resolution on a wiki page, dispatch
 subagent_type='contradiction-resolver'. The sub-agent reads both citations
 and the chunks that reference them, weighs the evidence, and returns a
-proposed winner + reason that you persist via record_contradiction."""
+proposed winner + reason that you persist via record_contradiction.
+
+When the user asks evidence-grounded questions about specific papers
+(or "what does the literature say about X"), prefer `paper_qa` over
+plain `wiki_lookup` / `web_search` — it retrieves paper chunks via
+hybrid FTS + semantic search and reranks them with a per-chunk
+relevance score and summary, so every claim you cite is traceable to
+a specific paper section.
+
+For chemistry name → structure conversions, use `name_to_structure`
+(NCI CACTUS, 7-day cached). For prior-art reconnaissance on a
+candidate molecule, use `patent_coverage` (PubChem patent xrefs). To
+seed a `confirm_synthesis_plan`, call `propose_retrosynthesis` first
+to get plausible one-step disconnections."""
 
 
 # Match <confidence>level</confidence> case-insensitively; allow surrounding
@@ -158,6 +171,9 @@ async def run_agent_streaming(
             "chemclaw2-tools": McpSdkServerConfig(server=mcp_server),
             "mcp-molfp": McpStdioServerConfig(type="stdio", command="python", args=["-m", "mcp_molfp.server"]),
             "mcp-rxnfp": McpStdioServerConfig(type="stdio", command="python", args=["-m", "mcp_rxnfp.server"]),
+            "mcp-retrosynth": McpStdioServerConfig(
+                type="stdio", command="python", args=["-m", "mcp_retrosynth.server"],
+            ),
         },
         hooks=build_hooks(user_id, project_key, session_factory),
         agents={
