@@ -590,6 +590,35 @@ class HypothesisRanking(Base):
     decided_at: Mapped[datetime] = _now()
 
 
+# ── code executions (Phase C) ────────────────────────────────────────────────
+
+class CodeExecution(Base):
+    """Audit record for one agent-authored Python snippet run by the sandbox.
+
+    Either `investigation_id` or `session_id` must be set (CHECK constraint
+    in the migration) so every execution is traceable to a research thread
+    or a chat turn. `status` is the high-level outcome; `exit_code` is the
+    process exit code with sentinels 124 (timeout) and 137 (SIGKILL).
+    """
+
+    __tablename__ = "code_executions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    investigation_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, ForeignKey("investigations.id", ondelete="CASCADE"),
+    )
+    session_id: Mapped[str | None] = mapped_column(sa.Text)
+    code: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    language: Mapped[str] = mapped_column(sa.Text, nullable=False, server_default=sa.text("'python'"))
+    stdout: Mapped[str] = mapped_column(sa.Text, nullable=False, server_default=sa.text("''"))
+    stderr: Mapped[str] = mapped_column(sa.Text, nullable=False, server_default=sa.text("''"))
+    exit_code: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default=sa.text("0"))
+    status: Mapped[str] = mapped_column(sa.Text, nullable=False, server_default=sa.text("'completed'"))
+    created_by: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    created_at: Mapped[datetime] = _now()
+
+
 # ── eval runs ─────────────────────────────────────────────────────────────────
 
 class EvalRun(Base):
