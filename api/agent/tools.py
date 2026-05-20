@@ -13,14 +13,24 @@ import os
 import re
 import socket
 import urllib.parse
+import uuid
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from claude_agent_sdk import create_sdk_mcp_server
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger(__name__)
+
+
+class _PredictedConditionsPayload(BaseModel):
+    """Schema for the `record_predicted_conditions` tool's nested conditions arg."""
+    catalysts: list[str] = Field(default_factory=list)
+    solvents: list[str] = Field(default_factory=list)
+    reagents: list[str] = Field(default_factory=list)
+    temperature_c: float | None = None
 
 # ── SSRF protection ───────────────────────────────────────────────────────────
 
@@ -268,14 +278,68 @@ def build_chemclaw_mcp_server(
         rxn_fingerprint_bits: str,
         limit: int = 20,
         min_similarity: float = 0.4,
+        include_outcomes: bool = False,
     ) -> dict[str, Any]:
-        """Search the reaction database by DRFP fingerprint similarity."""
+        """Search the reaction database by DRFP fingerprint similarity.
+
+        Set ``include_outcomes=True`` to attach experimental results
+        (yield, status, conditions actually run, failure reasons) to each
+        hit — needed by the process-gap-analyst sub-agent when proposing
+        what to investigate next for a reaction step.
+        """
         from api.db.queries.reactions import find_similar_reactions
         if not re.match(r'^[01]{2048}$', rxn_fingerprint_bits):
             return {"error": "rxn_fingerprint_bits must be exactly 2048 binary digits"}
         async with session_factory() as db:
-            results = await find_similar_reactions(db, rxn_fingerprint_bits, limit, min_similarity)
+            results = await find_similar_reactions(
+                db, rxn_fingerprint_bits, limit, min_similarity,
+                include_outcomes=include_outcomes,
+            )
         return {"type": "reaction_similarity", "results": results}
+
+    # ── condition precedent from neighbors ────────────────────────────────────
+    @mcp.tool()
+    async def suggest_conditions_from_neighbors(
+        rxn_fingerprint_bits: str,
+        limit: int = 10,
+        min_similarity: float = 0.4,
+    ) -> dict[str, Any]:
+        """Aggregate free-text conditions from top-K DRFP neighbors.
+
+        Call this BEFORE invoking a predictor — it is cheaper, grounded in
+        the registry's actual reactions, and the returned reaction ids can
+        be cited. Compute the DRFP bits with mcp-rxnfp.compute_drfp first.
+        """
+        from api.db.queries.reactions import find_neighbor_conditions
+        if not re.match(r'^[01]{2048}$', rxn_fingerprint_bits):
+            return {"error": "rxn_fingerprint_bits must be exactly 2048 binary digits"}
+        async with session_factory() as db:
+            neighbors = await find_neighbor_conditions(
+                db, rxn_fingerprint_bits, limit, min_similarity
+            )
+        return {"type": "neighbor_conditions", "neighbors": neighbors}
+
+    # ── reaction outcomes lookup ──────────────────────────────────────────────
+    @mcp.tool()
+    async def list_reaction_outcomes(
+        reaction_id: str,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """List recorded experimental outcomes for a registered reaction.
+
+        Returns the per-attempt history (yield, status, actual conditions,
+        observations, failure reason) newest first, sourced from
+        ``reaction_outcomes``. Use this when you have a specific reaction
+        in the registry and want to see what's already been tried.
+        """
+        try:
+            rid = str(uuid.UUID(reaction_id.strip()))
+        except (ValueError, AttributeError):
+            return {"error": "reaction_id must be a UUID"}
+        from api.db.queries.reaction_outcomes import list_outcomes_for_reaction
+        async with session_factory() as db:
+            outcomes = await list_outcomes_for_reaction(db, rid, limit=limit)
+        return {"reaction_id": rid, "outcomes": outcomes}
 
     # ── substructure search ───────────────────────────────────────────────────
     @mcp.tool()
@@ -406,9 +470,12 @@ def build_chemclaw_mcp_server(
         return {"content": text[:10_000], "truncated": len(r.content) > MAX_BYTES or len(text) > 10_000}
 
     # ── ELN experiment fetch ──────────────────────────────────────────────────
-    @mcp.tool()
-    async def eln_fetch_experiment(experiment_id: str) -> dict[str, Any]:
-        """Fetch a read-only experiment record from the connected ELN system."""
+    async def _fetch_eln_raw(experiment_id: str) -> dict[str, Any]:
+        """Shared ELN fetch path used by both the read-through tool and ingest.
+
+        Returns the raw ELN payload on HTTP 200, or ``{"error": ...}`` on
+        any failure (missing config, SSRF block, 404, non-2xx, network).
+        """
         eln_base = os.environ.get("ELN_API_BASE_URL", "").rstrip("/")
         if not eln_base:
             return {"error": "ELN_API_BASE_URL not configured"}
@@ -434,7 +501,152 @@ def build_chemclaw_mcp_server(
             return {"error": f"Experiment {exp_id} not found"}
         if not r.is_success:
             return {"error": f"ELN API error: {r.status_code}"}
-        return r.json()
+        try:
+            return r.json()
+        except Exception as e:
+            logger.warning("eln_fetch_parse_failed exp=%s: %s", exp_id, e)
+            return {"error": "ELN response is not valid JSON"}
+
+    @mcp.tool()
+    async def eln_fetch_experiment(experiment_id: str) -> dict[str, Any]:
+        """Fetch a read-only experiment record from the connected ELN system."""
+        return await _fetch_eln_raw(experiment_id)
+
+    # ── ELN experiment ingest (persist outcome) ───────────────────────────────
+    @mcp.tool()
+    async def ingest_eln_experiment(
+        experiment_id: str,
+        reaction_id: str,
+        campaign_step_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch an ELN experiment and persist it as a reaction outcome.
+
+        Idempotent on ``experiment_id``: re-calling with the same id
+        returns the existing outcome row (``already_existed=True``)
+        without duplicating. The ELN payload is normalized via the
+        ElnExperiment Pydantic model — fields outside the contract are
+        ignored, missing fields fall back to defaults (status='inconclusive'
+        when the ELN doesn't tell us). When the real ELN contract lands
+        (BACKLOG.md E2), extend ElnExperiment in api/agent/eln_payload.py.
+        """
+        from api.agent.eln_payload import ElnExperiment, normalize_eln_payload
+        from api.db.queries.reaction_outcomes import insert_outcome
+
+        try:
+            rid = str(uuid.UUID(reaction_id.strip()))
+        except (ValueError, AttributeError):
+            return {"ok": False, "error": "reaction_id must be a UUID"}
+        csid: str | None
+        if campaign_step_id is not None:
+            try:
+                csid = str(uuid.UUID(campaign_step_id.strip()))
+            except (ValueError, AttributeError):
+                return {"ok": False, "error": "campaign_step_id must be a UUID"}
+        else:
+            csid = None
+
+        raw = await _fetch_eln_raw(experiment_id)
+        if raw.get("error"):
+            return {"ok": False, "error": raw["error"]}
+
+        try:
+            normalized: ElnExperiment = normalize_eln_payload(raw)
+        except Exception as e:
+            # Pydantic ValidationError or upstream payload mangled —
+            # surface a generic message; the real exception is logged
+            # inside normalize_eln_payload.
+            logger.warning(
+                "eln_normalize_failed exp=%s reaction=%s: %s",
+                experiment_id[:64], rid, e,
+            )
+            return {"ok": False, "error": "ELN payload could not be normalized"}
+
+        try:
+            async with session_factory() as db:
+                async with db.begin():
+                    outcome_id, already_existed = await insert_outcome(
+                        db,
+                        reaction_id=rid,
+                        source="eln",
+                        status=normalized.status,
+                        created_by=user_id,
+                        campaign_step_id=csid,
+                        eln_experiment_id=experiment_id.strip(),
+                        yield_pct=normalized.yield_pct,
+                        conditions_actual=normalized.conditions_actual,
+                        observations=normalized.observations,
+                        failure_reason=normalized.failure_reason,
+                    )
+        except Exception:
+            logger.exception(
+                "eln_ingest_persist_failed exp=%s reaction=%s",
+                experiment_id[:64], rid,
+            )
+            return {"ok": False, "error": "Failed to persist ELN outcome"}
+        return {
+            "ok": True,
+            "outcome_id": outcome_id,
+            "already_existed": already_existed,
+            "status": normalized.status,
+        }
+
+    # ── manual outcome record (user-pasted data) ──────────────────────────────
+    @mcp.tool()
+    async def record_manual_outcome(
+        reaction_id: str,
+        status: str,
+        yield_pct: float | None = None,
+        conditions_actual: dict[str, Any] | None = None,
+        observations: str | None = None,
+        failure_reason: str | None = None,
+        campaign_step_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist an experimental outcome the user described in chat.
+
+        Use this when the user pastes lab data inline rather than pointing
+        at an ELN experiment. ``status`` must be one of 'success',
+        'partial', 'fail', 'inconclusive'. The outcome lands with
+        ``source='manual'`` so it can be distinguished from ELN-sourced
+        rows downstream.
+        """
+        from api.db.queries.reaction_outcomes import insert_outcome
+
+        try:
+            rid = str(uuid.UUID(reaction_id.strip()))
+        except (ValueError, AttributeError):
+            return {"ok": False, "error": "reaction_id must be a UUID"}
+        csid: str | None
+        if campaign_step_id is not None:
+            try:
+                csid = str(uuid.UUID(campaign_step_id.strip()))
+            except (ValueError, AttributeError):
+                return {"ok": False, "error": "campaign_step_id must be a UUID"}
+        else:
+            csid = None
+
+        try:
+            async with session_factory() as db:
+                async with db.begin():
+                    outcome_id, _ = await insert_outcome(
+                        db,
+                        reaction_id=rid,
+                        source="manual",
+                        status=status,
+                        created_by=user_id,
+                        campaign_step_id=csid,
+                        yield_pct=yield_pct,
+                        conditions_actual=conditions_actual,
+                        observations=observations,
+                        failure_reason=failure_reason,
+                    )
+        except ValueError as e:
+            # CLAUDE.md observability rule 3: log denials at info before returning.
+            logger.info("manual_outcome_rejected reaction=%s reason=%s", rid, e)
+            return {"ok": False, "error": str(e)}
+        except Exception:
+            logger.exception("manual_outcome_persist_failed reaction=%s", rid)
+            return {"ok": False, "error": "Failed to persist outcome"}
+        return {"ok": True, "outcome_id": outcome_id}
 
     # ── synthesis campaign tools ──────────────────────────────────────────────
     @mcp.tool()
@@ -709,6 +921,58 @@ def build_chemclaw_mcp_server(
                 source_citation_id=source_citation_id,
             )
         return {"id": prop_id}
+
+    # ── record_predicted_conditions ───────────────────────────────────────────
+    @mcp.tool()
+    async def record_predicted_conditions(
+        rxn_smiles: str,
+        conditions: dict[str, Any],
+        model: str,
+        source: str,
+        confidence: float | None = None,
+        reaction_id: str | None = None,
+        drfp_bits: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist a reaction condition prediction for caching and feedback.
+
+        Call this after `mcp-rxn-conditions.predict_conditions` or
+        `suggest_conditions_from_neighbors` returns, so the next turn (and
+        future campaigns over the same reaction) hit the cache instead of
+        re-paying the predictor API.
+
+        `conditions` must be an object shaped like:
+          {catalysts: [str], solvents: [str], reagents: [str],
+           temperature_c: float|null}
+        `model` should identify both backend and version, e.g.
+          'rxn4chemistry:v2025-04' or 'neighbor-aggregation:v1'.
+        `source` is the high-level origin: 'rxn4chemistry' |
+          'neighbor_aggregation' | 'manual'.
+        """
+        try:
+            payload = _PredictedConditionsPayload.model_validate(conditions)
+        except ValidationError as e:
+            return {"error": f"invalid conditions payload: {e.errors()[0]['msg']}"}
+
+        if not rxn_smiles or ">>" not in rxn_smiles:
+            return {"error": "rxn_smiles must contain '>>' separator"}
+        if drfp_bits is not None and not re.match(r'^[01]{2048}$', drfp_bits):
+            return {"error": "drfp_bits must be exactly 2048 binary digits if provided"}
+
+        from api.db.queries.reaction_conditions import insert_prediction
+        async with session_factory() as db:
+            async with db.begin():
+                prediction_id = await insert_prediction(
+                    db,
+                    rxn_smiles=rxn_smiles,
+                    conditions=payload.model_dump(),
+                    model=model,
+                    source=source,
+                    created_by=user_id,
+                    confidence=confidence,
+                    reaction_id=reaction_id,
+                    drfp_bits=drfp_bits,
+                )
+        return {"id": prediction_id}
 
     # ── verify_citation ───────────────────────────────────────────────────────
     @mcp.tool()

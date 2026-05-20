@@ -94,6 +94,14 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - **OpenAI fallback for RCS scoring** — `score_chunks_with_llm` is Anthropic-only. Add an OpenAI path keyed off `RCS_PROVIDER=openai` if a future deployment can't depend on `ANTHROPIC_API_KEY`.
 - **External retrosynthesis service** — the 11-template curated library is a deliberate floor. When demand justifies, wire AiZynthFinder / ASKCOS / IBM RXN as a second `propose_retrosynthesis_deep` tool, keeping the template fast-path for first-pass disconnections.
 
+### Reaction condition prediction (May 2026)
+
+- **mcp_molfp / mcp_rxnfp wheel layout** — both servers declare `packages = ["<name>"]` in `pyproject.toml` but place `__init__.py` + `server.py` at the project root, not in a `<name>/` subdirectory. Hatchling silently builds wheels containing only metadata; `python -m mcp_<name>.server` would fail on import after `pip install` unless PYTHONPATH happens to point at `packages/mcp-servers/`. The new `mcp_rxn_conditions` server uses the proper `<name>/<name>/server.py` layout. Fix the two existing servers in a follow-up by moving their `.py` files into a subdirectory and updating the Dockerfile / CI install paths.
+- **Shared `JsonFormatter` / `_configure_logging` util across MCP servers** — third copy now lives in `mcp_rxn_conditions/server.py`. Extract to a small `mcp_chemclaw_shared` package when a fourth server is added.
+- **LLM extraction of `reactions.conditions` free-text → JSON** — Phase A's `suggest_conditions_from_neighbors` returns free-text from historical reactions; an LLM extractor at registration time would let `find_neighbor_conditions` return structured payloads directly. Defer until measured.
+- **ORD ingestion pipeline** — backfill `reactions` with structured `ReactionConditions` from the Open Reaction Database. Useful precedent for the neighbor lookup, but heavy ETL work — defer until the registry is too sparse to ground new campaigns.
+- **Parrot / Reacon self-host trial** — only if RXN4Chemistry quota / accuracy is measured as the bottleneck. Heavy deps (PyTorch + transformers); requires GPU container. Today the hosted SDK is a one-line `RXN4Chemistry` dep, no custom inference infra.
+
 ### CI mypy gate (May 2026, Phase B follow-up)
 
 - **mypy CI version-drift** — `Type-check (mypy)` step is `continue-on-error: true` as of feat/investigations-and-hypotheses. Local mypy (pinned to 1.19.1) reports clean across all 81 source files; CI's mypy fails. The Actions log UI doesn't expose the error text to WebFetch and there's no MCP tool for raw job logs, so we can't reproduce. Re-enable the gate once one of (a) a contributor can `gh run view --log` and paste the offending lines, (b) we add a CI step that writes mypy output to a path visible from the run summary, or (c) the underlying mismatch is found another way. Affected PRs: #116 (three red CI runs at commits 2416137 / 86964b0 / c2471c1, each failing only at `Type-check (mypy)`).

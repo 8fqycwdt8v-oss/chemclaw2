@@ -135,6 +135,10 @@ async def process_running_campaigns(
         mark_step_failed,
         system_advance_campaign,
     )
+    from api.db.queries.reaction_conditions import (
+        get_cached_prediction,
+        record_used_prediction,
+    )
 
     campaigns = await get_running_campaigns(db)
     updates = 0
@@ -150,8 +154,27 @@ async def process_running_campaigns(
             step_id = step["id"]
             try:
                 result = await _execute_step(step)
+                # Link a prior prediction (if any) to this step so the
+                # predicted-vs-actual feedback loop has a join key. Best-effort:
+                # if the prediction cache is empty for this reaction, skip
+                # silently — the step still completes.
+                prediction_id: str | None = None
+                rxn_smiles = step.get("reaction_smiles")
+                if rxn_smiles:
+                    try:
+                        cached = await get_cached_prediction(
+                            db, rxn_smiles, model="rxn4chemistry:latest"
+                        )
+                        if cached:
+                            prediction_id = cached["id"]
+                            result = {**result, "prediction_id": prediction_id}
+                    except Exception:
+                        logger.exception("prediction_cache_lookup_failed step=%s", step_id)
+
                 async with db.begin():
                     await mark_step_complete(db, step_id, result)
+                    if prediction_id:
+                        await record_used_prediction(db, prediction_id, step_id)
                 updates += 1
                 logger.info("campaign_step_complete campaign=%s step=%s", campaign_id, step_id)
             except Exception as e:

@@ -35,7 +35,7 @@ jobs:
 
       - name: Install MCP servers
         run: |
-          pip install packages/mcp-servers/mcp_molfp packages/mcp-servers/mcp_rxnfp packages/mcp-servers/mcp_retrosynth
+          pip install packages/mcp-servers/mcp_molfp packages/mcp-servers/mcp_rxnfp packages/mcp-servers/mcp_retrosynth packages/mcp-servers/mcp_rxn_conditions
 
       - name: Lint (ruff)
         run: ruff check api/ packages/
