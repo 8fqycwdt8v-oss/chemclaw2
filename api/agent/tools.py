@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import logging
 import os
 import re
 import socket
+import urllib.parse
 from typing import Any
 from urllib.parse import urlparse
 
@@ -226,9 +228,9 @@ async def _ingest_paper_chunks(
         }
         for (idx, section, txt), emb in zip(parts, embeddings)
     ]
+    # insert_paper_chunks manages its own transaction; we just provide a session.
     async with session_factory() as db:
-        async with db.begin():
-            return await insert_paper_chunks(db, paper_id, chunks)
+        return await insert_paper_chunks(db, paper_id, chunks)
 
 
 # ── Tool factory ──────────────────────────────────────────────────────────────
@@ -572,6 +574,13 @@ def build_chemclaw_mcp_server(
         OpenAI text-embedding-3-small, and persisted to `paper_chunks` for
         later semantic / hybrid retrieval via `paper_qa`.
 
+        The metadata upsert and the chunk ingest run as two separate
+        transactions by design: if chunk ingest fails (embedding API down,
+        bad text encoding, etc.) the paper row stays committed because the
+        body is recoverable from `papers.content_text` — a later re-call
+        with `ingest_chunks=True` re-runs chunking idempotently via the
+        ON CONFLICT clause in insert_paper_chunks.
+
         Returns {id, already_existed, chunks_written}.
         """
         from api.db.queries.knowledge import upsert_paper
@@ -827,9 +836,8 @@ def build_chemclaw_mcp_server(
                         text_body = text_body[max(0, idx - 100): idx + 2000]
                 payload = entry.get("payload") or {}
                 if isinstance(payload, str):
-                    import json as _json
                     try:
-                        payload = _json.loads(payload)
+                        payload = json.loads(payload)
                     except Exception:
                         payload = {}
                 return {
@@ -878,8 +886,11 @@ def build_chemclaw_mcp_server(
     async def name_to_structure(name: str) -> dict[str, Any]:
         """Resolve a chemical name to SMILES + CAS via the NCI CACTUS service.
 
+        Issues the three lookups (SMILES / CAS / IUPAC) in parallel.
         Cached in external_facts under source_id=cactus:<name-normalised> with
-        7-day TTL. Returns {smiles, cas, iupac_name} or {error} on failure.
+        7-day TTL — CACTUS is rate-throttled (~20 req/s sustained) so cold
+        lookups should stay rare. Returns {smiles, cas, iupac_name, cached}
+        or {error, name} on failure.
         """
         from datetime import datetime as _dt
         from datetime import timedelta, timezone
@@ -889,7 +900,9 @@ def build_chemclaw_mcp_server(
         q = name.strip()
         if not q or len(q) > 200:
             return {"error": "name must be 1-200 chars"}
-        # Normalise for caching: lowercase, collapse whitespace.
+        # Normalise for caching: lowercase, collapse whitespace. The cache_key
+        # is bounded by the 200-char `name` cap above so it can't be used as
+        # an arbitrary-length write into external_facts.source_id.
         norm = re.sub(r"\s+", " ", q.lower())
         cache_key = f"cactus:{norm}"
         cutoff = _dt.now(tz=timezone.utc) - timedelta(days=7)
@@ -902,43 +915,44 @@ def build_chemclaw_mcp_server(
             if last_seen and last_seen >= cutoff:
                 payload = cached.get("payload") or {}
                 if isinstance(payload, str):
-                    import json as _json
                     try:
-                        payload = _json.loads(payload)
+                        payload = json.loads(payload)
                     except Exception:
                         payload = {}
                 return {**payload, "cached": True}
 
         # CACTUS endpoints return plain text (one value per request) or 404.
-        # URL-encode the name so spaces/special chars in user input survive.
-        import urllib.parse as _up
-        encoded = _up.quote(q, safe="")
-        endpoints = {
-            "smiles": f"https://cactus.nci.nih.gov/chemical/structure/{encoded}/smiles",
-            "cas": f"https://cactus.nci.nih.gov/chemical/structure/{encoded}/cas",
-            "iupac_name": f"https://cactus.nci.nih.gov/chemical/structure/{encoded}/iupac_name",
-        }
-        result: dict[str, Any] = {"name": q}
-        for field, url in endpoints.items():
+        encoded = urllib.parse.quote(q, safe="")
+        fields = ("smiles", "cas", "iupac_name")
+        urls = [
+            f"https://cactus.nci.nih.gov/chemical/structure/{encoded}/{f}"
+            for f in fields
+        ]
+
+        async def _fetch_one(url: str, field: str) -> tuple[str, str | None, str | None]:
+            """Return (field, value-or-None, fatal-error-or-None)."""
             try:
                 r = await _fetch_validated(url, enforce_domain_allowlist=True, timeout=10.0)
             except _SSRFError as e:
-                return {"error": str(e)}
+                return field, None, str(e)  # SSRF guard is fatal for the whole call.
             except Exception as e:
                 logger.warning("cactus_fetch_failed field=%s name=%s: %s", field, q[:50], e)
-                result[field] = None
-                continue
-            if r.status_code == 404:
-                result[field] = None
-                continue
-            if not r.is_success:
-                result[field] = None
-                continue
-            # CACTUS may return multiple values newline-separated (e.g. several CAS
-            # numbers for one structure). Take the first non-empty line.
+                return field, None, None
+            if r.status_code == 404 or not r.is_success:
+                return field, None, None
+            # CACTUS may return multiple newline-separated values; first wins.
             text_body = r.text.strip()
             first = next((ln.strip() for ln in text_body.splitlines() if ln.strip()), None)
-            result[field] = first
+            return field, first, None
+
+        responses = await asyncio.gather(*(
+            _fetch_one(url, field) for url, field in zip(urls, fields)
+        ))
+        result: dict[str, Any] = {"name": q}
+        for field, value, fatal in responses:
+            if fatal is not None:
+                return {"error": fatal, "name": q}
+            result[field] = value
 
         if result.get("smiles") is None and result.get("cas") is None:
             return {"error": f"CACTUS could not resolve '{q}'", "name": q}
@@ -957,35 +971,38 @@ def build_chemclaw_mcp_server(
     async def patent_coverage(smiles: str) -> dict[str, Any]:
         """Count patents referencing a compound via PubChem.
 
-        Resolves SMILES → CID, then queries the PubChem patent count endpoint.
-        Returns {cid, patent_count, sample_patent_ids} or {error}.
-        High patent count is a signal the chemotype is well-explored
-        commercially; zero indicates open IP space (but is also a hint the
-        compound may be obscure or unregistered).
+        Resolves SMILES → CID, then queries the PubChem PatentID xref endpoint.
+        Returns either {cid, patent_count, sample_patent_ids} on success or
+        {cid, error} on failure — `cid` is always present (None when SMILES
+        couldn't be resolved at all) so the agent can branch on shape
+        without worrying about which step failed.
+
+        High patent count signals a chemotype is well-explored commercially;
+        zero may mean open IP space, or simply that the compound is too
+        obscure to have been indexed yet.
         """
         s = smiles.strip()
         if not s or len(s) > 1000:
-            return {"error": "smiles must be 1-1000 chars"}
-        import urllib.parse as _up
-        encoded_smiles = _up.quote(s, safe="")
+            return {"cid": None, "error": "smiles must be 1-1000 chars"}
+        encoded_smiles = urllib.parse.quote(s, safe="")
         try:
             r = await _fetch_validated(
                 f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/{encoded_smiles}/cids/JSON",
                 enforce_domain_allowlist=True, timeout=15.0,
             )
         except _SSRFError as e:
-            return {"error": str(e)}
+            return {"cid": None, "error": str(e)}
         except Exception as e:
             logger.warning("pubchem_cid_lookup_failed smiles_len=%d: %s", len(s), e)
-            return {"error": "PubChem CID lookup failed"}
+            return {"cid": None, "error": "PubChem CID lookup failed"}
         if r.status_code == 404:
-            return {"error": "SMILES not found in PubChem", "smiles": s}
+            return {"cid": None, "error": "SMILES not found in PubChem", "smiles": s}
         if not r.is_success:
-            return {"error": f"PubChem returned HTTP {r.status_code}"}
+            return {"cid": None, "error": f"PubChem returned HTTP {r.status_code}"}
         try:
             cids = (r.json().get("IdentifierList") or {}).get("CID") or []
         except Exception:
-            return {"error": "PubChem response could not be parsed"}
+            return {"cid": None, "error": "PubChem response could not be parsed"}
         if not cids:
             return {"cid": None, "patent_count": 0, "sample_patent_ids": []}
         cid = cids[0]
@@ -995,7 +1012,7 @@ def build_chemclaw_mcp_server(
                 enforce_domain_allowlist=True, timeout=20.0,
             )
         except _SSRFError as e:
-            return {"error": str(e)}
+            return {"cid": cid, "error": str(e)}
         except Exception as e:
             logger.warning("pubchem_patent_lookup_failed cid=%s: %s", cid, e)
             return {"cid": cid, "error": "Patent xref fetch failed"}

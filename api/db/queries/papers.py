@@ -113,44 +113,54 @@ async def insert_paper_chunks(
     paper_id: str,
     chunks: list[dict[str, Any]],
 ) -> int:
-    """Bulk-insert chunks for a paper. Caller manages the transaction.
+    """Bulk-insert chunks for a paper as one transaction.
 
     Each chunk dict must have keys: chunk_idx (int), text (str),
     embedding (list[float] of length EMBED_DIM | None), section (str | None),
     page (int | None). Existing chunks for (paper_id, chunk_idx) are
     overwritten so re-ingest is idempotent.
 
+    Wraps the N inserts in `async with session.begin()` per the
+    CLAUDE.md "multi-step state transitions" rule — either every chunk
+    lands or none of them do, so partial paper ingest can't leave a
+    half-populated body in the table. Embedding dim mismatch raises
+    ValueError before any row is touched.
+
     Returns the number of chunks written.
     """
     if not chunks:
         return 0
-    n = 0
+    # Validate dims up-front so we don't write half the rows then raise.
     for c in chunks:
         emb = c.get("embedding")
         if emb is not None and len(emb) != EMBED_DIM:
             raise ValueError(f"embedding for chunk {c.get('chunk_idx')} has wrong dim: {len(emb)}")
-        vec_str = ("[" + ",".join(map(str, emb)) + "]") if emb is not None else None
-        await db.execute(
-            text(f"""
-                INSERT INTO paper_chunks (paper_id, chunk_idx, section, page, text, embedding)
-                VALUES (CAST(:pid AS uuid), :idx, :sec, :pg, :txt,
-                        {'CAST(:vec AS vector(' + str(EMBED_DIM) + '))' if vec_str else 'NULL'})
-                ON CONFLICT (paper_id, chunk_idx) DO UPDATE
-                    SET section   = EXCLUDED.section,
-                        page      = EXCLUDED.page,
-                        text      = EXCLUDED.text,
-                        embedding = EXCLUDED.embedding
-            """),
-            {
-                "pid": paper_id,
-                "idx": int(c["chunk_idx"]),
-                "sec": c.get("section"),
-                "pg": c.get("page"),
-                "txt": c["text"],
-                **({"vec": vec_str} if vec_str else {}),
-            },
-        )
-        n += 1
+    n = 0
+    async with db.begin():
+        for c in chunks:
+            emb = c.get("embedding")
+            vec_str = ("[" + ",".join(map(str, emb)) + "]") if emb is not None else None
+            await db.execute(
+                text(f"""
+                    INSERT INTO paper_chunks (paper_id, chunk_idx, section, page, text, embedding)
+                    VALUES (CAST(:pid AS uuid), :idx, :sec, :pg, :txt,
+                            {'CAST(:vec AS vector(' + str(EMBED_DIM) + '))' if vec_str else 'NULL'})
+                    ON CONFLICT (paper_id, chunk_idx) DO UPDATE
+                        SET section   = EXCLUDED.section,
+                            page      = EXCLUDED.page,
+                            text      = EXCLUDED.text,
+                            embedding = EXCLUDED.embedding
+                """),
+                {
+                    "pid": paper_id,
+                    "idx": int(c["chunk_idx"]),
+                    "sec": c.get("section"),
+                    "pg": c.get("page"),
+                    "txt": c["text"],
+                    **({"vec": vec_str} if vec_str else {}),
+                },
+            )
+            n += 1
     return n
 
 
@@ -295,14 +305,80 @@ Excerpt:
 {excerpt}
 \"\"\"
 
-Reply with a single JSON object on one line:
+Reply with EXACTLY one JSON object inside a ```json fenced block. No prose before or after.
+
+```json
 {{"score": <integer 1-10>, "summary": "<≤300 word summary of what the excerpt says about the query>"}}
+```
 
 Score guide:
 - 1-3: off-topic or contradicts the query
 - 4-6: tangentially related; provides context but no direct answer
 - 7-8: addresses the query partially or with caveats
 - 9-10: directly and substantively answers the query"""
+
+
+def _extract_json_object(text_body: str) -> str | None:
+    """Extract the first balanced {...} JSON object from a model reply.
+
+    Prefers a ```json fenced block when present (what RCS_PROMPT asks for);
+    otherwise walks the string tracking brace depth, ignoring braces inside
+    string literals. Returns None when no balanced object exists. Tolerant
+    of preceding prose, trailing prose, and nested objects in the summary.
+    """
+    if not text_body:
+        return None
+    # Prefer the fenced block.
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text_body, re.DOTALL)
+    if fence:
+        return fence.group(1)
+    # Fallback: balanced-brace scan.
+    start = text_body.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text_body)):
+        ch = text_body[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text_body[start: i + 1]
+    return None
+
+
+# Module-level lazy client matching the api/embeddings.py pattern. Each
+# paper_qa call would otherwise construct a fresh AsyncAnthropic; reusing
+# the instance avoids repeated TLS handshakes for sequential queries.
+_anthropic_client: Any = None
+
+
+def _get_anthropic_client() -> Any:
+    global _anthropic_client
+    if _anthropic_client is not None:
+        return _anthropic_client
+    import os
+
+    from anthropic import AsyncAnthropic
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return None
+    _anthropic_client = AsyncAnthropic(api_key=api_key)
+    return _anthropic_client
 
 
 async def score_chunks_with_llm(
@@ -319,24 +395,25 @@ async def score_chunks_with_llm(
     Failures (LLM error, malformed JSON) attach `rcs_error` and leave the
     chunk's other fields intact. Caller can filter on `relevance_score`
     presence to drop those.
+
+    Uses Anthropic for scoring (`claude-haiku-4-5` by default — override via
+    `ANTHROPIC_RCS_MODEL`) because ANTHROPIC_API_KEY is already required by
+    the agent runtime; OpenAI is reserved for embeddings.
     """
     if not chunks:
         return []
-    # Anthropic client is the easiest path — keys already provisioned. Falls
-    # back gracefully when the lib isn't installed (returns chunks unscored).
     try:
-        from anthropic import AsyncAnthropic
+        import anthropic  # noqa: F401 — import-side import-check only
     except ImportError:
         logger.warning("anthropic_unavailable for RCS — returning chunks unscored")
         return [{**c, "rcs_error": "anthropic SDK not installed"} for c in chunks]
     import os
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
+    client = _get_anthropic_client()
+    if client is None:
         logger.warning("ANTHROPIC_API_KEY missing — returning chunks unscored")
         return [{**c, "rcs_error": "ANTHROPIC_API_KEY not configured"} for c in chunks]
     model = os.environ.get("ANTHROPIC_RCS_MODEL", "claude-haiku-4-5-20251001")
-    client = AsyncAnthropic(api_key=api_key)
     sem = asyncio.Semaphore(max_concurrency)
 
     async def score_one(c: dict[str, Any]) -> dict[str, Any]:
@@ -361,13 +438,13 @@ async def score_chunks_with_llm(
         for block in resp.content:
             if getattr(block, "type", None) == "text":
                 text_body += getattr(block, "text", "")
-        # Extract the first {...} JSON object in the response, tolerant of
-        # surrounding prose / fenced code blocks.
-        match = re.search(r"\{[\s\S]*?\}", text_body)
-        if not match:
+        # Prefer ```json fenced extraction, fall back to balanced-brace scan
+        # so nested braces in the summary don't truncate the parse.
+        raw = _extract_json_object(text_body)
+        if raw is None:
             return {**c, "rcs_error": "no JSON in LLM response"}
         try:
-            parsed = json.loads(match.group(0))
+            parsed = json.loads(raw)
         except Exception:
             return {**c, "rcs_error": "JSON parse failed"}
         score_val = parsed.get("score")

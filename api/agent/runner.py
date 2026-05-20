@@ -36,7 +36,20 @@ markdown report — you then persist it via finalize_deep_research.
 For citation-conflict resolution on a wiki page, dispatch
 subagent_type='contradiction-resolver'. The sub-agent reads both citations
 and the chunks that reference them, weighs the evidence, and returns a
-proposed winner + reason that you persist via record_contradiction."""
+proposed winner + reason that you persist via record_contradiction.
+
+When the user asks evidence-grounded questions about specific papers
+(or "what does the literature say about X"), prefer `paper_qa` over
+plain `wiki_lookup` / `web_search` — it retrieves paper chunks via
+hybrid FTS + semantic search and reranks them with a per-chunk
+relevance score and summary, so every claim you cite is traceable to
+a specific paper section.
+
+For chemistry name → structure conversions, use `name_to_structure`
+(NCI CACTUS, 7-day cached). For prior-art reconnaissance on a
+candidate molecule, use `patent_coverage` (PubChem patent xrefs). To
+seed a `confirm_synthesis_plan`, call `propose_retrosynthesis` first
+to get plausible one-step disconnections."""
 
 DEEP_RESEARCH_PROMPT = """You are a focused research sub-agent for ChemClaw.
 

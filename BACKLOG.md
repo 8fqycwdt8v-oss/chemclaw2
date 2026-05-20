@@ -80,3 +80,12 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - ~~`patch_wiki_page` defense-in-depth~~ — resolved in review-fixes-A: UPDATE now includes `AND created_by = :updated_by`.
 - ~~`fp_worker` imports `sqlalchemy.text`~~ — resolved in review-fixes-A: extracted into `api/db/queries/fingerprints.py`.
 - **Route-layer integration tests** — `routes/wiki.py`, `routes/admin.py`, `routes/chat.py` SSE happy path and `routes/campaigns.py` are not exercised end-to-end. Health smoke + substance gate are the only HTTP-layer tests today.
+
+### Phase A follow-ups (paper RAG / retrosynth / ChemCrow, May 2026)
+
+- **HNSW index on `paper_chunks.embedding`** — deferred per migration 0038 comment; build with `CREATE INDEX CONCURRENTLY` once row counts justify it (matches the wiki_chunks pattern, which still does linear scans). Trigger: > 10k ingested chunks across active papers.
+- **DB-integration test for `paper_qa` end-to-end** — `test_paper_chunks.py` covers chunking only. A `test_papers_hybrid_search.py` modeled on `test_hybrid_search.py` would seed chunks, embed via the test conftest's stubbed embedder, run `hybrid_search_paper_chunks`, and assert RRF ordering. Blocked on a test-side embedder stub usable from a query-layer test.
+- **MCP-tool smoke tests for the new chemistry surface** — `paper_qa`, `propose_retrosynthesis`, `name_to_structure`, `patent_coverage` are exercised only via their underlying libraries today. Mirror the SSRF-rejection pattern from `test_ssrf.py` for each.
+- **Chunk-size / overlap config** — `_ingest_paper_chunks` hardcodes 1500/200. Surface via `PAPER_CHUNK_SIZE` / `PAPER_CHUNK_OVERLAP` env vars when a customer pushes back on the defaults.
+- **OpenAI fallback for RCS scoring** — `score_chunks_with_llm` is Anthropic-only. Add an OpenAI path keyed off `RCS_PROVIDER=openai` if a future deployment can't depend on `ANTHROPIC_API_KEY`.
+- **External retrosynthesis service** — the 11-template curated library is a deliberate floor. When demand justifies, wire AiZynthFinder / ASKCOS / IBM RXN as a second `propose_retrosynthesis_deep` tool, keeping the template fast-path for first-pass disconnections.

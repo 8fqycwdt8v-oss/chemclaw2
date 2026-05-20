@@ -419,6 +419,14 @@ class Paper(Base):
 
 
 class PaperChunk(Base):
+    """Body chunks of a paper, embedded for hybrid retrieval.
+
+    No `created_by` column on purpose — ownership inherits from the parent
+    paper via FK + `ON DELETE CASCADE`, matching the wiki_pages → wiki_chunks
+    relationship. The chunk_idx + ON CONFLICT clause in
+    api/db/queries/papers.py:insert_paper_chunks make re-ingest idempotent.
+    """
+
     __tablename__ = "paper_chunks"
 
     id: Mapped[uuid.UUID] = _uuid_pk()
