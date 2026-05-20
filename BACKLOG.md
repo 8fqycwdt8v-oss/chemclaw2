@@ -80,3 +80,11 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - ~~`patch_wiki_page` defense-in-depth~~ — resolved in review-fixes-A: UPDATE now includes `AND created_by = :updated_by`.
 - ~~`fp_worker` imports `sqlalchemy.text`~~ — resolved in review-fixes-A: extracted into `api/db/queries/fingerprints.py`.
 - **Route-layer integration tests** — `routes/wiki.py`, `routes/admin.py`, `routes/chat.py` SSE happy path and `routes/campaigns.py` are not exercised end-to-end. Health smoke + substance gate are the only HTTP-layer tests today.
+
+### Reaction condition prediction (May 2026)
+
+- **mcp_molfp / mcp_rxnfp wheel layout** — both servers declare `packages = ["<name>"]` in `pyproject.toml` but place `__init__.py` + `server.py` at the project root, not in a `<name>/` subdirectory. Hatchling silently builds wheels containing only metadata; `python -m mcp_<name>.server` would fail on import after `pip install` unless PYTHONPATH happens to point at `packages/mcp-servers/`. The new `mcp_rxn_conditions` server uses the proper `<name>/<name>/server.py` layout. Fix the two existing servers in a follow-up by moving their `.py` files into a subdirectory and updating the Dockerfile / CI install paths.
+- **Shared `JsonFormatter` / `_configure_logging` util across MCP servers** — third copy now lives in `mcp_rxn_conditions/server.py`. Extract to a small `mcp_chemclaw_shared` package when a fourth server is added.
+- **LLM extraction of `reactions.conditions` free-text → JSON** — Phase A's `suggest_conditions_from_neighbors` returns free-text from historical reactions; an LLM extractor at registration time would let `find_neighbor_conditions` return structured payloads directly. Defer until measured.
+- **ORD ingestion pipeline** — backfill `reactions` with structured `ReactionConditions` from the Open Reaction Database. Useful precedent for the neighbor lookup, but heavy ETL work — defer until the registry is too sparse to ground new campaigns.
+- **Parrot / Reacon self-host trial** — only if RXN4Chemistry quota / accuracy is measured as the bottleneck. Heavy deps (PyTorch + transformers); requires GPU container. Today the hosted SDK is a one-line `RXN4Chemistry` dep, no custom inference infra.

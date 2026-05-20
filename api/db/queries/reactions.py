@@ -45,6 +45,32 @@ async def find_similar_reactions(
     ]
 
 
+async def find_neighbor_conditions(
+    db: AsyncSession,
+    query_fp_bits: str,
+    limit: int = 10,
+    min_similarity: float = 0.4,
+) -> list[dict[str, Any]]:
+    """Return DRFP neighbors that have a non-empty `conditions` text.
+
+    Wraps `find_similar_reactions` and filters out rows where the
+    historical conditions field is null or whitespace — those neighbors
+    carry no precedent worth surfacing to the agent.
+    """
+    neighbors = await find_similar_reactions(db, query_fp_bits, limit, min_similarity)
+    return [
+        {
+            "reactionId": n["id"],
+            "rxnSmiles": n["rxnSmiles"],
+            "name": n["name"],
+            "conditions": n["conditions"],
+            "similarity": n["similarity"],
+        }
+        for n in neighbors
+        if n.get("conditions") and n["conditions"].strip()
+    ]
+
+
 async def insert_reaction(
     db: AsyncSession,
     rxn_smiles: str,
