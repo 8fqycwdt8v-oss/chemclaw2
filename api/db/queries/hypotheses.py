@@ -96,12 +96,19 @@ async def create_hypothesis(
             )
             if owned.first() is None:
                 raise ValueError("parent_id not found or not owned by user")
+        # `CAST(:pid AS uuid)` handles NULL transparently (CAST(NULL AS uuid)
+        # IS NULL). The previous `CASE WHEN :pid IS NULL THEN NULL ELSE
+        # CAST(:pid AS uuid) END` form failed on Postgres with asyncpg
+        # because the driver couldn't determine the type of the bare
+        # untyped NULL branch — "could not determine data type of parameter
+        # $2". This is the same root cause that drove the codebase-wide
+        # text() CAST fix in PR #92 (see BACKLOG "Tier D").
         result = await db.execute(
             text("""
                 INSERT INTO hypotheses
                     (investigation_id, parent_id, statement, rationale, created_by)
                 VALUES (CAST(:iid AS uuid),
-                        CASE WHEN :pid IS NULL THEN NULL ELSE CAST(:pid AS uuid) END,
+                        CAST(:pid AS uuid),
                         :stmt, :rationale, :uid)
                 RETURNING id::text
             """),
