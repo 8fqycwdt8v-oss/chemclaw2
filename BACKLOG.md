@@ -23,7 +23,7 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - **RLS on `notifications`** — enable with per-user predicate. Trigger: tenants > 1.
 - **Skills catalog in DB** — promote filesystem skill packs to a table with scope (personal/project/org) + maturity tier. Trigger: skill count grows.
 - **Tool forging** — NL tool synthesis with sandboxed execution (§3.13). v3 only.
-- **Hybrid FTS + semantic with RRF fusion for wiki** — single mode today. Trigger: measurable recall failure when SMILES and paraphrase queries both miss.
+- ~~Hybrid FTS + semantic with RRF fusion for wiki~~ — shipped in feat/wiki-hybrid-search PR. New `hybrid_search_wiki` runs both legs in parallel and fuses via RRF (K=60). Default mode for the `wiki_lookup` agent tool and `GET /api/search` (the previous FTS-only path is preserved as `mode=fts` for exact-term queries like SMILES/CAS).
 - **`papers` / `properties` extraction pipeline** — tables exist (migrations 0026 / 0027) but nothing writes to them after the entity-extractor sub-agent was removed. Right shape is a post-`wiki_upsert` pg-boss job, deferred until demand.
 - **LLM-level eval against a golden chemistry Q&A set** — `eval_runs` was scoped to deterministic probes only; LLM scoring deferred per §3.9 trigger (prompt iteration becomes the measured bottleneck).
 - ~~Campaign approval API~~ — shipped in feat/campaign-step-approval PR. Backend `POST /api/campaigns/{id}/steps/{idx}/approve` + `/reject` + `GET /api/campaigns/steps/awaiting-approval` with owner-scope + source-state predicate. Agent tool `confirm_synthesis_plan` now accepts `requires_approval: bool` per step. UI surface deferred.

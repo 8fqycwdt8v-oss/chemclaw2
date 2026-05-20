@@ -79,6 +79,85 @@ async def semantic_search_wiki(
     return out
 
 
+async def hybrid_search_wiki(
+    db: AsyncSession,
+    query: str,
+    embedding: list[float],
+    limit: int = 10,
+    include_archived: bool = False,
+) -> list[dict[str, Any]]:
+    """Run FTS and semantic search in parallel, fuse with Reciprocal Rank Fusion.
+
+    RRF scores each candidate as ``score = sum(1 / (k + rank_i))`` over the
+    ranks it received in each list. Default ``k = 60`` matches the original
+    paper (Cormack et al., 2009) and the convention used by Elasticsearch
+    and pgvector tutorials. The fused list is deduplicated by page slug.
+
+    Returns one row per page, shape:
+        {id, slug, title, maturity, content_text, text, score, fts_rank, sem_rank}
+
+    Spec §3.7 ("FTS + semantic fusion"). Use when the caller can't
+    predict whether the query benefits from lexical or semantic recall
+    (the common case for natural-language wiki questions).
+    """
+    import asyncio
+
+    safe_limit = min(max(1, limit), 50)
+    # Over-fetch from each leg so RRF has enough candidates to fuse.
+    leg_limit = safe_limit * 3
+    fts_rows, sem_rows = await asyncio.gather(
+        search_wiki_by_fts(db, query, limit=leg_limit, include_archived=include_archived),
+        semantic_search_wiki(
+            db, embedding, limit=leg_limit, include_archived=include_archived
+        ),
+    )
+
+    K = 60  # RRF damping constant — standard value.
+    # Build a slug → (rank in fts, rank in semantic, row from whichever has it)
+    merged: dict[str, dict[str, Any]] = {}
+    for rank, row in enumerate(fts_rows, start=1):
+        slug = row["slug"]
+        entry = merged.setdefault(slug, {"row": row, "fts_rank": None, "sem_rank": None})
+        if entry["fts_rank"] is None:
+            entry["fts_rank"] = rank
+            # FTS rows have content_text but not chunk text; preserve both.
+            if "content_text" in row and "content_text" not in entry["row"]:
+                entry["row"] = {**entry["row"], "content_text": row["content_text"]}
+
+    for rank, row in enumerate(sem_rows, start=1):
+        slug = row["slug"]
+        entry = merged.setdefault(slug, {"row": row, "fts_rank": None, "sem_rank": None})
+        if entry["sem_rank"] is None:
+            entry["sem_rank"] = rank
+            # Semantic rows have the chunk text — useful for snippets.
+            if "text" in row:
+                entry["row"] = {**entry["row"], "text": row["text"]}
+
+    scored: list[dict[str, Any]] = []
+    for slug, entry in merged.items():
+        score = 0.0
+        if entry["fts_rank"] is not None:
+            score += 1.0 / (K + entry["fts_rank"])
+        if entry["sem_rank"] is not None:
+            score += 1.0 / (K + entry["sem_rank"])
+        row = entry["row"]
+        # The semantic leg returns the row keyed by `page_id`; the FTS leg
+        # uses `id`. Surface a single `id` field so API clients don't have
+        # to know which leg the row came from.
+        normalized_id = row.get("id") or row.get("page_id")
+        scored.append({
+            **row,
+            "id": normalized_id,
+            "slug": slug,
+            "score": score,
+            "fts_rank": entry["fts_rank"],
+            "sem_rank": entry["sem_rank"],
+        })
+
+    scored.sort(key=lambda r: r["score"], reverse=True)
+    return scored[:safe_limit]
+
+
 async def list_wiki_pages(
     db: AsyncSession,
     page_size: int = 50,

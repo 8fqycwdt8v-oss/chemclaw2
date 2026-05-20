@@ -251,17 +251,25 @@ def build_chemclaw_mcp_server(
     async def wiki_lookup(
         query: str | None = None,
         slug: str | None = None,
-        mode: str = "fts",
+        mode: str = "hybrid",
         limit: int = 5,
     ) -> dict[str, Any]:
         """Look up wiki knowledge. Provide slug for a direct page fetch, or
-        query for FTS/semantic search (mode='fts' or mode='semantic')."""
+        query for search (mode='hybrid' default, 'fts', or 'semantic').
+
+        'hybrid' runs FTS + semantic in parallel and fuses via Reciprocal
+        Rank Fusion — preferred for natural-language queries where you
+        can't predict whether lexical or semantic recall will win.
+        'fts' is faster and good for exact-term queries (SMILES, CAS,
+        precise titles). 'semantic' is best for paraphrases.
+        """
         from api.db.queries.wiki_read import (
-    get_wiki_page,
-    get_wiki_page_citations,
-    search_wiki_by_fts,
-    semantic_search_wiki,
-)
+            get_wiki_page,
+            get_wiki_page_citations,
+            hybrid_search_wiki,
+            search_wiki_by_fts,
+            semantic_search_wiki,
+        )
         async with session_factory() as db:
             if slug:
                 page = await get_wiki_page(db, slug)
@@ -277,6 +285,10 @@ def build_chemclaw_mcp_server(
                 from api.embeddings import embed_texts
                 embeddings = await embed_texts([query])
                 results = await semantic_search_wiki(db, embeddings[0], limit=limit)
+            elif mode == "hybrid":
+                from api.embeddings import embed_texts
+                embeddings = await embed_texts([query])
+                results = await hybrid_search_wiki(db, query, embeddings[0], limit=limit)
             else:
                 results = await search_wiki_by_fts(db, query, limit=limit)
         return {"mode": mode, "results": results}
