@@ -25,8 +25,15 @@ FROM python:3.11-slim AS runner
 WORKDIR /app
 
 # Runtime system libs only (no compilers).
+# `bubblewrap` (bwrap) is the strongest isolation tier the
+# mcp_codesandbox sandbox can pick — see sandbox.py:_bwrap_available.
+# When CAP_SYS_ADMIN is denied (default Docker seccomp), the sandbox
+# probes bwrap and falls back to `unshare`/plain subprocess. Shipping
+# bwrap costs ~70 KB and lets hosts that DO grant CAP_SYS_ADMIN get
+# container-grade isolation for free.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
+    bubblewrap \
     && rm -rf /var/lib/apt/lists/* \
     && addgroup --system --gid 1001 appuser \
     && adduser --system --uid 1001 --ingroup appuser appuser

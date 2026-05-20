@@ -1,23 +1,22 @@
 """Subprocess-based Python sandbox with hard resource limits.
 
 Trust boundary:
-    Callers MUST treat this as a *defense-in-depth* layer, not a full
-    container. The sandbox blocks accidental misbehaviour and bounded
-    abuse (infinite loop, fork bomb, fs blowout, gigantic stdout), but
-    a determined exploit can still:
-      - read files the calling user can read (cwd is a fresh tempdir,
-        but / is still visible).
-      - `import` any package installed in the host's *system*
-        site-packages — `python -I` only blocks PYTHONPATH / user-site,
-        not system-installed deps. The chemclaw2 `api` module IS
-        importable inside the sandbox on hosts where `pip install -e .`
-        has placed it in system site-packages.
-      - make outbound connections unless `unshare -n` is available
-        (best-effort — we probe at module load, fall back to no
-        net-namespace on hosts without CAP_SYS_ADMIN).
-      - exhaust CPU below the RLIMIT_CPU ceiling.
+    The sandbox picks the strongest isolation tier the host supports
+    (`_build_command` probes each at first use):
 
-    What is enforced:
+    1. bubblewrap (`bwrap --unshare-all`) — equivalent to a fresh
+       container: pid/net/ipc/uts/cgroup/mount/user namespaces all
+       dropped, all capabilities dropped, /usr + /lib read-only,
+       /tmp + /home are ephemeral tmpfs, only the run's own tempdir
+       is writable. Available on bare-metal / VM hosts where bwrap is
+       installed and CAP_SYS_ADMIN allows the namespace unshare.
+    2. `unshare -n -r` — network-namespace drop only (no fs / cgroup
+       isolation). Used when bwrap isn't available or its smoke
+       test fails (e.g. inside Docker with default seccomp).
+    3. plain `python -I` — env-strip + PYTHONPATH isolation only.
+       Last-resort fallback.
+
+    Each tier additionally enforces, at the OS level:
       - resource caps (CPU, memory, fs writes, fds, output bytes)
       - wall-clock SIGKILL backstop
       - clean env: only HOME, TMPDIR, PATH passed in; no API keys,
@@ -25,10 +24,16 @@ Trust boundary:
       - fresh cwd: agent-written files vanish when the run ends
       - PYTHONPATH / user-site stripped via `python -I`
 
-    BACKLOG entry tracks the move to Docker / firejail / nsjail for full
-    isolation. Until then, the agent's prompt safety gates + this set of
-    rlimits + the env-strip + the SDK's tool-use hooks are the layered
-    defenses.
+    Caveats — tier 2/3 hosts (no bwrap):
+      - `/` is still visible to the sandbox process (reads work, writes
+        to the host fs would fail because cwd is the tempdir).
+      - System site-packages remain importable; `import api` works if
+        chemclaw2 is `pip install -e .`-installed. `python -I` only
+        blocks PYTHONPATH / user-site, not system-installed deps.
+      - Network unblocked on tier 3.
+
+    Tier 1 (bwrap) closes all three caveats. The agent's prompt safety
+    gates + the SDK's tool-use hooks are layered on top regardless.
 
 What it does enforce:
     - CPU seconds (RLIMIT_CPU)         — kills runaway loops
@@ -152,9 +157,57 @@ def _unshare_available() -> bool:
     return r.returncode == 0
 
 
+@functools.cache
+def _bwrap_available() -> bool:
+    """Return True iff `bwrap` (bubblewrap) is installed AND
+    `--unshare-all` actually works on this host.
+
+    bwrap is a userspace sandboxer (the one Flatpak uses). On bare-metal
+    or VM hosts it gives us container-grade isolation; inside a Docker
+    container with the default seccomp profile, `--unshare-all` fails
+    with EPERM — those hosts fall back to the `unshare`/subprocess
+    path. The smoke test below differentiates the two cases.
+
+    Two checks: (1) `bwrap --version` exits 0 (binary is present),
+    (2) a minimal `bwrap --unshare-all true` invocation succeeds
+    (caps + namespaces actually work). If either fails we return False
+    and `_build_command` falls back to the unshare/plain path.
+    """
+    bwrap = shutil.which("bwrap")
+    if bwrap is None:
+        return False
+    import subprocess
+    try:
+        version_check = subprocess.run(
+            [bwrap, "--version"],
+            capture_output=True, timeout=2.0, check=False,
+        )
+        if version_check.returncode != 0:
+            return False
+        # Minimal smoke — full profile would fail for the wrong reason
+        # if e.g. /usr ro-bind didn't exist on this host. This pins
+        # only the cap + namespace requirements.
+        smoke = subprocess.run(
+            [bwrap, "--unshare-all", "--die-with-parent",
+             "--ro-bind", "/usr", "/usr",
+             "/usr/bin/true"],
+            capture_output=True, timeout=2.0, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.debug("bwrap probe raised: %s", e)
+        return False
+    return smoke.returncode == 0
+
+
 def _build_command(code: str, tmpdir: str) -> list[str]:
-    """Build the subprocess argv. Uses `unshare -n -r` when the host
-    permits it; falls back to plain `python -I -c` otherwise.
+    """Build the subprocess argv. Picks the strongest isolation the host
+    supports:
+
+      1. bubblewrap (`bwrap`) when available + smoke-tested — full
+         namespace + cap-drop, equivalent to running in a fresh container.
+      2. `unshare -n -r` — network-namespace drop only (no cgroup / no
+         filesystem isolation).
+      3. plain `python -I` — env-strip + PYTHONPATH isolation only.
 
     `python -I` runs in isolated mode: ignores PYTHONPATH, PYTHONHOME,
     PYTHONSTARTUP, doesn't add user site-packages to sys.path. Combined
@@ -169,6 +222,37 @@ def _build_command(code: str, tmpdir: str) -> list[str]:
     """
     wrapped = _FIGURE_PRELUDE + code
     py_argv = [sys.executable, "-I", "-c", wrapped]
+
+    if _bwrap_available():
+        bwrap = shutil.which("bwrap") or "bwrap"
+        # Minimal profile: read-only system libs + ephemeral writable
+        # /tmp and /home (the tmpdir-as-cwd already gives the user a
+        # writable workspace; --tmpfs is belt-and-suspenders for code
+        # that hard-codes /tmp). --unshare-all drops every namespace
+        # (pid/net/ipc/uts/cgroup/mount/user). --die-with-parent reaps
+        # the child if our process crashes. --cap-drop ALL ensures
+        # setuid binaries inside the sandbox can't escalate.
+        return [
+            bwrap,
+            "--ro-bind", "/usr", "/usr",
+            "--ro-bind", "/lib", "/lib",
+            # /lib64 isn't present on all distros (e.g. Alpine); skip
+            # gracefully via --ro-bind-try, which is a no-op when the
+            # source path doesn't exist.
+            "--ro-bind-try", "/lib64", "/lib64",
+            "--ro-bind-try", "/etc/alternatives", "/etc/alternatives",
+            "--tmpfs", "/tmp",
+            "--tmpfs", "/home",
+            "--proc", "/proc",
+            "--dev", "/dev",
+            "--bind", tmpdir, tmpdir,  # the sandbox writes here
+            "--chdir", tmpdir,
+            "--unshare-all",
+            "--die-with-parent",
+            "--cap-drop", "ALL",
+            *py_argv,
+        ]
+
     if _unshare_available():
         # `unshare -n` creates a new (empty) network namespace for the
         # child — no DNS, no routes, no inherited sockets. -r runs as
