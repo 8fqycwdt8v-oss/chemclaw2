@@ -207,3 +207,182 @@ async def test_fetch_crossref_invalid_json_returns_none(
     monkeypatch.setattr("api.agent.tools._fetch_validated", _fake_fetch)
     out = await de.fetch_crossref_metadata("10.1234/x")
     assert out is None
+
+
+# ── resolve_compound_name_to_smiles ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_resolve_compound_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_fetch(url: str, **kw: Any) -> httpx.Response:
+        assert "pubchem.ncbi.nlm.nih.gov" in url
+        assert "aspirin" in url
+        return httpx.Response(
+            200,
+            json={"PropertyTable": {"Properties": [{"CID": 2244, "CanonicalSMILES": "CC(=O)OC1=CC=CC=C1C(=O)O"}]}},
+        )
+
+    monkeypatch.setattr("api.agent.tools._fetch_validated", _fake_fetch)
+    out = await de.resolve_compound_name_to_smiles("aspirin")
+    assert out == "CC(=O)OC1=CC=CC=C1C(=O)O"
+
+
+@pytest.mark.asyncio
+async def test_resolve_compound_handles_special_chars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PubChem requires URL-encoding for names containing slashes, spaces,
+    parentheses, plus signs, etc. — IUPAC names are full of these."""
+    seen_urls: list[str] = []
+
+    async def _fake_fetch(url: str, **kw: Any) -> httpx.Response:
+        seen_urls.append(url)
+        return httpx.Response(404)
+
+    monkeypatch.setattr("api.agent.tools._fetch_validated", _fake_fetch)
+    await de.resolve_compound_name_to_smiles("(2S)-2-amino-3-methylbutanoic acid")
+
+    assert seen_urls
+    url = seen_urls[0]
+    # Raw special chars must not appear in the path.
+    assert "(2S)" not in url
+    assert " " not in url
+
+
+@pytest.mark.asyncio
+async def test_resolve_compound_404_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_fetch(url: str, **kw: Any) -> httpx.Response:
+        return httpx.Response(404)
+
+    monkeypatch.setattr("api.agent.tools._fetch_validated", _fake_fetch)
+    out = await de.resolve_compound_name_to_smiles("nonexistent-compound-xyz")
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_compound_empty_name_returns_none() -> None:
+    out = await de.resolve_compound_name_to_smiles("")
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_compound_oversize_name_returns_none() -> None:
+    out = await de.resolve_compound_name_to_smiles("x" * 500)
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_compound_empty_properties_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_fetch(url: str, **kw: Any) -> httpx.Response:
+        return httpx.Response(200, json={"PropertyTable": {"Properties": []}})
+
+    monkeypatch.setattr("api.agent.tools._fetch_validated", _fake_fetch)
+    out = await de.resolve_compound_name_to_smiles("phantom")
+    assert out is None
+
+
+# ── extract_entities_from_text ───────────────────────────────────────────────
+
+
+class _FakeBlock:
+    def __init__(self, name: str, payload: dict[str, Any]) -> None:
+        self.type = "tool_use"
+        self.name = name
+        self.input = payload
+
+
+class _FakeResponse:
+    def __init__(self, content: list[Any]) -> None:
+        self.content = content
+
+
+class _FakeMessages:
+    def __init__(self, response: _FakeResponse) -> None:
+        self._response = response
+
+    async def create(self, **kw: Any) -> _FakeResponse:
+        return self._response
+
+
+class _FakeAsyncAnthropic:
+    def __init__(self, response: _FakeResponse) -> None:
+        self.messages = _FakeMessages(response)
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "compounds": [{"name": "aspirin", "context": "used in study"}],
+        "citations": [{"identifier": "10.1234/abc", "context": "ref"}],
+    }
+    fake = _FakeAsyncAnthropic(_FakeResponse([_FakeBlock("extract_entities", payload)]))
+    monkeypatch.setattr("anthropic.AsyncAnthropic", lambda: fake)
+
+    out = await de.extract_entities_from_text("some chemistry document text...")
+    assert out["compounds"] == [{"name": "aspirin", "context": "used in study"}]
+    assert out["citations"] == [{"identifier": "10.1234/abc", "context": "ref"}]
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_empty_text_short_circuits() -> None:
+    out = await de.extract_entities_from_text("")
+    assert out == {"compounds": [], "citations": []}
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_returns_empty_on_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _BoomMessages:
+        async def create(self, **kw: Any) -> Any:
+            raise RuntimeError("simulated Anthropic outage")
+
+    class _BoomClient:
+        messages = _BoomMessages()
+
+    monkeypatch.setattr("anthropic.AsyncAnthropic", lambda: _BoomClient())
+    out = await de.extract_entities_from_text("some text")
+    assert out["compounds"] == []
+    assert out["citations"] == []
+    assert "error" in out
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_handles_no_tool_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the model returns text instead of a tool call, return empty."""
+    class _TextBlock:
+        type = "text"
+        text = "I refuse to use the tool."
+
+    fake = _FakeAsyncAnthropic(_FakeResponse([_TextBlock()]))
+    monkeypatch.setattr("anthropic.AsyncAnthropic", lambda: fake)
+    out = await de.extract_entities_from_text("text")
+    assert out["compounds"] == []
+    assert out["citations"] == []
+    assert out.get("error") == "no tool block"
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_truncates_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Long inputs are truncated to max_chars so token usage stays bounded."""
+    received_content: list[str] = []
+
+    class _CaptureMessages:
+        async def create(self, **kw: Any) -> Any:
+            received_content.append(kw["messages"][0]["content"])
+            return _FakeResponse([_FakeBlock("extract_entities", {"compounds": [], "citations": []})])
+
+    class _CaptureClient:
+        messages = _CaptureMessages()
+
+    monkeypatch.setattr("anthropic.AsyncAnthropic", lambda: _CaptureClient())
+    big_text = "x" * 50_000
+    await de.extract_entities_from_text(big_text, max_chars=1000)
+    assert received_content
+    assert len(received_content[0]) == 1000
