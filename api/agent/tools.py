@@ -1346,4 +1346,280 @@ def build_chemclaw_mcp_server(
             "total": len(routes),
         }
 
+    # ── Phase B: investigations + world model + hypotheses ───────────────────
+
+    @mcp.tool()
+    async def start_investigation(
+        title: str,
+        objective: str,
+    ) -> dict[str, Any]:
+        """Open a long-horizon research thread.
+
+        An investigation groups world-model entries + hypotheses under one
+        open-ended objective and outlives the chat session. Use this when
+        starting work on a topic you expect to revisit across multiple
+        sessions ("explore selective JAK1 inhibitors with reduced JAK2
+        liability"). Returns {id, status}.
+        """
+        t = title.strip()
+        o = objective.strip()
+        if not t or len(t) > 500:
+            return {"error": "title must be 1-500 chars"}
+        if not o or len(o) > 4000:
+            return {"error": "objective must be 1-4000 chars"}
+        from api.db.queries.investigations import create_investigation
+        async with session_factory() as db:
+            iid = await create_investigation(
+                db, t, o, created_by=user_id, session_id=session_id,
+            )
+        return {"id": iid, "status": "active"}
+
+    @mcp.tool()
+    async def list_investigations_tool(
+        status: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """List the caller's investigations newest-touched first.
+
+        `status` filters to one of: active, paused, complete. Default
+        returns all states. Use to resume work from a prior session.
+        """
+        from api.db.queries.investigations import list_investigations
+        if not (1 <= limit <= 100):
+            return {"error": "limit must be between 1 and 100"}
+        async with session_factory() as db:
+            try:
+                rows = await list_investigations(db, user_id, status=status, limit=limit)
+            except ValueError as e:
+                return {"error": str(e)}
+        return {"investigations": rows}
+
+    @mcp.tool()
+    async def update_investigation_status_tool(
+        investigation_id: str,
+        status: str,
+    ) -> dict[str, Any]:
+        """Move an investigation to active / paused / complete."""
+        from api.db.queries.investigations import update_investigation_status
+        async with session_factory() as db:
+            try:
+                ok = await update_investigation_status(
+                    db, investigation_id, user_id, status,
+                )
+            except ValueError as e:
+                return {"error": str(e)}
+        if not ok:
+            return {"error": "investigation not found or not owned by user"}
+        return {"id": investigation_id, "status": status}
+
+    @mcp.tool()
+    async def world_model_add(
+        investigation_id: str,
+        kind: str,
+        content: str,
+        payload: dict[str, Any] | None = None,
+        confidence: float | None = None,
+    ) -> dict[str, Any]:
+        """Persist one atomic claim into the investigation's world model.
+
+        `kind` is one of:
+          - 'fact' — something the agent now believes is true,
+          - 'assumption' — a working premise that may need revisiting,
+          - 'open_question' — a gap to investigate,
+          - 'evidence' — a citation/observation supporting other entries.
+
+        `confidence` is an optional 0–1 self-reported score. `payload` is a
+        JSONB escape hatch (e.g. {citation_id: ..., compound_id: ...}).
+
+        Use frequently during long investigations so you don't lose
+        context across rollouts — the world model is queryable; the
+        rolling chat context is not.
+        """
+        from api.db.queries.investigations import get_investigation
+        from api.db.queries.world_model import add_world_model_entry
+        c = content.strip()
+        if not c or len(c) > 4000:
+            return {"error": "content must be 1-4000 chars"}
+        async with session_factory() as db:
+            # Cross-table ownership check before delegating to the queries fn,
+            # which only predicates on its own table's created_by.
+            inv = await get_investigation(db, investigation_id, user_id)
+            if inv is None:
+                return {"error": "investigation not found or not owned by user"}
+            try:
+                eid = await add_world_model_entry(
+                    db, investigation_id, user_id, kind, c,
+                    payload=payload, confidence=confidence,
+                )
+            except ValueError as e:
+                return {"error": str(e)}
+        return {"id": eid, "kind": kind}
+
+    @mcp.tool()
+    async def world_model_query(
+        investigation_id: str,
+        kind: str | None = None,
+        status: str | None = None,
+        query: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Read the world model — list by kind/status or FTS-search.
+
+        Pass `query` for a full-text search over entry content (overrides
+        kind+status filters when set). Otherwise pass `kind` and/or
+        `status` to narrow. Returns entries newest-touched first by
+        default; FTS path orders by relevance.
+        """
+        from api.db.queries.investigations import get_investigation
+        from api.db.queries.world_model import (
+            list_world_model_entries,
+            search_world_model_entries,
+        )
+        if not (1 <= limit <= 200):
+            return {"error": "limit must be between 1 and 200"}
+        async with session_factory() as db:
+            inv = await get_investigation(db, investigation_id, user_id)
+            if inv is None:
+                return {"error": "investigation not found or not owned by user"}
+            try:
+                if query and query.strip():
+                    if len(query) > 500:
+                        return {"error": "query must be 1-500 chars"}
+                    entries = await search_world_model_entries(
+                        db, investigation_id, user_id, query.strip(), limit=limit,
+                    )
+                else:
+                    entries = await list_world_model_entries(
+                        db, investigation_id, user_id,
+                        kind=kind, status=status, limit=limit,
+                    )
+            except ValueError as e:
+                return {"error": str(e)}
+        return {"investigation_id": investigation_id, "entries": entries}
+
+    @mcp.tool()
+    async def world_model_supersede(
+        entry_id: str,
+        new_status: str = "superseded",
+    ) -> dict[str, Any]:
+        """Mark a world-model entry superseded (refined by new evidence) or
+        closed (the question is answered / the assumption was wrong).
+        `new_status` must be 'superseded' or 'closed'."""
+        from api.db.queries.world_model import update_world_model_entry_status
+        if new_status not in ("superseded", "closed"):
+            return {"error": "new_status must be 'superseded' or 'closed'"}
+        async with session_factory() as db:
+            try:
+                ok = await update_world_model_entry_status(
+                    db, entry_id, user_id, new_status,
+                )
+            except ValueError as e:
+                return {"error": str(e)}
+        if not ok:
+            return {"error": "entry not found or not owned by user"}
+        return {"id": entry_id, "status": new_status}
+
+    @mcp.tool()
+    async def propose_hypothesis(
+        investigation_id: str,
+        statement: str,
+        rationale: str | None = None,
+        parent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Add a hypothesis to an investigation.
+
+        `parent_id`, if set, marks this as an evolved child of an existing
+        hypothesis (Google AI Co-Scientist's Evolution agent pattern) and
+        must belong to the same user. The new hypothesis starts at the
+        default Elo rating (1000) until it's compared via `rank_hypotheses`.
+        """
+        from api.db.queries.hypotheses import create_hypothesis
+        from api.db.queries.investigations import get_investigation
+        s = statement.strip()
+        if not s or len(s) > 4000:
+            return {"error": "statement must be 1-4000 chars"}
+        if rationale is not None and len(rationale) > 4000:
+            return {"error": "rationale must be ≤4000 chars"}
+        async with session_factory() as db:
+            inv = await get_investigation(db, investigation_id, user_id)
+            if inv is None:
+                return {"error": "investigation not found or not owned by user"}
+            try:
+                hid = await create_hypothesis(
+                    db, investigation_id, user_id, s,
+                    rationale=rationale, parent_id=parent_id,
+                )
+            except ValueError as e:
+                return {"error": str(e)}
+        return {"id": hid, "parent_id": parent_id, "elo_rating": 1000.0}
+
+    @mcp.tool()
+    async def list_hypotheses_tool(
+        investigation_id: str,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """List hypotheses for an investigation, Elo-desc.
+
+        `status` filters to proposed / ranked / refined / retired.
+        """
+        from api.db.queries.hypotheses import list_hypotheses
+        from api.db.queries.investigations import get_investigation
+        if not (1 <= limit <= 100):
+            return {"error": "limit must be between 1 and 100"}
+        async with session_factory() as db:
+            inv = await get_investigation(db, investigation_id, user_id)
+            if inv is None:
+                return {"error": "investigation not found or not owned by user"}
+            try:
+                rows = await list_hypotheses(
+                    db, investigation_id, user_id, status=status, limit=limit,
+                )
+            except ValueError as e:
+                return {"error": str(e)}
+        return {"investigation_id": investigation_id, "hypotheses": rows}
+
+    @mcp.tool()
+    async def rank_hypotheses(
+        investigation_id: str,
+        hypothesis_a_id: str,
+        hypothesis_b_id: str,
+        winner: str,
+        reason: str | None = None,
+        decided_by: str | None = None,
+    ) -> dict[str, Any]:
+        """Record a pairwise judgment + update both Elo ratings.
+
+        `winner` must be 'a', 'b', or 'tie'. `decided_by` defaults to the
+        calling user id but can be set to 'agent:reflection' or
+        'agent:debate' when the agent itself is doing the judging (per
+        Google Co-Scientist's self-play debate pattern).
+
+        Returns the new Elo ratings; first-time-ranked hypotheses are also
+        moved out of the 'proposed' state.
+        """
+        from api.db.queries.hypotheses import record_pairwise_ranking
+        decided = decided_by or user_id
+        async with session_factory() as db:
+            try:
+                result = await record_pairwise_ranking(
+                    db, investigation_id, user_id,
+                    hypothesis_a_id, hypothesis_b_id,
+                    winner, reason, decided,
+                )
+            except ValueError as e:
+                return {"error": str(e)}
+        return result
+
+    @mcp.tool()
+    async def retire_hypothesis_tool(
+        hypothesis_id: str,
+    ) -> dict[str, Any]:
+        """Move a hypothesis to 'retired'. Idempotent — re-retiring a
+        retired hypothesis returns ok=False with no other side effect."""
+        from api.db.queries.hypotheses import retire_hypothesis
+        async with session_factory() as db:
+            ok = await retire_hypothesis(db, hypothesis_id, user_id)
+        return {"id": hypothesis_id, "ok": ok}
+
     return mcp
