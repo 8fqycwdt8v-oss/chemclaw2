@@ -34,7 +34,7 @@ async def test_rrf_fuses_disjoint_results(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(wiki_read, "semantic_search_wiki", _sem)
 
     out = await wiki_read.hybrid_search_wiki(
-        db=None,  # both legs are mocked, db is unused
+        db=None,  # type: ignore[arg-type]  # both legs are mocked, db is unused
         query="anything", embedding=[0.0] * 1536, limit=5,
     )
 
@@ -67,7 +67,7 @@ async def test_rrf_boosts_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wiki_read, "semantic_search_wiki", _sem)
 
     out = await wiki_read.hybrid_search_wiki(
-        db=None,  # both legs are mocked, db is unused
+        db=None,  # type: ignore[arg-type]  # both legs are mocked, db is unused
         query="anything", embedding=[0.0] * 1536, limit=5,
     )
 
@@ -98,7 +98,7 @@ async def test_rrf_preserves_signal_fields_from_both_legs(
     monkeypatch.setattr(wiki_read, "semantic_search_wiki", _sem)
 
     out = await wiki_read.hybrid_search_wiki(
-        db=None,
+        db=None,  # type: ignore[arg-type]
         query="x", embedding=[0.0] * 1536, limit=5,
     )
 
@@ -122,7 +122,7 @@ async def test_rrf_caps_results_at_limit(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(wiki_read, "semantic_search_wiki", _sem)
 
     out = await wiki_read.hybrid_search_wiki(
-        db=None,
+        db=None,  # type: ignore[arg-type]
         query="x", embedding=[0.0] * 1536, limit=7,
     )
     assert len(out) == 7
@@ -146,7 +146,7 @@ async def test_rrf_normalizes_id_from_page_id(
     monkeypatch.setattr(wiki_read, "semantic_search_wiki", _sem)
 
     out = await wiki_read.hybrid_search_wiki(
-        db=None,
+        db=None,  # type: ignore[arg-type]
         query="x", embedding=[0.0] * 1536, limit=5,
     )
     by_slug = {r["slug"]: r for r in out}
@@ -163,7 +163,7 @@ async def test_rrf_empty_legs_returns_empty(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(wiki_read, "semantic_search_wiki", _empty)
 
     out = await wiki_read.hybrid_search_wiki(
-        db=None,
+        db=None,  # type: ignore[arg-type]
         query="x", embedding=[0.0] * 1536, limit=10,
     )
     assert out == []

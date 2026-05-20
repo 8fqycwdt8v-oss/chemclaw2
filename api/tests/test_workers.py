@@ -57,7 +57,7 @@ async def test_campaign_worker_in_flight_prevents_overlap(
     # Pre-set the in-flight flag, then run a few cycles. None should hit
     # the inner work functions.
     campaign_worker._in_flight = True
-    task = asyncio.create_task(campaign_worker.run_worker(_factory))
+    task = asyncio.create_task(campaign_worker.run_worker(_factory))  # type: ignore[arg-type]
     await asyncio.sleep(0.05)
     task.cancel()
     try:
@@ -97,7 +97,7 @@ async def test_campaign_worker_in_flight_cleared_in_finally(
     monkeypatch.setattr(campaign_worker, "POLL_INTERVAL_SECONDS", 0.01)
 
     campaign_worker._in_flight = False
-    task = asyncio.create_task(campaign_worker.run_worker(_factory))
+    task = asyncio.create_task(campaign_worker.run_worker(_factory))  # type: ignore[arg-type]
     await asyncio.sleep(0.05)
     task.cancel()
     try:
@@ -133,7 +133,7 @@ async def test_fp_worker_in_flight_cleared_in_finally(
     monkeypatch.setattr(fp_worker, "POLL_INTERVAL_SECONDS", 0.01)
 
     fp_worker._in_flight = False
-    task = asyncio.create_task(fp_worker.run_worker(_factory))
+    task = asyncio.create_task(fp_worker.run_worker(_factory))  # type: ignore[arg-type]
     await asyncio.sleep(0.05)
     task.cancel()
     try:
@@ -270,7 +270,7 @@ async def test_create_campaign_wiki_succeeds_first_try(
 
     out = await campaign_worker._create_campaign_wiki(
         {"id": "c-1", "target_smiles": "CCO", "plan": {"steps": []}, "created_by": "alice"},
-        _noop_factory,
+        _noop_factory,  # type: ignore[arg-type]
     )
     assert out == {"ok": True, "error": None}
     assert calls["n"] == 1
@@ -298,7 +298,7 @@ async def test_create_campaign_wiki_retries_then_succeeds(
 
     out = await campaign_worker._create_campaign_wiki(
         {"id": "c-2", "target_smiles": "CCO", "plan": {}, "created_by": "alice"},
-        _noop_factory,
+        _noop_factory,  # type: ignore[arg-type]
     )
     assert out == {"ok": True, "error": None}
     assert calls["n"] == 3
@@ -324,7 +324,7 @@ async def test_create_campaign_wiki_exhausts_retries(
 
     out = await campaign_worker._create_campaign_wiki(
         {"id": "c-3", "target_smiles": "CCO", "plan": {}, "created_by": "alice"},
-        _noop_factory,
+        _noop_factory,  # type: ignore[arg-type]
     )
     assert out["ok"] is False
     assert "permanent failure" in (out["error"] or "")
