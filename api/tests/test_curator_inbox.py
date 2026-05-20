@@ -5,9 +5,16 @@ DB-backed: seeds wiki pages with `needs_review=true`, campaign steps in
 asserts the inbox returns the right buckets for each owner. Lock in
 the owner-scoping for the wiki + step legs (contradictions are
 collaborative by design).
+
+Endpoint-level tests are sync (using the TestClient `client` fixture)
+because pytest-asyncio + TestClient combine awkwardly — TestClient
+spins up its own event loop, which deadlocks inside an async test.
+DB seeding for those tests runs via `asyncio.run()` against the same
+session factory the conftest exposes.
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
@@ -16,6 +23,12 @@ from sqlalchemy import text
 from api.db.queries.campaigns import add_campaign_step
 from api.db.queries.contradictions import create_contradiction
 from api.db.queries.wiki_read import list_wiki_needs_review
+from api.db.queries.wiki_write import upsert_wiki_page
+from api.embeddings import EMBED_DIM
+
+
+async def _noop_embed(texts: list[str]) -> list[list[float]]:
+    return [[0.0] * EMBED_DIM for _ in texts]
 
 
 async def _new_campaign(session_factory, user_id: str) -> str:
@@ -33,15 +46,12 @@ async def _new_campaign(session_factory, user_id: str) -> str:
             return result.scalar_one()
 
 
+# ── query-level tests (async, no TestClient) ─────────────────────────────────
+
+
 @pytest.mark.asyncio
 async def test_list_wiki_needs_review_owner_scoped(session_factory, user_id):
     """A draft created by user A must not appear in user B's needs-review list."""
-    from api.db.queries.wiki_write import upsert_wiki_page
-    from api.embeddings import EMBED_DIM
-
-    async def _noop_embed(texts: list[str]) -> list[list[float]]:
-        return [[0.0] * EMBED_DIM for _ in texts]
-
     attacker = f"u-{uuid.uuid4().hex[:8]}"
     slug = f"draft-{uuid.uuid4().hex[:8]}"
     async with session_factory() as db:
@@ -108,57 +118,69 @@ async def test_list_wiki_needs_review_excludes_clean_pages(session_factory, user
     assert all(p["slug"] != clean_slug for p in inbox)
 
 
-@pytest.mark.asyncio
-async def test_curator_inbox_endpoint_aggregates_buckets(
-    client, session_factory, user_id, auth_header
-):
-    """The /api/curator/inbox endpoint returns three labelled buckets +
-    a total_pending count. Seed one item in each bucket and verify."""
-    # 1. Seed a wiki page needing review.
-    from api.db.queries.wiki_write import upsert_wiki_page
-    from api.embeddings import EMBED_DIM
+# ── endpoint-level test (sync, runs the seeding via asyncio.run) ─────────────
 
-    async def _noop_embed(texts: list[str]) -> list[list[float]]:
-        return [[0.0] * EMBED_DIM for _ in texts]
 
+def test_curator_inbox_endpoint_aggregates_buckets(client, auth_header):
+    """End-to-end: seed one item in each bucket, verify the HTTP response.
+
+    Builds its own AsyncEngine + sessionmaker rather than depending on the
+    pytest-asyncio session_factory fixture, because mixing an async fixture
+    with a sync test runs into pytest-asyncio plumbing issues.
+    """
+    import os
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    user_id = auth_header["Authorization"].removeprefix("Bearer mock:")
     wiki_slug = f"ix-{uuid.uuid4().hex[:8]}"
-    async with session_factory() as db:
-        await upsert_wiki_page(
-            db,
-            slug=wiki_slug,
-            title="Inbox draft",
-            content={"type": "doc", "content": []},
-            content_text="Inbox draft body, long enough to chunk over fifty characters.",
-            created_by=user_id,
-            citations=[],
-            embed_fn=_noop_embed,
-            needs_review=True,
-        )
 
-    # 2. Seed a campaign step awaiting approval.
-    cid = await _new_campaign(session_factory, user_id)
-    async with session_factory() as db:
-        async with db.begin():
-            await add_campaign_step(
-                db, cid, 0, "C>>C", "test", status="pending_approval"
+    async def _seed() -> tuple[str, str]:
+        engine = create_async_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            return await _seed_inner(factory, user_id, wiki_slug)
+        finally:
+            await engine.dispose()
+
+    async def _seed_inner(factory, user_id, wiki_slug) -> tuple[str, str]:
+        # 1. Wiki page needing review.
+        async with factory() as db:
+            await upsert_wiki_page(
+                db,
+                slug=wiki_slug,
+                title="Inbox draft",
+                content={"type": "doc", "content": []},
+                content_text="Inbox draft body, long enough to chunk over fifty characters.",
+                created_by=user_id,
+                citations=[],
+                embed_fn=_noop_embed,
+                needs_review=True,
             )
+        # 2. Campaign step awaiting approval.
+        cid = await _new_campaign(factory, user_id)
+        async with factory() as db:
+            async with db.begin():
+                await add_campaign_step(
+                    db, cid, 0, "C>>C", "test", status="pending_approval"
+                )
+        # 3. Look up page id for the contradiction.
+        async with factory() as db:
+            row = await db.execute(
+                text("SELECT id::text FROM wiki_pages WHERE slug = :slug"),
+                {"slug": wiki_slug},
+            )
+            page_id = row.scalar_one()
+        async with factory() as db:
+            await create_contradiction(
+                db, page_id, "cit-a", "cit-b", "inconclusive", "test conflict"
+            )
+        return cid, page_id
 
-    # 3. Seed an unresolved contradiction. Look up page_id in one session,
-    # then call create_contradiction (which manages its own tx) in another
-    # to avoid nesting tx contexts.
-    async with session_factory() as db:
-        page_row = await db.execute(
-            text("SELECT id::text FROM wiki_pages WHERE slug = :slug"),
-            {"slug": wiki_slug},
-        )
-        page_id = page_row.scalar_one()
-    async with session_factory() as db:
-        await create_contradiction(
-            db, page_id, "cit-a", "cit-b", "inconclusive", "test conflict"
-        )
+    cid, page_id = asyncio.run(_seed())
 
     resp = client.get("/api/curator/inbox", headers=auth_header)
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     body = resp.json()
     assert "wiki_needs_review" in body
     assert "step_approvals" in body
@@ -169,8 +191,7 @@ async def test_curator_inbox_endpoint_aggregates_buckets(
     assert body["total_pending"] >= 3
 
 
-@pytest.mark.asyncio
-async def test_curator_inbox_requires_auth(client):
+def test_curator_inbox_requires_auth(client):
     """Unauthenticated request must 401 — owner-scoped surface."""
     resp = client.get("/api/curator/inbox")
     assert resp.status_code == 401
