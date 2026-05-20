@@ -20,8 +20,6 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Annotated
-
 from fastapi import Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -87,6 +85,29 @@ async def pg_rate_limit(
         return {"limited": True}
 
 
+async def sweep_rate_limit_rows(
+    db: AsyncSession, max_age_ms: int = 7_200_000
+) -> int:
+    """Delete rate_limit rows whose window_start is older than `max_age_ms`.
+
+    The pg_rate_limit upsert never expires rows; over time the table grows
+    unboundedly and the GIST/B-tree on (key, window_start) gets slower.
+    Two hours by default — comfortably wider than any rate-limit window
+    actually in use (the longest is 60 s today). Returns the number of
+    rows deleted so the worker can log it.
+
+    Wraps its own transaction. Safe to call from any worker context.
+    """
+    cutoff_ms = int(time.time() * 1000) - max_age_ms
+    async with db.begin():
+        result = await db.execute(
+            text("DELETE FROM rate_limits WHERE window_start < :cutoff"),
+            {"cutoff": cutoff_ms},
+        )
+        # CursorResult.rowcount is populated for DML; mypy doesn't narrow it.
+        return result.rowcount  # type: ignore[attr-defined]
+
+
 # ── FastAPI dependency factory ────────────────────────────────────────────────
 
 
@@ -117,10 +138,18 @@ def rate_limit(
     from api.auth import get_current_user, get_optional_user
     from api.db.connection import get_db
 
+    # IMPORTANT: this module has `from __future__ import annotations`, so the
+    # parameter annotations are evaluated as strings. The
+    # `Annotated[AsyncSession, Depends(get_db)]` form turns into a ForwardRef
+    # that Pydantic cannot resolve at OpenAPI generation time — FastAPI then
+    # falls back to treating `db` as a query parameter and the route 422s.
+    # Use the older `default=Depends(...)` syntax (with no Annotated wrapper)
+    # which FastAPI introspects directly via `inspect.signature`, sidestepping
+    # the Pydantic ForwardRef path entirely.
     if optional_user:
         async def _dep_optional(
-            db: Annotated[AsyncSession, Depends(get_db)],
-            user_id: Annotated[str | None, Depends(get_optional_user)],
+            db: AsyncSession = Depends(get_db),
+            user_id: str | None = Depends(get_optional_user),
         ) -> None:
             result = await pg_rate_limit(db, make_key(bucket, user_id), max_requests, window_ms)
             if result["limited"]:
@@ -131,8 +160,8 @@ def rate_limit(
         return _dep_optional
 
     async def _dep(
-        db: Annotated[AsyncSession, Depends(get_db)],
-        user_id: Annotated[str, Depends(get_current_user)],
+        db: AsyncSession = Depends(get_db),
+        user_id: str = Depends(get_current_user),
     ) -> None:
         result = await pg_rate_limit(db, make_key(bucket, user_id), max_requests, window_ms)
         if result["limited"]:

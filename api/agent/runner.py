@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import AsyncGenerator
 
 from claude_agent_sdk import query
@@ -28,6 +29,20 @@ You have access to an organization knowledge base, compound registry, and reacti
 Always cite your sources. Never fabricate CAS numbers, yields, or experimental conditions.
 When uncertain, say so explicitly rather than guessing.
 
+Confidence signalling: end every substantive answer with a single
+<confidence>LEVEL</confidence> marker where LEVEL is one of:
+  - high: the claim is directly supported by a citation from the wiki,
+    a registered compound, or a recent paper you retrieved.
+  - med: the claim is consistent with retrieved evidence but partly
+    inferred, OR the underlying source is older than 30 days.
+  - low: the claim is heavily inferred, the user's question is outside
+    the org's data, or you had to use general knowledge to answer.
+
+Don't print the marker for short conversational replies (yes/no,
+clarifying questions). Place it on its own final line. The runner
+strips it from the streamed text and surfaces it as a separate UI
+signal for downstream calibration.
+
 For comprehensive, multi-section investigations, prefer dispatching to a
 sub-agent via the Task tool with subagent_type='deep-research'. The sub-agent
 runs in isolated context with retrieval tools only and returns a structured
@@ -36,7 +51,45 @@ markdown report — you then persist it via finalize_deep_research.
 For citation-conflict resolution on a wiki page, dispatch
 subagent_type='contradiction-resolver'. The sub-agent reads both citations
 and the chunks that reference them, weighs the evidence, and returns a
-proposed winner + reason that you persist via record_contradiction."""
+proposed winner + reason that you persist via record_contradiction.
+
+When the user asks evidence-grounded questions about specific papers
+(or "what does the literature say about X"), prefer `paper_qa` over
+plain `wiki_lookup` / `web_search` — it retrieves paper chunks via
+hybrid FTS + semantic search and reranks them with a per-chunk
+relevance score and summary, so every claim you cite is traceable to
+a specific paper section.
+
+For chemistry name → structure conversions, use `name_to_structure`
+(NCI CACTUS, 7-day cached). For prior-art reconnaissance on a
+candidate molecule, use `patent_coverage` (PubChem patent xrefs). To
+seed a `confirm_synthesis_plan`, call `propose_retrosynthesis` first
+to get plausible one-step disconnections."""
+
+
+# Match <confidence>level</confidence> case-insensitively; allow surrounding
+# whitespace so a stray newline doesn't hide the marker. Captures `low`,
+# `med`, or `high` — anything else means the agent emitted a malformed tag
+# and we should ignore it (better than guessing).
+_CONFIDENCE_RE = re.compile(
+    r"\s*<confidence>\s*(low|med|high)\s*</confidence>\s*",
+    re.IGNORECASE,
+)
+
+
+def _extract_confidence(text: str) -> tuple[str, str | None]:
+    """Strip the trailing <confidence>...</confidence> tag from `text`.
+
+    Returns (cleaned_text, level | None). `level` is normalised to
+    lowercase. Multiple tags collapse to the last one (a streamed
+    response can accumulate them but only the final block's level
+    matters for the answer as a whole)."""
+    matches = list(_CONFIDENCE_RE.finditer(text))
+    if not matches:
+        return text, None
+    level = matches[-1].group(1).lower()
+    cleaned = _CONFIDENCE_RE.sub("", text)
+    return cleaned, level
 
 DEEP_RESEARCH_PROMPT = """You are a focused research sub-agent for ChemClaw.
 
@@ -118,6 +171,9 @@ async def run_agent_streaming(
             "chemclaw2-tools": McpSdkServerConfig(server=mcp_server),
             "mcp-molfp": McpStdioServerConfig(type="stdio", command="python", args=["-m", "mcp_molfp.server"]),
             "mcp-rxnfp": McpStdioServerConfig(type="stdio", command="python", args=["-m", "mcp_rxnfp.server"]),
+            "mcp-retrosynth": McpStdioServerConfig(
+                type="stdio", command="python", args=["-m", "mcp_retrosynth.server"],
+            ),
             "mcp-rxn-conditions": McpStdioServerConfig(
                 type="stdio", command="python", args=["-m", "mcp_rxn_conditions.server"]
             ),
@@ -149,6 +205,11 @@ async def run_agent_streaming(
     if session_id:
         yield f"data: {json.dumps({'type': 'session_start', 'session_id': session_id})}\n\n"
 
+    # Track the latest confidence the agent emitted across the stream.
+    # Some answers span multiple text blocks; the marker on the last
+    # block wins (matches the prompt instructions).
+    last_confidence: str | None = None
+
     try:
         async for message in query(prompt=prompt, options=options):
             if isinstance(message, ResultMessage):
@@ -156,14 +217,25 @@ async def run_agent_streaming(
                     'type': 'result',
                     'session_id': message.session_id,
                     'stop_reason': str(message.stop_reason),
+                    'confidence': last_confidence,
                 }
                 yield f"data: {json.dumps(result_event)}\n\n"
             elif isinstance(message, AssistantMessage):
                 # Stream assistant text blocks
                 for block in message.content:
                     if hasattr(block, 'text'):
-                        text = _cap_text_block(block.text)
-                        yield f"data: {json.dumps({'type': 'text', 'text': text})}\n\n"
+                        cleaned, level = _extract_confidence(block.text)
+                        if level is not None:
+                            last_confidence = level
+                            yield (
+                                f"data: {json.dumps({'type': 'confidence', 'level': level})}\n\n"
+                            )
+                        # Even if the whole block was a confidence tag,
+                        # emit the cleaned (possibly empty) text so the
+                        # client sees consistent framing per block.
+                        text = _cap_text_block(cleaned)
+                        if text:
+                            yield f"data: {json.dumps({'type': 'text', 'text': text})}\n\n"
                     elif getattr(block, 'type', None) == 'tool_use':
                         yield f"data: {json.dumps({'type': 'tool_use', 'name': getattr(block, 'name', '')})}\n\n"
             elif isinstance(message, UserMessage):
@@ -173,4 +245,9 @@ async def run_agent_streaming(
         logger.exception("agent_stream_error session=%s", session_id)
         yield f"data: {json.dumps({'type': 'error', 'message': 'An internal error occurred'})}\n\n"
     finally:
+        if last_confidence is not None:
+            logger.info(
+                "agent_turn_confidence session=%s user=%s level=%s",
+                session_id, user_id, last_confidence,
+            )
         yield "data: [DONE]\n\n"

@@ -5,11 +5,14 @@ mutations in `async with session.begin()`; this module never commits.
 """
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from api.db.queries.fp_utils import bit_string_to_pg_bytes
 
 
 async def get_cached_prediction(
@@ -36,6 +39,10 @@ async def get_cached_prediction(
             {"rid": reaction_id, "model": model},
         )
     else:
+        # Match the latest cached prediction for this (rxn_smiles, model),
+        # regardless of whether the cached row is tied to a reaction_id.
+        # SMILES equality is the cache key here — two callers asking
+        # about the same reaction get the same prediction.
         result = await db.execute(
             text("""
                 SELECT id::text, rxn_smiles, conditions, model, confidence,
@@ -73,7 +80,6 @@ async def insert_prediction(
     new_id = uuid.uuid4()
     # asyncpg's binary protocol refuses to bind a Python str to a
     # bit(2048) column even with CAST(); pack to bytes if provided.
-    from api.db.queries.fp_utils import bit_string_to_pg_bytes
     drfp_bytes = bit_string_to_pg_bytes(drfp_bits) if drfp_bits is not None else None
     result = await db.execute(
         text("""
@@ -169,5 +175,4 @@ async def list_predictions_for_reaction(
 def _json_dumps(value: dict[str, Any]) -> str:
     """Local helper — keep JSON encoding in one place so future changes
     (e.g. canonical key ordering for cache stability) land cleanly."""
-    import json
     return json.dumps(value, sort_keys=True)

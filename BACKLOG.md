@@ -19,7 +19,7 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 ### Tier F — Long-horizon / blocked (kept as reference, not on the work plan)
 
 - **Multi-tenant RLS** — every policy still `USING(true)`; migration 0034 dropped the truly permissive stubs but the remaining ones need per-tenant `USING (org_id = current_setting('app.org_id')::uuid)` bodies. Trigger: tenants > 1.
-- **Wiki audit-read** — read-side audit table for compliance §3.8. Trigger: regulated customer asks. Write side already covered via revisions.
+- ~~Wiki audit-read~~ — shipped in feat/wiki-audit-read PR. `GET /api/audit/wiki/{slug}` returns the current page metadata (version, created_by/updated_by, bi-temporal valid_from/valid_to, maturity, archived, needs_review) bundled with the full revision list ordered newest-first. Admin-only (uses `_AUDIT_WIKI` deps — admin check before rate-limit so non-admins still see 403 not 429). Pairs with the existing `GET /api/wiki/{slug}/revisions/{version}` for full revision bodies when a diff is needed.
 - **RLS on `notifications`** — enable with per-user predicate. Trigger: tenants > 1.
 - **Skills catalog in DB** — promote filesystem skill packs to a table with scope (personal/project/org) + maturity tier. Trigger: skill count grows.
 - **Tool forging** — NL tool synthesis with sandboxed execution (§3.13). v3 only.
@@ -44,6 +44,10 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - The substance gate fires once per turn but cannot detect session-level context where an attacker front-loads scheduled-substance context across earlier turns and asks for synthesis later. Mitigation requires a session-context scan; architectural, defer.
 - ~~Migration numbering: there are two `0029_*` files~~ — resolved by renaming `0029_wiki_tables_cleanup.sql` → `0029a_wiki_tables_cleanup.sql` in the review-fixes-A PR.
 - `api/db/connection.py` pool: `pool_size=5, max_overflow=10` is the Python equivalent of the Wave-3h `DB_POOL_MAX=15` total. Document upstream Postgres `max_connections` headroom if running without a pooler at scale.
+
+### Curator inbox (May 2026 — V3 PR 1)
+
+- ~~Curator queue / inbox~~ — shipped. `GET /api/curator/inbox` aggregates wiki pages with `needs_review=true` (owner-scoped), campaign steps in `pending_approval` (owner-scoped), and unresolved wiki contradictions (collaborative) into a single response with `total_pending` count. New query `list_wiki_needs_review(db, user_id, limit)` in `api/db/queries/wiki_read.py`. New router `api/routes/curator.py` registered in `main.py`.
 
 ### Document ingestion LLM extraction (May 2026 — V2 PR 4b)
 
@@ -80,6 +84,15 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - ~~`patch_wiki_page` defense-in-depth~~ — resolved in review-fixes-A: UPDATE now includes `AND created_by = :updated_by`.
 - ~~`fp_worker` imports `sqlalchemy.text`~~ — resolved in review-fixes-A: extracted into `api/db/queries/fingerprints.py`.
 - **Route-layer integration tests** — `routes/wiki.py`, `routes/admin.py`, `routes/chat.py` SSE happy path and `routes/campaigns.py` are not exercised end-to-end. Health smoke + substance gate are the only HTTP-layer tests today.
+
+### Phase A follow-ups (paper RAG / retrosynth / ChemCrow, May 2026)
+
+- **HNSW index on `paper_chunks.embedding`** — deferred per migration 0038 comment; build with `CREATE INDEX CONCURRENTLY` once row counts justify it (matches the wiki_chunks pattern, which still does linear scans). Trigger: > 10k ingested chunks across active papers.
+- **DB-integration test for `paper_qa` end-to-end** — `test_paper_chunks.py` covers chunking only. A `test_papers_hybrid_search.py` modeled on `test_hybrid_search.py` would seed chunks, embed via the test conftest's stubbed embedder, run `hybrid_search_paper_chunks`, and assert RRF ordering. Blocked on a test-side embedder stub usable from a query-layer test.
+- **MCP-tool smoke tests for the new chemistry surface** — `paper_qa`, `propose_retrosynthesis`, `name_to_structure`, `patent_coverage` are exercised only via their underlying libraries today. Mirror the SSRF-rejection pattern from `test_ssrf.py` for each.
+- **Chunk-size / overlap config** — `_ingest_paper_chunks` hardcodes 1500/200. Surface via `PAPER_CHUNK_SIZE` / `PAPER_CHUNK_OVERLAP` env vars when a customer pushes back on the defaults.
+- **OpenAI fallback for RCS scoring** — `score_chunks_with_llm` is Anthropic-only. Add an OpenAI path keyed off `RCS_PROVIDER=openai` if a future deployment can't depend on `ANTHROPIC_API_KEY`.
+- **External retrosynthesis service** — the 11-template curated library is a deliberate floor. When demand justifies, wire AiZynthFinder / ASKCOS / IBM RXN as a second `propose_retrosynthesis_deep` tool, keeping the template fast-path for first-pass disconnections.
 
 ### Reaction condition prediction (May 2026)
 

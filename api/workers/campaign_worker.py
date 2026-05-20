@@ -135,6 +135,10 @@ async def process_running_campaigns(
         mark_step_failed,
         system_advance_campaign,
     )
+    from api.db.queries.reaction_conditions import (
+        get_cached_prediction,
+        record_used_prediction,
+    )
 
     campaigns = await get_running_campaigns(db)
     updates = 0
@@ -158,9 +162,6 @@ async def process_running_campaigns(
                 rxn_smiles = step.get("reaction_smiles")
                 if rxn_smiles:
                     try:
-                        from api.db.queries.reaction_conditions import (
-                            get_cached_prediction,
-                        )
                         cached = await get_cached_prediction(
                             db, rxn_smiles, model="rxn4chemistry:latest"
                         )
@@ -173,9 +174,6 @@ async def process_running_campaigns(
                 async with db.begin():
                     await mark_step_complete(db, step_id, result)
                     if prediction_id:
-                        from api.db.queries.reaction_conditions import (
-                            record_used_prediction,
-                        )
                         await record_used_prediction(db, prediction_id, step_id)
                 updates += 1
                 logger.info("campaign_step_complete campaign=%s step=%s", campaign_id, step_id)
@@ -290,10 +288,24 @@ async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
                 if _cycle % 5 == 0:
                     async with session_factory() as db:
                         backfilled = await backfill_missing_campaign_wikis(db, session_factory)
-                if retried or updated or backfilled:
+                # Sweep old rate_limit rows once every 60 cycles
+                # (≈ once an hour at the default 60 s interval). The fixed-
+                # window upsert never expires rows on its own, so unbounded
+                # growth would slow the (key, window_start) lookup.
+                swept = 0
+                if _cycle % 60 == 0:
+                    from api.db.queries.rate_limit import sweep_rate_limit_rows
+                    try:
+                        async with session_factory() as db:
+                            swept = await sweep_rate_limit_rows(db)
+                        if swept:
+                            logger.info("rate_limit_rows_swept count=%d", swept)
+                    except Exception:
+                        logger.exception("rate_limit_sweep_error")
+                if retried or updated or backfilled or swept:
                     logger.info(
-                        "campaign_worker_cycle retried=%d updated=%d backfilled=%d",
-                        retried, updated, backfilled,
+                        "campaign_worker_cycle retried=%d updated=%d backfilled=%d swept=%d",
+                        retried, updated, backfilled, swept,
                     )
                 _cycle += 1
                 if _cycle % 10 == 0:
