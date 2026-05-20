@@ -1,7 +1,8 @@
-"""Search routes — GET /api/search (FTS), POST /api/search (fingerprint similarity)."""
+"""Search routes — GET /api/search (FTS/hybrid), POST /api/search (fingerprint)."""
 from __future__ import annotations
 
 import re
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.connection import get_db
 from api.db.queries.rate_limit import rate_limit
-from api.db.queries.wiki_read import search_wiki_by_fts
+from api.db.queries.wiki_read import hybrid_search_wiki, search_wiki_by_fts
 
 router = APIRouter()
 
@@ -28,10 +29,25 @@ class FingerprintSearchRequest(BaseModel):
 async def search_get(
     q: str = Query(..., min_length=1, max_length=500),
     limit: int = Query(20, ge=1, le=200),
+    mode: Literal["fts", "hybrid"] = Query(
+        "hybrid",
+        description=(
+            "'hybrid' (default) fuses FTS + pgvector semantic search via "
+            "Reciprocal Rank Fusion. 'fts' is the legacy text-only path; "
+            "use it for exact-term queries (SMILES, CAS) where you don't "
+            "want semantic neighbours diluting the result."
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
 ):
-    results = await search_wiki_by_fts(db, q, limit=limit)
-    return {"query": q, "wiki": results}
+    if mode == "hybrid":
+        # Defer the embedding cost until we're actually using it.
+        from api.embeddings import embed_texts
+        embeddings = await embed_texts([q])
+        results = await hybrid_search_wiki(db, q, embeddings[0], limit=limit)
+    else:
+        results = await search_wiki_by_fts(db, q, limit=limit)
+    return {"query": q, "mode": mode, "wiki": results}
 
 
 @router.post("/api/search", dependencies=[_RL_SEARCH])
