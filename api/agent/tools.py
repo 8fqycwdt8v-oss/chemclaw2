@@ -640,6 +640,8 @@ def build_chemclaw_mcp_server(
                         failure_reason=failure_reason,
                     )
         except ValueError as e:
+            # CLAUDE.md observability rule 3: log denials at info before returning.
+            logger.info("manual_outcome_rejected reaction=%s reason=%s", rid, e)
             return {"ok": False, "error": str(e)}
         except Exception:
             logger.exception("manual_outcome_persist_failed reaction=%s", rid)
