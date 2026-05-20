@@ -204,9 +204,30 @@ def test_search_query_too_long(client, auth_header):
 # ── Document upload (basic mode) ─────────────────────────────────────────────
 
 
-def test_document_upload_plain_text(client, auth_header):
+def test_document_upload_plain_text(client, auth_header, monkeypatch):
     """Plain-text upload in basic mode: extracts text, registers paper,
-    creates wiki page draft with needs_review=true."""
+    creates wiki page draft with needs_review=true.
+
+    Stubs embed_texts (the wiki page draft upserts a page, which calls
+    embed_fn) and fetch_crossref_metadata (so the test doesn't depend
+    on network access from CI). The route's CrossRef path already
+    fail-opens to None on network errors but stubbing makes the test
+    deterministic regardless of CI's outbound connectivity policy."""
+    async def _stub_embed(texts: list[str]) -> list[list[float]]:
+        return [[0.0] * EMBED_DIM for _ in texts]
+
+    async def _stub_crossref(doi: str) -> None:
+        return None  # Force the first-line title heuristic.
+
+    # routes/integrations.py does `from api.embeddings import embed_texts`
+    # at module top, so the route holds a local binding — patch THERE
+    # to override what the route actually calls.
+    monkeypatch.setattr("api.routes.integrations.embed_texts", _stub_embed)
+    monkeypatch.setattr(
+        "api.routes.integrations.fetch_crossref_metadata",
+        _stub_crossref,
+    )
+
     body = (
         "Title of the Paper\n\n"
         "This is a short body. See 10.1234/example.5678 for the original work."
