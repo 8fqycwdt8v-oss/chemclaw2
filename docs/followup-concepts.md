@@ -8,6 +8,8 @@ The Bayesian-optimisation item (§A) uses **BOFIRE** as the backing library per 
 
 Tiers below are dependency-aware: tier-1 items unblock tier-2/3 and have no external deps. Within a tier, order is by leverage.
 
+**Size legend.** XS ≤ 50 LOC · S ≤ 200 LOC · M ≤ 500 LOC · L ≤ 1500 LOC.
+
 | Tier | Item | Rough size | Notes |
 |---|---|---|---|
 | 1 | **§J** mypy CI gate re-enablement | XS | Required to land tier-2/3 with confidence |
@@ -56,17 +58,25 @@ Replace the V1 heuristic `propose_next_conditions` with a proper BO loop that le
 
 2. **New tool `declare_campaign_parameter_space(campaign_id, spec)`** at the agent layer. The agent or user calls this once before running BO. Owner-scoped.
 
-3. **`propose_next_conditions` rewrite.** New module `api/db/queries/optimization.py` with two paths:
+3. **Canonical outcome feed: `reaction_outcomes`, not `campaign_steps.result`.** PR #115 added a structured `reaction_outcomes` table (`yield_pct`, `purity_pct`, etc.); `campaign_steps.result` JSONB pre-dates it and stays as the agent's free-form scratch. BOFIRE reads from `reaction_outcomes JOIN campaign_steps` so its inputs are typed at the schema layer — no JSONB shape-guessing.
+
+4. **`propose_next_conditions` rewrite.** New module `api/db/queries/optimization.py` with two paths:
    - When `parameter_spec` is absent → fall back to the current V1 heuristic (preserves backwards compatibility).
    - When `parameter_spec` is present → BOFIRE path:
      ```python
      domain = bofire_domain_from_spec(parameter_spec)
-     experiments = experiments_from_completed_steps(steps, domain)
+     # Build experiments DataFrame from reaction_outcomes JOIN campaign_steps,
+     # one row per completed step with all declared outputs observed.
+     experiments = experiments_dataframe(completed_outcomes, domain)
      strategy = SoboStrategy(domain=domain, acquisition_function=qLogExpectedImprovement())
      strategy.tell(experiments)
      proposals = strategy.ask(candidate_count=n_proposals)
      ```
    - Map BOFIRE `Experiment` rows back to chemclaw2's `conditions` dict format and return.
+
+5. **Partial-observation handling.** When the parameter spec declares multiple outputs (yield + purity) but only one is observed in a given step, BOFIRE's GP fit fails. V1 requires all declared outputs to be observed per step; rows with NULLs are dropped before `strategy.tell()`. Imputation or multi-task GP that handles missing outputs is filed as §A.1 for a later follow-up.
+
+6. **Parameter-spec UX.** §A's `parameter_spec` is structured JSON — non-technical users can't write it directly. V1 ships with two paths: (a) a power-user / agent JSON shape, (b) agent-mediated declaration where the chat agent gathers the variables conversationally and emits the JSON. A UI form-generator is future work, not blocking.
 
 4. **Cold-start.** Fewer than 5 completed steps → use BOFIRE's `RandomStrategy` (Latin Hypercube) for diverse exploration. ≥5 → switch to `SoboStrategy` with GP surrogate.
 
@@ -139,6 +149,9 @@ Probed at module load via `bwrap --version` exit code, same pattern as `_probe_u
 - **`--unshare-all`** drops every namespace (pid, net, ipc, uts, cgroup, mount, user) in one flag.
 - **`--die-with-parent`** is the kill-switch: if the parent crashes, the child is reaped automatically.
 - **`--cap-drop ALL`** ensures even setuid binaries inside the sandbox can't escalate.
+- **Docker-in-Docker caveat.** `bwrap --proc /proc` typically fails inside a Docker container because the parent's `--security-opt no-new-privileges` and default seccomp profile block the unshare-based `/proc` mount. Two deployment models:
+  - **Bare-metal / VM hosts** (Fly machines, EC2 instances): bwrap works as designed.
+  - **Containerised hosts** (k8s, Cloud Run, Docker workers): rely on the container runtime's own isolation (Docker already gives us a fresh cgroup + cap set); bwrap adds no value and may fail. The sandbox detects this case via the bwrap probe and falls back to the current subprocess + RLIMIT path.
 
 ### Trade-offs
 
@@ -296,7 +309,7 @@ Add `RCS_PROVIDER=openai` path so deployments that can't use Anthropic for any r
 `api/db/queries/papers.py:score_chunks_with_llm`:
 - Read `RCS_PROVIDER` env (default: `anthropic`).
 - Provider-specific lazy client: `_get_anthropic_client()` already exists; add `_get_openai_client()` mirroring the `api/embeddings.py` pattern.
-- Provider-specific model env: `ANTHROPIC_RCS_MODEL` / `OPENAI_RCS_MODEL` with sensible defaults (`claude-haiku-4-5-20251001` / `gpt-5-mini` or similar).
+- Provider-specific model env: `ANTHROPIC_RCS_MODEL` / `OPENAI_RCS_MODEL` with sensible defaults (`claude-haiku-4-5-20251001` for Anthropic; for OpenAI, the then-current small reasoning model — pick at implementation time rather than pinning here).
 - Same `RCS_PROMPT` + same `_extract_json_object` parser — both providers return JSON the same way.
 
 ### Key decisions
@@ -322,7 +335,7 @@ Add a second `propose_retrosynthesis_deep` tool that does full multi-step retros
 
 ### Approach
 
-**Library:** [AiZynthFinder](https://github.com/MolecularAI/aizynthfinder) (AstraZeneca, MIT). Pure Python, runs locally, ships with pre-trained policy + filter models (~4 GB total).
+**Library:** [AiZynthFinder](https://github.com/MolecularAI/aizynthfinder) (AstraZeneca, MIT). Pure Python, runs locally. Two model bundles ship: the public demo policy + filter (~500 MB, suitable for first deployment / dev) and the full USPTO-trained bundle (~4 GB, production). Start with the demo bundle, upgrade when route quality is measured as the bottleneck.
 
 **Integration shape:**
 - New MCP server `mcp_retrosynth_deep` wrapping `aizynthfinder.aizynthfinder.AiZynthFinder`.
@@ -383,7 +396,7 @@ Call from `_build_command` instead of at module load. First sandbox call eats th
 
 ### Trade-offs
 
-None.
+- **Cache is process-lifetime.** If the host's `unshare` permissions actually change at runtime (extremely unusual — kernel-level capability changes), the cached probe stays stale until restart. Acceptable; capability swaps mid-process don't happen in any production deploy.
 
 ### Effort
 
