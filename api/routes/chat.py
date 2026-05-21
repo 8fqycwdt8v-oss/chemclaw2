@@ -10,7 +10,8 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user
-from api.db.connection import async_session_factory, get_db
+from api.db import connection
+from api.db.connection import get_db
 from api.db.queries.rate_limit import make_key, pg_rate_limit
 
 router = APIRouter()
@@ -110,12 +111,17 @@ async def chat(
             )
         await record_override(db, session_id, user_id, "scheduled_substance", justification, body.prompt)
 
-    if async_session_factory is None:
+    # Look up async_session_factory at call time, not at module import
+    # time — init_db() in the lifespan sets it AFTER chat.py is imported,
+    # so a `from ... import async_session_factory` at module top would
+    # snapshot None forever and unconditionally 503.
+    session_factory = connection.async_session_factory
+    if session_factory is None:
         return _error_stream("Database not initialised", 503)
 
     return StreamingResponse(
         run_agent_streaming(
-            body.prompt, user_id, session_id, async_session_factory,
+            body.prompt, user_id, session_id, session_factory,
             plan_mode=body.plan_mode is True,
         ),
         media_type="text/event-stream",
