@@ -9,7 +9,10 @@ Our tools are written in a more Pythonic style: explicit kwargs in the
 signature, raw dict return. `wrap_tool` bridges the two so the body of
 every tool can stay unchanged:
 
-  - Introspect the function signature to build the JSON-schema dict.
+  - Introspect the function signature to build a full JSON Schema:
+    every parameter's type is mapped, parameters with no default land
+    in `required`, and `T | None` annotations allow null in the
+    property type.
   - Forward `args[k]` as `kwargs[k]` to the inner handler.
   - JSON-serialise the return value into the SDK's content shape.
   - Catch unexpected exceptions, log them, and surface a generic
@@ -20,15 +23,15 @@ The first non-blank line of the docstring becomes the tool description.
 
 This adapter replaces the pre-existing `@mcp.tool()` pattern which was
 incompatible with `claude-agent-sdk` >=0.2 (`create_sdk_mcp_server`
-returns a plain dict, not an object with a `.tool()` method — see the
-"Discovered during refactor sweep" entry in BACKLOG.md).
+returns a plain dict, not an object with a `.tool()` method).
 """
 from __future__ import annotations
 
 import inspect
 import json
 import logging
-from typing import Any, Awaitable, Callable, get_type_hints
+import types
+from typing import Any, Awaitable, Callable, Union, get_args, get_origin, get_type_hints
 
 from claude_agent_sdk import SdkMcpTool, tool
 
@@ -43,25 +46,93 @@ def _first_sentence(doc: str | None) -> str:
     return " ".join(para.split())[:500]
 
 
-def _build_schema(handler: Callable[..., Any]) -> dict[str, Any]:
-    """Build a schema dict mapping each annotated parameter to its Python type.
+def _property_schema(py_type: Any) -> dict[str, Any]:
+    """Build a JSON-schema property dict for a single Python type annotation.
 
-    The SDK runs each type through its own `_python_type_to_json_schema`
-    which handles `str | None`, `list[T]`, `dict`, etc. Parameters without
-    annotations are skipped (they would default to `{"type": "string"}`,
-    which is misleading).
+    Supports the type forms our tools actually use:
+      - primitives: str / int / float / bool
+      - list[T], list
+      - dict[K, V], dict
+      - Optional[T] / `T | None` — adds 'null' to the type or anyOf
+      - Union with two+ non-None members — anyOf
+    Unknown shapes fall back to `{}` (accept anything) rather than
+    `{"type": "string"}`, which would silently reject other types.
+    """
+    if py_type is str:
+        return {"type": "string"}
+    if py_type is int:
+        return {"type": "integer"}
+    if py_type is float:
+        return {"type": "number"}
+    if py_type is bool:
+        return {"type": "boolean"}
+
+    origin = get_origin(py_type)
+
+    # `T | None` / `Optional[T]` / `Union[A, B, None]`
+    if origin is Union or isinstance(py_type, types.UnionType):
+        args = [a for a in get_args(py_type)]
+        nullable = type(None) in args
+        non_none = [a for a in args if a is not type(None)]
+        if not non_none:
+            return {"type": "null"}
+        if len(non_none) == 1:
+            inner = _property_schema(non_none[0])
+            if nullable and "type" in inner and isinstance(inner["type"], str):
+                # `str | None` → {"type": ["string", "null"]}
+                return {**inner, "type": [inner["type"], "null"]}
+            if nullable:
+                # Fallback for non-{type:str} schemas (e.g. anyOf, no type key).
+                return {"anyOf": [inner, {"type": "null"}]}
+            return inner
+        members = [_property_schema(a) for a in non_none]
+        if nullable:
+            members.append({"type": "null"})
+        return {"anyOf": members}
+
+    if origin is list:
+        item_args = get_args(py_type)
+        if item_args:
+            return {"type": "array", "items": _property_schema(item_args[0])}
+        return {"type": "array"}
+    if py_type is list:
+        return {"type": "array"}
+
+    if origin is dict or py_type is dict:
+        return {"type": "object"}
+
+    # Unrecognised — accept anything rather than silently misclassifying.
+    return {}
+
+
+def _build_input_schema(handler: Callable[..., Any]) -> dict[str, Any]:
+    """Build a full JSON Schema object for the handler's signature.
+
+    Parameters with no default value land in `required`; parameters with
+    defaults stay optional. `T | None` annotations allow null on the
+    property type so the model can send None when a default would be
+    semantically meaningful.
     """
     sig = inspect.signature(handler)
     try:
         hints = get_type_hints(handler)
     except Exception:
         hints = {}
-    schema: dict[str, Any] = {}
+
+    properties: dict[str, Any] = {}
+    required: list[str] = []
     for param_name, param in sig.parameters.items():
         annotation = hints.get(param_name, param.annotation)
         if annotation is inspect.Parameter.empty:
-            continue
-        schema[param_name] = annotation
+            properties[param_name] = {}
+        else:
+            properties[param_name] = _property_schema(annotation)
+        if param.default is inspect.Parameter.empty:
+            required.append(param_name)
+
+    schema: dict[str, Any] = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
     return schema
 
 
@@ -79,7 +150,7 @@ def wrap_tool(
     (the SDK already validates against the schema we declared).
     """
     desc = description if description is not None else _first_sentence(handler.__doc__)
-    schema = _build_schema(handler)
+    schema = _build_input_schema(handler)
     sig = inspect.signature(handler)
     accepted = set(sig.parameters)
 

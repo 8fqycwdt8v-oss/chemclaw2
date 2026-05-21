@@ -98,6 +98,37 @@ def test_all_expected_tools_register():
 
 
 @pytest.mark.asyncio
+async def test_wrap_tool_schema_marks_only_no_default_params_as_required():
+    """A handler signature like `(a: str, b: int = 10)` produces a schema
+    where only `a` is required. The agent must be able to omit `b` and
+    have the Python default kick in. Without this, the SDK rejects calls
+    that don't pass every key — making every default useless."""
+    from api.agent.tool_adapter import wrap_tool
+
+    async def with_defaults(
+        a: str, b: int = 10, c: str | None = None,
+    ) -> dict[str, str]:
+        """Docs."""
+        return {"a": a, "b": str(b), "c": str(c)}
+
+    sdk_tool = wrap_tool("with_defaults", with_defaults)
+    schema = sdk_tool.input_schema
+    assert schema["type"] == "object"
+    assert schema["required"] == ["a"]
+    # `str | None` must allow null on the wire so the model can pass None.
+    assert schema["properties"]["c"]["type"] == ["string", "null"]
+    # Defaulted but non-Optional param keeps its base type.
+    assert schema["properties"]["b"]["type"] == "integer"
+
+    # The handler is invokable with only the required arg — defaults fill the rest.
+    response = await sdk_tool.handler({"a": "hi"})
+    assert response.get("is_error") is not True
+    import json
+    decoded = json.loads(response["content"][0]["text"])
+    assert decoded == {"a": "hi", "b": "10", "c": "None"}
+
+
+@pytest.mark.asyncio
 async def test_wrap_tool_forwards_kwargs_and_envelopes_result():
     """The adapter converts SDK-shape `args: dict` to **kwargs and
     JSON-serialises the handler's return value into the SDK content shape."""
