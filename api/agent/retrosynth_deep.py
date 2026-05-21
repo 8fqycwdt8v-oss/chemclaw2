@@ -18,9 +18,6 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_WALL_SECONDS = 5 * 60
-
-
 def _build_finder() -> Any:
     """Build an AiZynthFinder instance. Honours `AIZYNTH_CONFIG_PATH` if
     set (operator's custom config pointing at the full USPTO bundle);

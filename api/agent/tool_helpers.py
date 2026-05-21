@@ -88,15 +88,6 @@ async def _resolve_to_global_ip(hostname: str) -> str:
     return chosen
 
 
-async def _assert_not_private(hostname: str) -> None:
-    """Back-compat alias: validates the hostname but discards the IP.
-
-    Prefer `_resolve_to_global_ip` directly so the resolved IP can be
-    pinned for the actual connection.
-    """
-    await _resolve_to_global_ip(hostname)
-
-
 # ── Allowed domains ───────────────────────────────────────────────────────────
 
 ALLOWED_DOMAINS = [

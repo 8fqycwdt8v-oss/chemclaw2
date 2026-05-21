@@ -11,10 +11,8 @@ from api.auth import get_admin_user, get_current_user
 from api.db.connection import get_db
 from api.db.queries.audit import get_session_replay, list_overrides
 from api.db.queries.rate_limit import rate_limit
-from api.db.queries.wiki_read import (
-    get_wiki_page,
-    list_wiki_revisions,
-)
+from api.db.queries.wiki_read import get_wiki_page
+from api.db.queries.wiki_temporal import list_wiki_revisions
 
 logger = logging.getLogger(__name__)
 

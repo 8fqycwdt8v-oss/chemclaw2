@@ -61,21 +61,6 @@ async def list_subscriptions(db: AsyncSession, user_id: str) -> list[dict[str, A
     return [dict(r._mapping) for r in result]
 
 
-async def get_unread_count(db: AsyncSession, user_id: str) -> int:
-    """Return the number of subscribed pages that have updates the user has not seen."""
-    result = await db.execute(
-        text("""
-            SELECT count(*)
-            FROM wiki_subscriptions ws
-            JOIN wiki_pages wp ON wp.id = ws.page_id
-            WHERE ws.user_id = :uid
-              AND wp.version > ws.last_seen_version
-        """),
-        {"uid": user_id},
-    )
-    return result.scalar_one()
-
-
 async def mark_seen(
     db: AsyncSession,
     user_id: str,

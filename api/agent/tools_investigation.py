@@ -1,39 +1,31 @@
-"""Investigations + hypotheses + code-execution tools split out of tools.py.
+"""Investigations + hypotheses + code-execution MCP tools.
 
 13 tools forming the research-thread cluster (Kosmos-style world model +
-Google AI Co-Scientist tournament + sandbox runs anchored to a thread):
+Google AI Co-Scientist tournament + sandbox runs anchored to a thread).
 
-  - investigation lifecycle: start_investigation, list_investigations_tool,
-    update_investigation_status_tool
-  - world model: world_model_add, world_model_query, world_model_supersede
-  - hypotheses: propose_hypothesis, list_hypotheses_tool, rank_hypotheses,
-    retire_hypothesis_tool
-  - sandbox: run_code, get_code_execution, list_code_executions
-
-All need `user_id` (owner scoping). `run_code` and `list_code_executions`
-also need `session_id` so an in-chat execution can anchor to the chat
-turn when no investigation_id is supplied.
-
-Register via `register_investigation_tools(mcp, user_id, session_id,
-session_factory)` from `build_chemclaw_mcp_server`.
+`build_investigation_tools(user_id, session_id, session_factory)`
+returns the `SdkMcpTool` list. All 13 need `user_id` (owner scoping);
+`run_code` and `list_code_executions` also need `session_id` so a
+chat-anchored sandbox run can fall back to that scope when no
+investigation_id is given.
 """
 from __future__ import annotations
 
 from typing import Any
 
+from claude_agent_sdk import SdkMcpTool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.agent.tool_adapter import wrap_tool
 
-def register_investigation_tools(
-    mcp: Any,
+
+def build_investigation_tools(
     user_id: str,
     session_id: str | None,
     session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    """Attach investigation, world-model, hypothesis, and code-execution
-    tools to the given MCP server."""
+) -> list[SdkMcpTool[Any]]:
+    """Build investigation, world-model, hypothesis, and code-execution tools."""
 
-    @mcp.tool()
     async def start_investigation(
         title: str,
         objective: str,
@@ -59,7 +51,6 @@ def register_investigation_tools(
             )
         return {"id": iid, "status": "active"}
 
-    @mcp.tool()
     async def list_investigations_tool(
         status: str | None = None,
         limit: int = 20,
@@ -79,7 +70,6 @@ def register_investigation_tools(
                 return {"error": str(e)}
         return {"investigations": rows}
 
-    @mcp.tool()
     async def update_investigation_status_tool(
         investigation_id: str,
         status: str,
@@ -97,7 +87,6 @@ def register_investigation_tools(
             return {"error": "investigation not found or not owned by user"}
         return {"id": investigation_id, "status": status}
 
-    @mcp.tool()
     async def world_model_add(
         investigation_id: str,
         kind: str,
@@ -140,7 +129,6 @@ def register_investigation_tools(
                 return {"error": str(e)}
         return {"id": eid, "kind": kind}
 
-    @mcp.tool()
     async def world_model_query(
         investigation_id: str,
         kind: str | None = None,
@@ -182,7 +170,6 @@ def register_investigation_tools(
                 return {"error": str(e)}
         return {"investigation_id": investigation_id, "entries": entries}
 
-    @mcp.tool()
     async def world_model_supersede(
         entry_id: str,
         new_status: str = "superseded",
@@ -204,7 +191,6 @@ def register_investigation_tools(
             return {"error": "entry not found or not owned by user"}
         return {"id": entry_id, "status": new_status}
 
-    @mcp.tool()
     async def propose_hypothesis(
         investigation_id: str,
         statement: str,
@@ -238,7 +224,6 @@ def register_investigation_tools(
                 return {"error": str(e)}
         return {"id": hid, "parent_id": parent_id, "elo_rating": 1000.0}
 
-    @mcp.tool()
     async def list_hypotheses_tool(
         investigation_id: str,
         status: str | None = None,
@@ -264,7 +249,6 @@ def register_investigation_tools(
                 return {"error": str(e)}
         return {"investigation_id": investigation_id, "hypotheses": rows}
 
-    @mcp.tool()
     async def rank_hypotheses(
         investigation_id: str,
         hypothesis_a_id: str,
@@ -296,7 +280,6 @@ def register_investigation_tools(
                 return {"error": str(e)}
         return result
 
-    @mcp.tool()
     async def retire_hypothesis_tool(
         hypothesis_id: str,
     ) -> dict[str, Any]:
@@ -309,7 +292,6 @@ def register_investigation_tools(
 
     # ── Phase C: code sandbox ────────────────────────────────────────────────
 
-    @mcp.tool()
     async def run_code(
         code: str,
         investigation_id: str | None = None,
@@ -387,7 +369,6 @@ def register_investigation_tools(
             "artifacts": result.artifacts,
         }
 
-    @mcp.tool()
     async def get_code_execution(execution_id: str) -> dict[str, Any]:
         """Fetch a single past execution with FULL artefact payloads.
 
@@ -402,7 +383,6 @@ def register_investigation_tools(
             return {"error": "execution not found or not owned by user"}
         return {"execution": row}
 
-    @mcp.tool()
     async def list_code_executions(
         investigation_id: str | None = None,
         limit: int = 20,
@@ -425,3 +405,19 @@ def register_investigation_tools(
                 limit=limit,
             )
         return {"executions": rows}
+
+    return [
+        wrap_tool("start_investigation", start_investigation),
+        wrap_tool("list_investigations", list_investigations_tool),
+        wrap_tool("update_investigation_status", update_investigation_status_tool),
+        wrap_tool("world_model_add", world_model_add),
+        wrap_tool("world_model_query", world_model_query),
+        wrap_tool("world_model_supersede", world_model_supersede),
+        wrap_tool("propose_hypothesis", propose_hypothesis),
+        wrap_tool("list_hypotheses", list_hypotheses_tool),
+        wrap_tool("rank_hypotheses", rank_hypotheses),
+        wrap_tool("retire_hypothesis", retire_hypothesis_tool),
+        wrap_tool("run_code", run_code),
+        wrap_tool("get_code_execution", get_code_execution),
+        wrap_tool("list_code_executions", list_code_executions),
+    ]

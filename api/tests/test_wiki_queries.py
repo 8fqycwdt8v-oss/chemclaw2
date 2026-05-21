@@ -20,9 +20,9 @@ import pytest
 
 from api.db.queries.wiki_read import (
     get_wiki_page,
-    get_wiki_page_at,
     search_wiki_by_fts,
 )
+from api.db.queries.wiki_temporal import get_wiki_page_at
 from api.db.queries.wiki_write import chunk_text, upsert_wiki_page
 from api.embeddings import EMBED_DIM
 
