@@ -20,7 +20,7 @@ import uuid
 from typing import Any
 
 import httpx
-from claude_agent_sdk import create_sdk_mcp_server
+from api.agent._sdk_adapter import McpBuilder
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -47,8 +47,15 @@ def build_chemclaw_mcp_server(
     session_id: str | None,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> Any:
-    """Build an in-process MCP server with all chemclaw2 agent tools."""
-    mcp = create_sdk_mcp_server("chemclaw2-tools")
+    """Build an in-process MCP server with all chemclaw2 agent tools.
+
+    Uses the local `McpBuilder` adapter rather than calling the SDK's
+    `create_sdk_mcp_server(name)` directly — that returns a plain dict
+    with no `.tool()` method, so the chemclaw2-style closure decorator
+    pattern would crash at runtime. The adapter collects decorated
+    tools and produces an SDK-compatible config at `.build()`.
+    """
+    mcp = McpBuilder("chemclaw2-tools")
 
     register_chem_tools(mcp, session_factory)
     register_knowledge_tools(mcp, user_id, session_factory)
@@ -908,4 +915,4 @@ def build_chemclaw_mcp_server(
             )
         return {**result, "cached": False}
 
-    return mcp
+    return mcp.build()

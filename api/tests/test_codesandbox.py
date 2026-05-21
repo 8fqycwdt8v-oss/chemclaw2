@@ -312,3 +312,73 @@ async def test_sandbox_run_succeeds_under_whichever_tier_is_active() -> None:
     assert result.status == "completed"
     assert result.exit_code == 0
     assert "tier-check" in result.stdout
+
+
+# ── P3 review-finding: end-to-end exec under each tier the host supports ─────
+
+
+async def test_each_supported_tier_runs_actual_subprocess() -> None:
+    """`run_python` selects whichever isolation tier the host supports
+    (bwrap > unshare > plain). The existing tests monkeypatch the probe
+    functions to verify argv shape. This test does NOT mock — it
+    actually invokes the subprocess on whichever tier the CI runner
+    supports, proving the argv we picked is real (not just syntactically
+    correct).
+
+    On Ubuntu-latest CI (no bwrap installed by default, no
+    CAP_SYS_ADMIN granted to unshare): expect the plain `python -I`
+    tier. Tier validation: stdout returns and the env is stripped."""
+    from mcp_codesandbox.sandbox import _bwrap_available, _unshare_available
+    bwrap_ok = _bwrap_available()
+    unshare_ok = _unshare_available()
+    # Whichever tier was picked, this must execute the user code and
+    # surface stdout. The selection logic is in _build_command; if any
+    # tier's argv is malformed the subprocess won't reach `print`.
+    result = await run_python(
+        "import os; print('cwd_writable=', os.access(os.getcwd(), os.W_OK))"
+    )
+    assert result.status == "completed", (
+        f"tier-picker chose bwrap={bwrap_ok}, unshare={unshare_ok}, "
+        f"but the subprocess failed: stderr={result.stderr!r}"
+    )
+    # tempdir cwd must be writable on every tier (bwrap binds it; the
+    # other tiers leave the temp filesystem permission alone).
+    assert "cwd_writable= True" in result.stdout
+
+
+async def test_env_strip_under_active_tier() -> None:
+    """End-to-end pin: regardless of selected tier, environment
+    variables passed to the parent process do NOT leak into the child.
+    Tested by setting a sentinel env, then verifying it's absent."""
+    import os
+    sentinel = "CHEMCLAW2_SANDBOX_TEST_LEAK"
+    os.environ[sentinel] = "should-not-leak"
+    try:
+        result = await run_python(
+            f"import os; print('LEAKED' if os.environ.get('{sentinel}') else 'isolated')",
+        )
+        assert result.status == "completed"
+        assert "isolated" in result.stdout, (
+            f"env var {sentinel} leaked into sandbox; "
+            f"stdout={result.stdout!r}"
+        )
+    finally:
+        os.environ.pop(sentinel, None)
+
+
+async def test_tier_picker_picks_a_real_tier() -> None:
+    """`_build_command` always returns a non-empty argv. The first
+    element is either the python interpreter (tier 3), `unshare`
+    (tier 2), or `bwrap` (tier 1). This catches any future bug where
+    the selector returns `[]` or starts with an unexpected program."""
+    from mcp_codesandbox.sandbox import _build_command
+    argv = _build_command("print('x')", tmpdir="/tmp/test-sbx-x")
+    assert len(argv) >= 3, f"argv too short: {argv}"
+    head = argv[0]
+    assert (
+        "python" in head
+        or head.endswith("/unshare")
+        or head == "unshare"
+        or head.endswith("/bwrap")
+        or head == "bwrap"
+    ), f"unexpected leader in tier argv: {head!r}"
