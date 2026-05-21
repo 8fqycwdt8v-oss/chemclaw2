@@ -22,6 +22,7 @@ from api.agent.tools import (
     _fetch_validated,
     _is_allowed_domain,
     _pin_url_to_ip,
+    _redact_ssrf_error,
     _resolve_to_global_ip,
     _SSRFError,
 )
@@ -345,3 +346,44 @@ async def test_fetch_validated_skips_allowlist_when_disabled(
     assert r.status_code == 200
     assert stub.calls[0]["url"].startswith("https://1.1.1.1/")
     # SSRF DNS check still ran — would have failed if IP were private.
+
+
+# ── _redact_ssrf_error ───────────────────────────────────────────────────────
+
+
+def test_redact_ssrf_error_strips_internal_detail_from_client_surface(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """`_SSRFError` messages embed resolved IPs (`"... resolves to (10.0.0.1)"`).
+    The client-surface response must not echo that text — CLAUDE.md §security-4
+    (OWASP A05). The full message must still reach server logs for debugging.
+    """
+    exc = _SSRFError(
+        "SSRF blocked: internal.example.com resolves to a non-public "
+        "address (10.0.0.1)"
+    )
+
+    import logging
+    with caplog.at_level(logging.WARNING, logger="api.agent.tools"):
+        result = _redact_ssrf_error("fetch_document", exc)
+
+    assert result == {"error": "URL rejected by SSRF guard"}
+    assert "10.0.0.1" not in str(result)
+    assert "internal.example.com" not in str(result)
+    # Real detail logged server-side, with the tool name for correlation.
+    assert "10.0.0.1" in caplog.text
+    assert "tool=fetch_document" in caplog.text
+
+
+def test_redact_ssrf_error_preserves_caller_identity_keys() -> None:
+    """Callers pass identity context (`guideline`, `cid`, ...) so the agent
+    can correlate the failure with its request — those must round-trip."""
+    result = _redact_ssrf_error(
+        "regulatory_fetch", _SSRFError("x"), guideline="ich-q3a",
+    )
+    assert result == {"error": "URL rejected by SSRF guard", "guideline": "ich-q3a"}
+
+    result2 = _redact_ssrf_error(
+        "pubchem_patent_lookup", _SSRFError("x"), cid=12345,
+    )
+    assert result2 == {"error": "URL rejected by SSRF guard", "cid": 12345}
