@@ -126,3 +126,10 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - **§M SVG / PDF / HTML artefact types** — PNG only in V1. Add when an agent workflow asks for vector graphics.
 - **§M matplotlib magic-byte validation** — `_scan_artifacts` trusts `.png` extension; sniff `\x89PNG\r\n\x1a\n` before encoding to reject non-PNG content saved under a `.png` filename.
 - **Heavy-path CI lane** — `[opt]` / `[retrosynth]` happy paths land green only in opt-in deployments. One CI job with all extras installed running `@pytest.mark.heavy` would catch regressions earlier.
+
+### mcp_tabular follow-ups (May 2026)
+
+- **Artifact-reference (`TableRef`) mode for `mcp_tabular`** — v1 only accepts inline tables (5_000-row cap, see `packages/mcp-servers/mcp_tabular/mcp_tabular/tables.py`). Larger datasets need a `tabular_artifacts` Postgres table + `api/db/queries/tabular_artifacts.py` (owner-scoped) + a `TableRef(artifact_id)` discriminator in the tool args + DB access inside the subprocess (`DATABASE_URL` + `CHEMCLAW_USER_ID` via `McpStdioServerConfig.env`). Add once an agent workflow actually needs >5k rows.
+- **`mcp_tabular[tabicl]` weights cache + offline-CI smoke** — TabICL extra is lazy-imported and never installed in CI. Add a separate workflow (or a `tabicl-test` make target) that pins a tiny pretrained checkpoint, exercises `tabicl_predict` end-to-end on a 200-row classification, and asserts `<1.0` cross-entropy. Skip if torch wheel download takes the runner over time budget.
+- **Model persistence for `fit_score`** — sklearn pipelines are discarded after each call. Persisting them (Postgres BLOB or filesystem) would let the agent train once and apply to multiple test batches, but only matters once a campaign workflow asks for it.
+- **`anderson` SciPy 1.19 migration** — `scipy.stats.anderson` will lose `critical_values`/`significance_level` attributes in 1.19; switch to `method="interpolate"` and read `pvalue` from the result. Currently emits a `FutureWarning` only.
