@@ -1,13 +1,11 @@
 """Reaction queries — Python port of packages/db/src/queries/reactions.ts."""
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.models import Reaction
 from api.db.queries.fp_utils import bit_string_to_pg_bytes, rerank_by_tanimoto
 
 
@@ -106,22 +104,3 @@ async def find_neighbor_conditions(
         for n in neighbors
         if n.get("conditions") and n["conditions"].strip()
     ]
-
-
-async def insert_reaction(
-    db: AsyncSession,
-    rxn_smiles: str,
-    created_by: str,
-    name: str | None = None,
-    conditions: str | None = None,
-) -> str:
-    reaction = Reaction(
-        id=uuid.uuid4(),
-        rxn_smiles=rxn_smiles,
-        created_by=created_by,
-        name=name,
-        conditions=conditions,
-    )
-    db.add(reaction)
-    await db.flush()
-    return str(reaction.id)

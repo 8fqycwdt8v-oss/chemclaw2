@@ -280,11 +280,3 @@ async def hybrid_search_paper_chunks(
         })
     scored.sort(key=lambda r: r["score"], reverse=True)
     return scored[:safe_limit]
-
-
-async def get_chunk_count(db: AsyncSession, paper_id: str) -> int:
-    result = await db.execute(
-        text("SELECT count(*) FROM paper_chunks WHERE paper_id = CAST(:pid AS uuid)"),
-        {"pid": paper_id},
-    )
-    return int(result.scalar_one())

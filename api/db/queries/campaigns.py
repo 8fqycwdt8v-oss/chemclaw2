@@ -123,28 +123,6 @@ async def system_advance_campaign(
     )
 
 
-async def get_campaign_by_session(
-    db: AsyncSession,
-    session_id: str,
-    user_id: str,
-) -> dict[str, Any] | None:
-    result = await db.execute(
-        text("""
-            SELECT id::text, session_id, target_smiles, status, plan,
-                   created_by, created_at, updated_at
-            FROM synthesis_campaigns
-            WHERE session_id = :session_id
-              AND created_by = :user_id
-              AND status != ALL(:terminal)
-            ORDER BY created_at DESC
-            LIMIT 1
-        """),
-        {"session_id": session_id, "user_id": user_id, "terminal": list(TERMINAL_STATUSES)},
-    )
-    row = result.one_or_none()
-    return dict(row._mapping) if row else None
-
-
 async def get_running_campaigns(db: AsyncSession) -> list[dict[str, Any]]:
     """Return all campaigns currently in 'running' status."""
     result = await db.execute(

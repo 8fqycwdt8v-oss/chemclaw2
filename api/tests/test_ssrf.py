@@ -1,10 +1,10 @@
-"""Tests for the SSRF guards in `api.agent.tools`.
+"""Tests for the SSRF guards in `api.agent.tool_helpers`.
 
-`_assert_not_private` / `_resolve_to_global_ip` is the CLAUDE.md template
-for outbound HTTP — must fail closed on DNS error and reject any record
-that is not globally routable. `_is_allowed_domain` enforces the agent's
-allowlist. `_fetch_validated` is the shared helper that pins the resolved
-IP for the actual connection, closing the DNS-rebinding TOCTOU window.
+`_resolve_to_global_ip` is the CLAUDE.md template for outbound HTTP —
+must fail closed on DNS error and reject any record that is not globally
+routable. `_is_allowed_domain` enforces the agent's allowlist.
+`_fetch_validated` is the shared helper that pins the resolved IP for
+the actual connection, closing the DNS-rebinding TOCTOU window.
 
 These tests mock `socket.getaddrinfo` so they run without network and
 exercise the full address-classification logic on synthetic A/AAAA records.
@@ -18,7 +18,6 @@ import httpx
 import pytest
 
 from api.agent.tool_helpers import (
-    _assert_not_private,
     _fetch_validated,
     _is_allowed_domain,
     _pin_url_to_ip,
@@ -62,7 +61,7 @@ def test_is_allowed_domain(host: str, expected: bool) -> None:
     assert _is_allowed_domain(host) is expected
 
 
-# ── _assert_not_private ──────────────────────────────────────────────────────
+# ── _resolve_to_global_ip — fail-closed paths ────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -72,7 +71,7 @@ async def test_dns_failure_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(socket, "getaddrinfo", _raise)
     with pytest.raises(ValueError, match="DNS resolution failed"):
-        await _assert_not_private("example.com")
+        await _resolve_to_global_ip("example.com")
 
 
 @pytest.mark.asyncio
@@ -95,14 +94,14 @@ async def test_dns_failure_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None
 async def test_private_ip_rejected(monkeypatch: pytest.MonkeyPatch, ip: str, label: str) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: _make_addrinfo(ip))
     with pytest.raises(ValueError, match="SSRF blocked"):
-        await _assert_not_private("evil.example.com")
+        await _resolve_to_global_ip("evil.example.com")
 
 
 @pytest.mark.asyncio
 async def test_public_ip_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: _make_addrinfo("8.8.8.8"))
     # No raise = pass.
-    await _assert_not_private("dns.google")
+    await _resolve_to_global_ip("dns.google")
 
 
 @pytest.mark.asyncio
@@ -115,7 +114,7 @@ async def test_mixed_records_rejected_if_any_private(monkeypatch: pytest.MonkeyP
         lambda *a, **kw: _make_addrinfo("8.8.8.8", "127.0.0.1"),
     )
     with pytest.raises(ValueError, match="SSRF blocked"):
-        await _assert_not_private("split-horizon.example.com")
+        await _resolve_to_global_ip("split-horizon.example.com")
 
 
 @pytest.mark.asyncio
@@ -125,7 +124,7 @@ async def test_unrecognised_address_format_rejected(monkeypatch: pytest.MonkeyPa
     fake = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("not-an-ip", 0))]
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: fake)
     with pytest.raises(ValueError, match="unrecognised address format"):
-        await _assert_not_private("bogus.example.com")
+        await _resolve_to_global_ip("bogus.example.com")
 
 
 # ── _resolve_to_global_ip returns an IP ──────────────────────────────────────
