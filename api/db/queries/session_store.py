@@ -120,13 +120,13 @@ class PostgresSessionStore:
         session_id = key["session_id"]
         subpath = key.get("subpath") or ""
         async with self._factory() as db:
-            await db.execute(text("""
-                DELETE FROM agent_sessions
-                WHERE project_key = :project_key
-                  AND session_id  = :session_id
-                  AND (:subpath = '' OR subpath = :subpath)
-            """), {"project_key": project_key, "session_id": session_id, "subpath": subpath})
-            await db.commit()
+            async with db.begin():
+                await db.execute(text("""
+                    DELETE FROM agent_sessions
+                    WHERE project_key = :project_key
+                      AND session_id  = :session_id
+                      AND (:subpath = '' OR subpath = :subpath)
+                """), {"project_key": project_key, "session_id": session_id, "subpath": subpath})
 
 
 def scoped_session_store(
