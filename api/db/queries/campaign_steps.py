@@ -72,6 +72,26 @@ async def get_pending_campaign_steps(
     return [dict(r._mapping) for r in result]
 
 
+async def list_campaign_steps(
+    db: AsyncSession,
+    campaign_id: str,
+) -> list[dict[str, Any]]:
+    """All steps for a campaign regardless of status, with `result` for
+    completed ones. Used by the heuristic conditions-proposer to rank
+    completed outcomes by yield."""
+    result = await db.execute(
+        text("""
+            SELECT id::text, step_idx, reaction_smiles, conditions, status,
+                   result, retry_count, next_retry_at, updated_at
+            FROM campaign_steps
+            WHERE campaign_id = CAST(:campaign_id AS uuid)
+            ORDER BY step_idx
+        """),
+        {"campaign_id": campaign_id},
+    )
+    return [dict(r._mapping) for r in result]
+
+
 async def get_pending_steps_for_campaigns(
     db: AsyncSession,
     campaign_ids: list[str],

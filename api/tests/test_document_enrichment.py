@@ -187,7 +187,7 @@ async def test_fetch_crossref_ssrf_blocked_returns_none(
     """If the SSRF guard rejects (e.g. DNS rebind hit a private IP), the
     enrichment helper should swallow the rejection and return None so
     the upload still succeeds — just without metadata."""
-    from api.agent.tools import _SSRFError
+    from api.agent.tool_helpers import _SSRFError
 
     async def _ssrf(url: str, **kw: Any) -> Any:
         raise _SSRFError("simulated SSRF reject")
