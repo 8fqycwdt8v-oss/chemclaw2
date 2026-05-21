@@ -207,3 +207,69 @@ async def test_insert_paper_chunks_idempotent_via_conflict(
     assert matches[0]["section"] == "updated"
     assert matches[0]["page"] == 1
     assert matches[0]["text"] == "updated chunk text"
+
+
+
+async def test_paper_id_filter_scopes_to_single_paper(
+    session_factory, user_id: str,
+) -> None:
+    """`semantic_search_paper_chunks(..., paper_id=X)` and the FTS path
+    both restrict to one paper. Without that, every retrieval would
+    return matches from every ingested paper — useful for the global
+    `paper_qa` flow, but the `paper_id` filter is what lets the agent
+    drill into one specific document."""
+    keyword = "binding affinity"
+    target_id = await _seed_paper(
+        session_factory, user_id, title="In-scope paper",
+        chunks=[f"This compound shows {keyword} of 12 nM."],
+    )
+    other_id = await _seed_paper(
+        session_factory, user_id, title="Out-of-scope paper",
+        chunks=[f"Different compound, same {keyword} keyword though."],
+    )
+
+    # FTS leg with paper_id filter.
+    async with session_factory() as db:
+        rows = await search_paper_chunks_fts(db, keyword, paper_id=target_id)
+    assert len(rows) >= 1
+    assert all(r["paper_id"] == target_id for r in rows)
+    assert other_id not in {r["paper_id"] for r in rows}
+
+    # Semantic leg with paper_id filter (query vector aligned with the
+    # in-scope chunk so it's the closer match by construction).
+    query_vec = _vec_for(f"This compound shows {keyword} of 12 nM.")
+    async with session_factory() as db:
+        sem_rows = await semantic_search_paper_chunks(
+            db, query_vec, paper_id=target_id,
+        )
+    assert len(sem_rows) >= 1
+    assert all(r["paper_id"] == target_id for r in sem_rows)
+    assert other_id not in {r["paper_id"] for r in sem_rows}
+
+    # Sanity: without the filter, BOTH papers' chunks come back.
+    async with session_factory() as db:
+        unscoped = await search_paper_chunks_fts(db, keyword)
+    paper_ids = {r["paper_id"] for r in unscoped}
+    assert {target_id, other_id} <= paper_ids
+
+
+async def test_hybrid_search_paper_id_filter(
+    session_factory, user_id: str,
+) -> None:
+    """The hybrid (RRF) layer must also pass paper_id through to both legs."""
+    target_id = await _seed_paper(
+        session_factory, user_id, title="Hybrid target",
+        chunks=["The Pd-catalyzed cross-coupling proceeded in 72% yield."],
+    )
+    await _seed_paper(
+        session_factory, user_id, title="Hybrid distractor",
+        chunks=["Distractor: another Pd-catalyzed reaction described elsewhere."],
+    )
+    query = "Pd-catalyzed yield"
+    query_vec = _vec_for("The Pd-catalyzed cross-coupling proceeded in 72% yield.")
+    async with session_factory() as db:
+        rows = await hybrid_search_paper_chunks(
+            db, query, query_vec, limit=5, paper_id=target_id,
+        )
+    assert len(rows) >= 1
+    assert all(r["paper_id"] == target_id for r in rows)

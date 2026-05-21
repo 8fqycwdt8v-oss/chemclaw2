@@ -251,3 +251,53 @@ def test_propose_via_bofire_rejects_multi_objective_v1(
     })
     with pytest.raises(ValueError, match="multi-objective"):
         propose_via_bofire(multi_spec, experiments=[], n_proposals=3)
+
+
+# ── BO_MIN_DATAPOINTS env override ───────────────────────────────────────────
+
+
+def test_min_datapoints_env_default_is_ten() -> None:
+    """Default threshold for switching from LHS to GP. Documented in the
+    Tier-3 plan; verify the constant matches the doc."""
+    from api.db.queries.optimization import (
+        DEFAULT_MIN_DATAPOINTS_FOR_GP,
+        _min_datapoints_for_gp,
+    )
+    assert DEFAULT_MIN_DATAPOINTS_FOR_GP == 10
+    assert _min_datapoints_for_gp() == 10
+
+
+def test_min_datapoints_env_override_picked_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`BO_MIN_DATAPOINTS=5` lets a low-D problem fit a GP at smaller N
+    than the conservative default."""
+    from api.db.queries.optimization import _min_datapoints_for_gp
+    monkeypatch.setenv("BO_MIN_DATAPOINTS", "5")
+    assert _min_datapoints_for_gp() == 5
+    monkeypatch.setenv("BO_MIN_DATAPOINTS", "25")
+    assert _min_datapoints_for_gp() == 25
+
+
+def test_min_datapoints_env_clamps_below_two(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A GP fit with <2 datapoints is meaningless; the helper clamps."""
+    from api.db.queries.optimization import _min_datapoints_for_gp
+    monkeypatch.setenv("BO_MIN_DATAPOINTS", "0")
+    assert _min_datapoints_for_gp() == 2
+    monkeypatch.setenv("BO_MIN_DATAPOINTS", "-50")
+    assert _min_datapoints_for_gp() == 2
+
+
+def test_min_datapoints_env_invalid_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Non-numeric env value warns + uses the default. Misconfig stays
+    visible in logs instead of silently producing 10× the data
+    requirement."""
+    from api.db.queries.optimization import _min_datapoints_for_gp
+    monkeypatch.setenv("BO_MIN_DATAPOINTS", "lots")
+    assert _min_datapoints_for_gp() == 10
+    monkeypatch.setenv("BO_MIN_DATAPOINTS", "")
+    assert _min_datapoints_for_gp() == 10
