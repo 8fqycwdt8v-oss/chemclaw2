@@ -16,10 +16,17 @@ def test_blocked_prompt_returns_403_with_override_signal(client, auth_header):
     assert "override_available" in body
 
 
-def test_clean_prompt_is_not_blocked_by_gate(client, auth_header):
-    # A non-substance prompt — gate must pass. Downstream may 503 if agent
-    # streaming infra isn't reachable in tests, but we ONLY care that the
-    # gate (which returns 403 on block) didn't fire.
+def test_clean_prompt_is_not_blocked_by_gate(client, auth_header, monkeypatch):
+    # A non-substance prompt — gate must pass. The agent runtime itself is
+    # mocked: build_chemclaw_mcp_server has a known SDK API mismatch
+    # (BACKLOG "@mcp.tool() API mismatch") that would AttributeError here,
+    # but that's unrelated to what this test verifies (the gate didn't fire).
+    async def _fake_stream(prompt, user_id, session_id, factory, plan_mode=False):
+        yield "data: {\"type\":\"text\",\"text\":\"ok\"}\n\n"
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr("api.agent.runner.run_agent_streaming", _fake_stream)
+
     resp = client.post(
         "/api/chat",
         headers=auth_header,
