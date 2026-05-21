@@ -445,6 +445,10 @@ async def _rcs_via_openai(
     try:
         text_body = resp.choices[0].message.content or ""
     except (AttributeError, IndexError):
+        logger.warning(
+            "openai_response_shape_unexpected chunk=%s",
+            c.get("id"),
+        )
         return None, "openai response shape unexpected"
     return text_body, None
 

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -21,6 +22,8 @@ from api.routes.notifications import router as notifications_router
 from api.routes.search import router as search_router
 from api.routes.todos import router as todos_router
 from api.routes.wiki import router as wiki_router
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -45,13 +48,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         try:
             await fp_task
         except asyncio.CancelledError:
-            pass
+            logger.info("worker_cancelled name=fp")
     if campaign_task is not None:
         campaign_task.cancel()
         try:
             await campaign_task
         except asyncio.CancelledError:
-            pass
+            logger.info("worker_cancelled name=campaign")
     from api.db.connection import engine
     if engine is not None:
         await engine.dispose()

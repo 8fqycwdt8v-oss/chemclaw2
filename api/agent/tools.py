@@ -339,7 +339,10 @@ async def _heuristic_propose(
                 "rationale": "Exploit/tweak — best conditions with temperature +10°C.",
             })
         except (TypeError, ValueError):
-            pass
+            logger.debug(
+                "temperature_parse_failed campaign=%s value=%r",
+                campaign_id, best_conditions.get("temperature"),
+            )
     seen_solvents = {
         s.get("conditions", {}).get("solvent")
         for s in completed

@@ -330,3 +330,50 @@ async def test_create_campaign_wiki_exhausts_retries(
     assert "permanent failure" in (out["error"] or "")
     # 1 initial attempt + 3 retries = 4 tries (matches _WIKI_RETRY_DELAYS_SEC).
     assert calls["n"] == 4
+
+
+# ── lifespan cancellation logs ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_lifespan_logs_worker_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When the FastAPI lifespan exits, in-process workers get cancelled.
+    The cancellation must be observable in the logs — CLAUDE.md
+    §observability rule 2 ("every except block must log or re-raise") and
+    rule 7 ("workers emit startup, heartbeat, and shutdown log events").
+    Silence on shutdown is indistinguishable from a hung worker."""
+    import logging as _logging
+
+    import api.main as main_mod
+    import api.workers.campaign_worker as cw_mod
+    import api.workers.fp_worker as fp_mod
+    from api.db import connection as connection_mod
+
+    # Lifespan calls validate_auth_config + init_db at the top — stub both.
+    monkeypatch.setattr(main_mod, "validate_auth_config", lambda: None)
+    monkeypatch.setattr(main_mod, "init_db", lambda: None)
+    monkeypatch.setenv("RUN_WORKER_IN_PROCESS", "1")
+    # The lifespan only spawns workers when async_session_factory is wired up;
+    # pre-seed a sentinel so it takes that branch.
+    monkeypatch.setattr(connection_mod, "async_session_factory", object())
+    # No-op engine for the shutdown path.
+    monkeypatch.setattr(connection_mod, "engine", None)
+
+    async def _idle_worker(_factory: object) -> None:
+        # Park here until cancelled — exactly what lifespan exit will do.
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(fp_mod, "run_worker", _idle_worker)
+    monkeypatch.setattr(cw_mod, "run_worker", _idle_worker)
+
+    app = main_mod.create_app()
+    with caplog.at_level(_logging.INFO, logger="api.main"):
+        async with main_mod.lifespan(app):
+            # Yield once so both worker tasks reach their `Event.wait()`.
+            await asyncio.sleep(0)
+
+    assert "worker_cancelled name=fp" in caplog.text
+    assert "worker_cancelled name=campaign" in caplog.text
