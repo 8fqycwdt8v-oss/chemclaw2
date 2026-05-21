@@ -128,7 +128,7 @@ async def resolve_compound_name_to_smiles(name: str) -> str | None:
     """
     from urllib.parse import quote
 
-    from api.agent.tools import _SSRFError, _fetch_validated
+    from api.agent.tool_helpers import _SSRFError, _fetch_validated
 
     name = name.strip()
     if not name or len(name) > 200:
@@ -310,7 +310,7 @@ async def fetch_crossref_metadata(doi: str) -> dict[str, Any] | None:
     Imports the SSRF helper lazily so unit tests of the regex /
     normalization paths above don't drag in httpx.
     """
-    from api.agent.tools import _SSRFError, _fetch_validated
+    from api.agent.tool_helpers import _SSRFError, _fetch_validated
 
     url = f"https://api.crossref.org/works/{doi}"
     try:

@@ -17,7 +17,7 @@ from typing import Any
 import httpx
 import pytest
 
-from api.agent.tools import (
+from api.agent.tool_helpers import (
     _assert_not_private,
     _fetch_validated,
     _is_allowed_domain,
@@ -202,7 +202,7 @@ async def test_fetch_validated_pins_resolved_ip(monkeypatch: pytest.MonkeyPatch)
     hostname. This locks in the DNS-rebinding mitigation."""
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: _make_addrinfo("1.1.1.1"))
     stub = _StubAsyncClient([_resp(200)])
-    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+    monkeypatch.setattr("api.agent.tool_helpers.httpx.AsyncClient", lambda **kw: stub)
 
     await _fetch_validated("https://www.nature.com/articles/x", enforce_domain_allowlist=True)
 
@@ -222,7 +222,7 @@ async def test_fetch_validated_revalidates_redirect_hop(monkeypatch: pytest.Monk
     stub = _StubAsyncClient([
         _resp(302, headers={"location": "https://attacker.example.com/"}),
     ])
-    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+    monkeypatch.setattr("api.agent.tool_helpers.httpx.AsyncClient", lambda **kw: stub)
 
     with pytest.raises(_SSRFError, match="not in the allowed list"):
         await _fetch_validated("https://www.nature.com/x", enforce_domain_allowlist=True)
@@ -237,7 +237,7 @@ async def test_fetch_validated_follows_safe_redirect(monkeypatch: pytest.MonkeyP
         _resp(301, headers={"location": "https://www.nature.com/landing"}),
         _resp(200, content=b"ok"),
     ])
-    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+    monkeypatch.setattr("api.agent.tool_helpers.httpx.AsyncClient", lambda **kw: stub)
 
     r = await _fetch_validated("https://nature.com/x", enforce_domain_allowlist=True)
 
@@ -265,7 +265,7 @@ async def test_fetch_validated_rejects_private_ip_at_second_hop(
     stub = _StubAsyncClient([
         _resp(301, headers={"location": "https://www.nature.com/x"}),
     ])
-    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+    monkeypatch.setattr("api.agent.tool_helpers.httpx.AsyncClient", lambda **kw: stub)
 
     with pytest.raises(_SSRFError, match="non-public address"):
         await _fetch_validated("https://nature.com/x", enforce_domain_allowlist=True)
@@ -279,7 +279,7 @@ async def test_fetch_validated_too_many_redirects(monkeypatch: pytest.MonkeyPatc
         _resp(302, headers={"location": "https://nature.com/b"}),
         _resp(302, headers={"location": "https://nature.com/c"}),
     ])
-    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+    monkeypatch.setattr("api.agent.tool_helpers.httpx.AsyncClient", lambda **kw: stub)
 
     with pytest.raises(_SSRFError, match="Too many redirects"):
         await _fetch_validated(
@@ -295,7 +295,7 @@ async def test_fetch_validated_redirect_without_location_header(
 ) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: _make_addrinfo("1.1.1.1"))
     stub = _StubAsyncClient([_resp(302)])
-    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+    monkeypatch.setattr("api.agent.tool_helpers.httpx.AsyncClient", lambda **kw: stub)
 
     with pytest.raises(_SSRFError, match="no Location header"):
         await _fetch_validated("https://nature.com/x", enforce_domain_allowlist=True)
@@ -314,7 +314,7 @@ async def test_fetch_validated_relative_redirect_resolves_against_original_host(
         _resp(302, headers={"location": "/articles/2"}),
         _resp(200, content=b"ok"),
     ])
-    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+    monkeypatch.setattr("api.agent.tool_helpers.httpx.AsyncClient", lambda **kw: stub)
 
     r = await _fetch_validated("https://nature.com/articles/1", enforce_domain_allowlist=True)
 
@@ -336,7 +336,7 @@ async def test_fetch_validated_skips_allowlist_when_disabled(
     public-domain allowlist."""
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: _make_addrinfo("1.1.1.1"))
     stub = _StubAsyncClient([_resp(200)])
-    monkeypatch.setattr("api.agent.tools.httpx.AsyncClient", lambda **kw: stub)
+    monkeypatch.setattr("api.agent.tool_helpers.httpx.AsyncClient", lambda **kw: stub)
 
     r = await _fetch_validated(
         "https://eln.internal-customer.example/api/x",
@@ -364,7 +364,7 @@ def test_redact_ssrf_error_strips_internal_detail_from_client_surface(
     )
 
     import logging
-    with caplog.at_level(logging.WARNING, logger="api.agent.tools"):
+    with caplog.at_level(logging.WARNING, logger="api.agent.tool_helpers"):
         result = _redact_ssrf_error("fetch_document", exc)
 
     assert result == {"error": "URL rejected by SSRF guard"}

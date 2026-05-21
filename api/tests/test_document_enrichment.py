@@ -151,7 +151,7 @@ async def test_fetch_crossref_success(monkeypatch: pytest.MonkeyPatch) -> None:
             json={"message": {"DOI": "10.1234/x", "title": ["Found"]}},
         )
 
-    monkeypatch.setattr("api.agent.tools._fetch_validated", _fake_fetch)
+    monkeypatch.setattr("api.agent.tool_helpers._fetch_validated", _fake_fetch)
     out = await de.fetch_crossref_metadata("10.1234/x")
     assert out is not None
     assert out["title"] == "Found"
@@ -163,7 +163,7 @@ async def test_fetch_crossref_404_returns_none(monkeypatch: pytest.MonkeyPatch) 
     async def _fake_fetch(url: str, **kw: Any) -> httpx.Response:
         return httpx.Response(404)
 
-    monkeypatch.setattr("api.agent.tools._fetch_validated", _fake_fetch)
+    monkeypatch.setattr("api.agent.tool_helpers._fetch_validated", _fake_fetch)
     out = await de.fetch_crossref_metadata("10.1234/missing")
     assert out is None
 
@@ -175,7 +175,7 @@ async def test_fetch_crossref_network_error_returns_none(
     async def _raise(url: str, **kw: Any) -> Any:
         raise httpx.ConnectError("simulated network error")
 
-    monkeypatch.setattr("api.agent.tools._fetch_validated", _raise)
+    monkeypatch.setattr("api.agent.tool_helpers._fetch_validated", _raise)
     out = await de.fetch_crossref_metadata("10.1234/x")
     assert out is None
 
@@ -187,12 +187,12 @@ async def test_fetch_crossref_ssrf_blocked_returns_none(
     """If the SSRF guard rejects (e.g. DNS rebind hit a private IP), the
     enrichment helper should swallow the rejection and return None so
     the upload still succeeds — just without metadata."""
-    from api.agent.tools import _SSRFError
+    from api.agent.tool_helpers import _SSRFError
 
     async def _ssrf(url: str, **kw: Any) -> Any:
         raise _SSRFError("simulated SSRF reject")
 
-    monkeypatch.setattr("api.agent.tools._fetch_validated", _ssrf)
+    monkeypatch.setattr("api.agent.tool_helpers._fetch_validated", _ssrf)
     out = await de.fetch_crossref_metadata("10.1234/x")
     assert out is None
 
@@ -204,7 +204,7 @@ async def test_fetch_crossref_invalid_json_returns_none(
     async def _fake_fetch(url: str, **kw: Any) -> httpx.Response:
         return httpx.Response(200, content=b"not json at all")
 
-    monkeypatch.setattr("api.agent.tools._fetch_validated", _fake_fetch)
+    monkeypatch.setattr("api.agent.tool_helpers._fetch_validated", _fake_fetch)
     out = await de.fetch_crossref_metadata("10.1234/x")
     assert out is None
 
@@ -222,7 +222,7 @@ async def test_resolve_compound_success(monkeypatch: pytest.MonkeyPatch) -> None
             json={"PropertyTable": {"Properties": [{"CID": 2244, "CanonicalSMILES": "CC(=O)OC1=CC=CC=C1C(=O)O"}]}},
         )
 
-    monkeypatch.setattr("api.agent.tools._fetch_validated", _fake_fetch)
+    monkeypatch.setattr("api.agent.tool_helpers._fetch_validated", _fake_fetch)
     out = await de.resolve_compound_name_to_smiles("aspirin")
     assert out == "CC(=O)OC1=CC=CC=C1C(=O)O"
 
@@ -239,7 +239,7 @@ async def test_resolve_compound_handles_special_chars(
         seen_urls.append(url)
         return httpx.Response(404)
 
-    monkeypatch.setattr("api.agent.tools._fetch_validated", _fake_fetch)
+    monkeypatch.setattr("api.agent.tool_helpers._fetch_validated", _fake_fetch)
     await de.resolve_compound_name_to_smiles("(2S)-2-amino-3-methylbutanoic acid")
 
     assert seen_urls
@@ -256,7 +256,7 @@ async def test_resolve_compound_404_returns_none(
     async def _fake_fetch(url: str, **kw: Any) -> httpx.Response:
         return httpx.Response(404)
 
-    monkeypatch.setattr("api.agent.tools._fetch_validated", _fake_fetch)
+    monkeypatch.setattr("api.agent.tool_helpers._fetch_validated", _fake_fetch)
     out = await de.resolve_compound_name_to_smiles("nonexistent-compound-xyz")
     assert out is None
 
@@ -280,7 +280,7 @@ async def test_resolve_compound_empty_properties_returns_none(
     async def _fake_fetch(url: str, **kw: Any) -> httpx.Response:
         return httpx.Response(200, json={"PropertyTable": {"Properties": []}})
 
-    monkeypatch.setattr("api.agent.tools._fetch_validated", _fake_fetch)
+    monkeypatch.setattr("api.agent.tool_helpers._fetch_validated", _fake_fetch)
     out = await de.resolve_compound_name_to_smiles("phantom")
     assert out is None
 
