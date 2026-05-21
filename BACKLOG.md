@@ -18,7 +18,7 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 
 ### Tier F — Long-horizon / blocked (kept as reference, not on the work plan)
 
-- **Multi-tenant RLS** — every policy still `USING(true)`; migration 0034 dropped the truly permissive stubs but the remaining ones need per-tenant `USING (org_id = current_setting('app.org_id')::uuid)` bodies. Trigger: tenants > 1.
+- **Multi-tenant RLS** — RLS is now OFF on every table; migrations 0034 and 0043 disabled the `USING(true)` stubs across all 24 (agent_sessions, rate_limits + the 22 in batch 2) so the schema reflects reality (app-layer authz via Clerk + owner-scoped queries). Re-enabling with real per-tenant `USING (org_id = current_setting('app.org_id')::uuid)` bodies is on the work plan when tenants > 1 — and will require wiring the app to `SET LOCAL app.org_id` on every transaction (the `withUserContext` helper from 0021 was exported but never invoked).
 - ~~Wiki audit-read~~ — shipped in feat/wiki-audit-read PR. `GET /api/audit/wiki/{slug}` returns the current page metadata (version, created_by/updated_by, bi-temporal valid_from/valid_to, maturity, archived, needs_review) bundled with the full revision list ordered newest-first. Admin-only (uses `_AUDIT_WIKI` deps — admin check before rate-limit so non-admins still see 403 not 429). Pairs with the existing `GET /api/wiki/{slug}/revisions/{version}` for full revision bodies when a diff is needed.
 - **RLS on `notifications`** — enable with per-user predicate. Trigger: tenants > 1.
 - **Skills catalog in DB** — promote filesystem skill packs to a table with scope (personal/project/org) + maturity tier. Trigger: skill count grows.
