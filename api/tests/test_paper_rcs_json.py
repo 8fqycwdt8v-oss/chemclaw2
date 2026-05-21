@@ -7,7 +7,7 @@ break the old version.
 """
 from __future__ import annotations
 
-from api.db.queries.papers import _extract_json_object
+from api.db.queries.paper_rcs import _extract_json_object
 
 
 def test_extract_plain_object() -> None:

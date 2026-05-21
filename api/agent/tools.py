@@ -251,7 +251,7 @@ async def _ingest_paper_chunks(
     Embedding failure is non-fatal: chunks land with embedding=NULL so FTS
     retrieval still works; semantic retrieval will simply skip them.
     """
-    from api.db.queries.papers import chunk_paper_text, insert_paper_chunks
+    from api.db.queries.paper_chunks import chunk_paper_text, insert_paper_chunks
     chunk_size, overlap = _resolve_chunk_params()
     parts = chunk_paper_text(content_text, chunk_size=chunk_size, overlap=overlap)
     if not parts:
@@ -949,10 +949,8 @@ def build_chemclaw_mcp_server(
         ANTHROPIC_API_KEY, no embedding, etc.), falls back to retrieval-only
         results with `rcs_error` set per chunk.
         """
-        from api.db.queries.papers import (
-            hybrid_search_paper_chunks,
-            score_chunks_with_llm,
-        )
+        from api.db.queries.paper_chunks import hybrid_search_paper_chunks
+        from api.db.queries.paper_rcs import score_chunks_with_llm
         q = query.strip()
         if not q or len(q) > 500:
             return {"error": "query must be 1-500 chars"}

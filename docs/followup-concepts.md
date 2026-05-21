@@ -306,7 +306,7 @@ Add `RCS_PROVIDER=openai` path so deployments that can't use Anthropic for any r
 
 ### Approach
 
-`api/db/queries/papers.py:score_chunks_with_llm`:
+`api/db/queries/paper_rcs.py:score_chunks_with_llm`:
 - Read `RCS_PROVIDER` env (default: `anthropic`).
 - Provider-specific lazy client: `_get_anthropic_client()` already exists; add `_get_openai_client()` mirroring the `api/embeddings.py` pattern.
 - Provider-specific model env: `ANTHROPIC_RCS_MODEL` / `OPENAI_RCS_MODEL` with sensible defaults (`claude-haiku-4-5-20251001` for Anthropic; for OpenAI, the then-current small reasoning model — pick at implementation time rather than pinning here).

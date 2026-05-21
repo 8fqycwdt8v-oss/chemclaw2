@@ -6,7 +6,7 @@ tests pin it down with examples that mirror real paper layouts.
 """
 from __future__ import annotations
 
-from api.db.queries.papers import chunk_paper_text
+from api.db.queries.paper_chunks import chunk_paper_text
 
 
 def test_chunk_text_empty_returns_no_chunks() -> None:

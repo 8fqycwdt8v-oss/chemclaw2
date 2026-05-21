@@ -16,13 +16,13 @@ import hashlib
 import uuid
 
 from api.db.queries.knowledge import upsert_paper
-from api.db.queries.papers import (
-    EMBED_DIM,
+from api.db.queries.paper_chunks import (
     hybrid_search_paper_chunks,
     insert_paper_chunks,
     search_paper_chunks_fts,
     semantic_search_paper_chunks,
 )
+from api.embeddings import EMBED_DIM
 
 
 def _vec_for(text: str) -> list[float]:
