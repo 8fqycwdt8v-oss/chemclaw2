@@ -92,12 +92,31 @@ async def test_update_investigation_status_rejects_invalid(
 async def test_update_investigation_status_owner_scoped(
     session_factory, user_id: str,
 ) -> None:
+    """Stranger's UPDATE must (a) return False (rowcount = 0) AND (b)
+    NOT actually mutate the row. The original test only checked (a),
+    which would still pass if the UPDATE silently changed the row but
+    the rowcount accounting was off. Pin both."""
     other = f"u-{uuid.uuid4().hex[:8]}"
     async with session_factory() as db:
         iid = await create_investigation(db, "T", "o", user_id)
+    # Verify the row started as 'active' so the assertion below is meaningful.
+    async with session_factory() as db:
+        row_before = await get_investigation(db, iid, user_id)
+    assert row_before is not None
+    assert row_before["status"] == "active"
+
+    # Stranger tries to flip to 'paused'.
     async with session_factory() as db:
         ok = await update_investigation_status(db, iid, other, "paused")
     assert ok is False, "stranger's update must fail closed (no rows affected)"
+
+    # The real owner reads back the row — status MUST still be 'active'.
+    async with session_factory() as db:
+        row_after = await get_investigation(db, iid, user_id)
+    assert row_after is not None
+    assert row_after["status"] == "active", (
+        "stranger's UPDATE returned 0 rows but the row was mutated anyway"
+    )
 
 
 # ── world model ──────────────────────────────────────────────────────────────

@@ -301,3 +301,54 @@ def test_min_datapoints_env_invalid_falls_back_to_default(
     assert _min_datapoints_for_gp() == 10
     monkeypatch.setenv("BO_MIN_DATAPOINTS", "")
     assert _min_datapoints_for_gp() == 10
+
+
+# ── P2 review-finding: BOFIRE happy path (LHS) ────────────────────────────────
+
+
+def test_propose_via_bofire_lhs_path() -> None:
+    """When [opt] is installed and there are 0 completed experiments,
+    the dispatcher picks BOFIRE's RandomStrategy (LHS) and returns
+    n_proposals candidates within the declared input bounds.
+
+    Skipped automatically when `bofire` isn't installed (default CI
+    env). When it IS installed (e.g. on a `[opt]`-shipping worker),
+    this pins the stage-1 contract."""
+    pytest.importorskip("bofire")
+    from api.db.queries.optimization import propose_via_bofire
+
+    result = propose_via_bofire(
+        _spec(),
+        experiments=[],     # zero observations → must fall to LHS, not GP
+        n_proposals=3,
+    )
+    assert "strategy" in result
+    assert "lhs" in result["strategy"], (
+        f"expected LHS path with no experiments, got {result['strategy']!r}"
+    )
+    assert result["n_experiments_fitted"] == 0
+    assert len(result["proposals"]) == 3
+    # Every proposal must be a dict with `conditions` containing both
+    # declared inputs, and conditions values must lie in the declared
+    # bounds.
+    for p in result["proposals"]:
+        cond = p["conditions"]
+        assert set(cond.keys()) == {"temperature", "solvent"}
+        assert 20 <= cond["temperature"] <= 120
+        assert cond["solvent"] in {"THF", "DMF", "EtOH"}
+
+
+def test_propose_via_bofire_lhs_proposals_are_diverse() -> None:
+    """LHS should produce DIFFERENT proposals — otherwise it's no better
+    than the V1 heuristic. Pin a sanity floor: at least 2 of 5 proposals
+    should differ on `temperature`."""
+    pytest.importorskip("bofire")
+    from api.db.queries.optimization import propose_via_bofire
+
+    result = propose_via_bofire(_spec(), experiments=[], n_proposals=5)
+    temps = [p["conditions"]["temperature"] for p in result["proposals"]]
+    # Probabilistic check — LHS could in theory collide but the
+    # 5-sample chance of fewer than 2 unique temps is vanishing.
+    assert len(set(temps)) >= 2, (
+        f"LHS proposals collapsed to one temperature: {temps}"
+    )
