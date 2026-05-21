@@ -75,8 +75,8 @@ def test_chat_invalid_session_id_silently_dropped(
     # 200 streaming response, not 422.
     assert resp.status_code == 200
     # A fresh UUID was generated since the supplied session_id was invalid.
-    assert captured.get("session_id") is not None
-    assert len(captured["session_id"]) == 36  # uuid4 hex with dashes
+    sid = captured.get("session_id")
+    assert sid is not None and len(sid) == 36  # uuid4 hex with dashes
 
 
 # ── Substance gate ──────────────────────────────────────────────────────────
