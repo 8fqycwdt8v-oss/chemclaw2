@@ -81,6 +81,67 @@ jobs:
               | sed 's/^/::error::/' || true
           fi
 
+      - name: Mypy log to step summary
+        # Runs on every PR run, success or failure, so the dump-and-
+        # annotate output is visible in the Actions UI's `Summary`
+        # tab without scrolling through logs. Also writes the same
+        # content as a PR comment below for tooling access.
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/mypy.log ] && [ -s /tmp/mypy.log ]; then
+            {
+              echo "## mypy output (CI run)"
+              echo ""
+              echo '```'
+              cat /tmp/mypy.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Post mypy errors as PR comment
+        # On pull_request events only, comment the mypy log onto the PR
+        # if it contains any error lines. Gives tooling without raw-log
+        # access a way to read CI's actual mypy output via the GitHub
+        # API. Idempotent: searches for an existing comment with the
+        # marker and updates rather than appending a new one each push.
+        if: github.event_name == 'pull_request' && always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ ! -f /tmp/mypy.log ] || [ ! -s /tmp/mypy.log ]; then
+            echo "no mypy.log; skipping comment"
+            exit 0
+          fi
+          if ! grep -qE "error:" /tmp/mypy.log; then
+            echo "mypy.log present but no errors; skipping comment"
+            exit 0
+          fi
+          marker="<!-- chemclaw2-mypy-ci-output -->"
+          {
+            echo "$marker"
+            echo "**mypy CI output** (run ${{ github.run_id }})"
+            echo ""
+            echo '```'
+            head -200 /tmp/mypy.log
+            echo '```'
+          } > /tmp/mypy-comment.md
+          # Find existing comment by marker; update if present, else create.
+          existing=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+                       --paginate --jq ".[] | select(.body | contains(\"$marker\")) | .id" \
+                       | head -1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH \
+              "repos/${{ github.repository }}/issues/comments/$existing" \
+              -F body=@/tmp/mypy-comment.md
+          else
+            gh api -X POST \
+              "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+              -F body=@/tmp/mypy-comment.md
+          fi
+
       - name: Upload mypy log
         if: always()
         uses: actions/upload-artifact@v4
