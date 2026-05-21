@@ -1959,7 +1959,12 @@ def build_chemclaw_mcp_server(
             async with session_factory() as db:
                 experiments = await load_campaign_experiments(db, campaign_id, spec)
             try:
-                result = propose_via_bofire(spec, experiments, n_proposals)
+                # GP fit can take multiple seconds — offload to a thread so
+                # the event loop stays responsive for other coroutines
+                # (concurrent paper_qa, agent streams, etc).
+                result = await asyncio.to_thread(
+                    propose_via_bofire, spec, experiments, n_proposals,
+                )
                 return {"campaign_id": campaign_id, **result}
             except ImportError:
                 logger.info(
@@ -2046,6 +2051,11 @@ def build_chemclaw_mcp_server(
                     try:
                         payload = json.loads(payload)
                     except json.JSONDecodeError:
+                        logger.warning(
+                            "external_facts(source_id=%s).payload not "
+                            "JSON-parseable; re-running aizynth search",
+                            cache_key,
+                        )
                         payload = {}
                 if isinstance(payload, dict) and "routes" in payload:
                     return {**payload, "cached": True}

@@ -87,12 +87,12 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 
 ### Phase A follow-ups (paper RAG / retrosynth / ChemCrow, May 2026)
 
-- **HNSW index on `paper_chunks.embedding`** — deferred per migration 0038 comment; build with `CREATE INDEX CONCURRENTLY` once row counts justify it (matches the wiki_chunks pattern, which still does linear scans). Trigger: > 10k ingested chunks across active papers.
-- **DB-integration test for `paper_qa` end-to-end** — `test_paper_chunks.py` covers chunking only. A `test_papers_hybrid_search.py` modeled on `test_hybrid_search.py` would seed chunks, embed via the test conftest's stubbed embedder, run `hybrid_search_paper_chunks`, and assert RRF ordering. Blocked on a test-side embedder stub usable from a query-layer test.
-- **MCP-tool smoke tests for the new chemistry surface** — `paper_qa`, `propose_retrosynthesis`, `name_to_structure`, `patent_coverage` are exercised only via their underlying libraries today. Mirror the SSRF-rejection pattern from `test_ssrf.py` for each.
-- **Chunk-size / overlap config** — `_ingest_paper_chunks` hardcodes 1500/200. Surface via `PAPER_CHUNK_SIZE` / `PAPER_CHUNK_OVERLAP` env vars when a customer pushes back on the defaults.
-- **OpenAI fallback for RCS scoring** — `score_chunks_with_llm` is Anthropic-only. Add an OpenAI path keyed off `RCS_PROVIDER=openai` if a future deployment can't depend on `ANTHROPIC_API_KEY`.
-- **External retrosynthesis service** — the 11-template curated library is a deliberate floor. When demand justifies, wire AiZynthFinder / ASKCOS / IBM RXN as a second `propose_retrosynthesis_deep` tool, keeping the template fast-path for first-pass disconnections.
+- ~~**HNSW index on `paper_chunks.embedding`**~~ — shipped in PR #119 (Tier 1 §C). Migration 0041 creates the index CONCURRENTLY; CI loop teaches `psql` to switch to autocommit when a file mentions CONCURRENTLY.
+- ~~**DB-integration test for `paper_qa` end-to-end**~~ — shipped in PR #120 (Tier 2 §D). `test_papers_hybrid_search.py` seeds chunks with SHA1-keyed one-hot embeddings, exercises FTS + semantic + RRF, surfaced the latent `IllegalStateChangeError` in `hybrid_search_*` (also fixed in the same PR).
+- **MCP-tool smoke tests for the new chemistry surface** — still open. Folded into the consolidated tool-layer-harness item below.
+- ~~**Chunk-size / overlap config**~~ — shipped in PR #119 (Tier 1 §F). `PAPER_CHUNK_SIZE` / `PAPER_CHUNK_OVERLAP` env vars validated by `_resolve_chunk_params()` with fallback to defaults on misconfig.
+- ~~**OpenAI fallback for RCS scoring**~~ — shipped in PR #120 (Tier 2 §G). `RCS_PROVIDER` env var (default `anthropic`); both branches fail closed on missing SDK / key.
+- ~~**External retrosynthesis service**~~ — shipped in PR #126 (Tier 3 §H). AiZynthFinder behind `[retrosynth]` extras; `propose_retrosynthesis_deep` tool with `asyncio.to_thread` + 5min wall cap + 30-day `external_facts` cache.
 
 ### Reaction condition prediction (May 2026)
 
@@ -108,7 +108,21 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 
 ### Phase C (May 2026)
 
-- **Real Bayesian optimisation for `propose_next_conditions`** — V1 is a heuristic (best-yield exploit + one perturbation + one solvent-swap explore). Replace with a Gaussian Process / random-forest posterior + Expected-Improvement acquisition once enough campaigns have completed-step outcomes to fit against. `scikit-learn` is the obvious dep; defer adding it until the heuristic is empirically the bottleneck.
-- **Container-isolated sandbox** — `mcp_codesandbox` uses subprocess + RLIMIT + `unshare -n` for network namespace isolation. Adequate as defense-in-depth, not full isolation. Move to Docker / firejail / nsjail once we measure a real escape risk or want filesystem-level isolation. Anti-feature note in CLAUDE.md says no self-hosted K8s, but Docker for tool isolation is in scope.
-- **Figure capture from sandbox** — Kosmos lets the data-analysis agent emit matplotlib figures. Today `run_code` captures stdout/stderr only; matplotlib in a sandbox would need to dump PNGs to the temp cwd and we'd need to read them back as base64 artefacts. Add when an agent workflow actually requests it.
-- **MCP-tool smoke tests for the new Phase C surface** — `run_code`, `list_code_executions`, `propose_next_conditions`, and the four new sub-agents (compound-explorer, reaction-explorer, literature-explorer, wiki-explorer) are exercised via their underlying libraries but not via the agent SDK. Same backlog item as Phase A/B's missing tool tests.
+- ~~**Real Bayesian optimisation for `propose_next_conditions`**~~ — shipped in PR #122 (Tier 3 §A). Three-stage dispatcher: heuristic → BOFIRE LHS → BOFIRE GP+qLogEI. BOFIRE behind `[opt]` extras; base install pays zero dep tax. Single-objective only in V1.
+- ~~**Container-isolated sandbox**~~ — shipped in PR #125 (Tier 3 §B). bwrap as tier 1 (full namespace + cap-drop), `unshare -n` as tier 2, plain `python -I` as tier 3. Probe-and-cache picks the strongest tier the host supports; falls back gracefully on Docker-in-Docker.
+- ~~**Figure capture from sandbox**~~ — shipped in PR #124 (Tier 3 §M). Migration 0042 adds `code_executions.artifacts JSONB`; sandbox prepends `matplotlib.use("Agg")` and post-run base64-encodes PNGs into the row. 1.5 MB total cap, 1 MB per-file cap.
+- **Tool-layer smoke-test harness** — still open across Phase A/B/C surfaces (consolidated). Blocked on figuring out the SDK access pattern: `create_sdk_mcp_server` returns a `McpSdkServerConfig` TypedDict with no per-tool handler access. Options: (a) extract tool bodies out of the closure into module-level callables, (b) call via the SDK's request/response protocol. Probably (a) — cheaper change to existing code.
+
+### Phase D candidates (May 2026, post Tier 1-3)
+
+- **§A multi-objective BO** — current dispatcher rejects multi-output specs with a clear error. Add `MoboStrategy` + `qLogExpectedHypervolumeImprovement` when a customer asks for Pareto fronts.
+- **§A mixture variables + `LinearInequalityConstraint`** — current spec is box-only. BOFIRE supports both; needs schema widening of `ParameterSpec` + tool-layer validation.
+- **§A `OPENAI_RCS_MODEL` reasoning-model support** — current code uses `max_tokens` which o1/o3 reject; should detect reasoning models and switch to `max_completion_tokens`.
+- **§A output keys beyond `yield_pct`** — `reaction_outcomes` schema would need widening (currently only `yield_pct` is structured).
+- **§B per-call `network=True` opt-in for `run_code`** — bwrap's `--unshare-all` drops network. Agents that legitimately need HTTP from sandbox code can opt in via a new tool arg.
+- **§H SMILES canonicalisation for AiZynth cache key** — `aizynth:CCO` vs `aizynth:OCC` miss each other. One-liner via `Chem.MolToSmiles(Chem.MolFromSmiles(s))`.
+- **§H subprocess-isolated AiZynthFinder for hard SIGKILL on timeout** — `asyncio.wait_for` cancels the awaiter but the worker thread keeps munching. Move to a separate stdio MCP server (original §H plan suggested this) when production hits the thread-stuck case.
+- **§H full USPTO model bundle** — current default is the ~500 MB demo bundle. Operators who want production-grade route discovery set `AIZYNTH_CONFIG_PATH`; a deployment flag for shipping the full bundle by default would be cleaner.
+- **§M SVG / PDF / HTML artefact types** — PNG only in V1. Add when an agent workflow asks for vector graphics.
+- **§M matplotlib magic-byte validation** — `_scan_artifacts` trusts `.png` extension; sniff `\x89PNG\r\n\x1a\n` before encoding to reject non-PNG content saved under a `.png` filename.
+- **Heavy-path CI lane** — `[opt]` / `[retrosynth]` happy paths land green only in opt-in deployments. One CI job with all extras installed running `@pytest.mark.heavy` would catch regressions earlier.
