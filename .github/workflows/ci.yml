@@ -35,7 +35,20 @@ jobs:
 
       - name: Install MCP servers
         run: |
-          pip install packages/mcp-servers/mcp_molfp packages/mcp-servers/mcp_rxnfp packages/mcp-servers/mcp_retrosynth packages/mcp-servers/mcp_rxn_conditions packages/mcp-servers/mcp_codesandbox
+          pip install packages/mcp-servers/mcp_molfp packages/mcp-servers/mcp_rxnfp packages/mcp-servers/mcp_retrosynth packages/mcp-servers/mcp_rxn_conditions packages/mcp-servers/mcp_codesandbox packages/mcp-servers/mcp_tabular
+
+      - name: Assert mcp_tabular imports + tabicl lazy guard
+        run: |
+          python -c "
+          import mcp_tabular.server  # noqa
+          from mcp_tabular import tabicl_runtime
+          status = tabicl_runtime.status()
+          assert status['installed'] is False, 'CI must not install the [tabicl] extra; got installed=True'
+          import pytest
+          with pytest.raises(RuntimeError, match='tabicl extra not installed'):
+              tabicl_runtime.get_classes()
+          print('mcp_tabular smoke + tabicl lazy guard OK')
+          "
 
       - name: Lint (ruff)
         run: ruff check api/ packages/
