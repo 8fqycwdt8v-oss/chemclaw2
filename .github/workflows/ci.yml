@@ -5,6 +5,14 @@ on:
   pull_request:
     branches: ['**']
 
+# Grant pull-requests + issues write so the "Post mypy errors as PR
+# comment" step can create / update comments. Other permissions stay
+# read-only by default.
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -128,18 +136,23 @@ jobs:
             head -200 /tmp/mypy.log
             echo '```'
           } > /tmp/mypy-comment.md
+          # `gh api -f body=...` sends a JSON-encoded form field, which
+          # is what the issues comments endpoint expects. Use jq to
+          # build the JSON payload so newlines and quotes in the log
+          # don't break the shell escaping.
+          body_json=$(jq -Rs '{body: .}' < /tmp/mypy-comment.md)
           # Find existing comment by marker; update if present, else create.
           existing=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
                        --paginate --jq ".[] | select(.body | contains(\"$marker\")) | .id" \
                        | head -1)
           if [ -n "$existing" ]; then
-            gh api -X PATCH \
+            echo "$body_json" | gh api -X PATCH \
               "repos/${{ github.repository }}/issues/comments/$existing" \
-              -F body=@/tmp/mypy-comment.md
+              --input -
           else
-            gh api -X POST \
+            echo "$body_json" | gh api -X POST \
               "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-              -F body=@/tmp/mypy-comment.md
+              --input -
           fi
 
       - name: Upload mypy log
