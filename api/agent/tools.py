@@ -127,6 +127,20 @@ class _SSRFError(ValueError):
     """Raised by `_fetch_validated` when an SSRF guard rejects the request."""
 
 
+def _redact_ssrf_error(tool: str, exc: _SSRFError, **extra: Any) -> dict[str, Any]:
+    """Log an SSRF rejection server-side and return a generic error to the agent.
+
+    `_SSRFError` messages embed resolved IPs and DNS detail (e.g.
+    "blocked: example.com resolves to a non-public address (10.0.0.1)"),
+    useful for ops debugging but not safe to surface across the MCP/agent
+    client boundary (CLAUDE.md §security-4, OWASP A05). Caller-supplied
+    identity keys (`guideline`, `cid`, etc.) are preserved so the agent
+    can correlate the failure with its request.
+    """
+    logger.warning("tool_ssrf_blocked tool=%s: %s", tool, exc)
+    return {"error": "URL rejected by SSRF guard", **extra}
+
+
 async def _fetch_validated(
     url: str,
     *,
@@ -556,7 +570,7 @@ def build_chemclaw_mcp_server(
         try:
             r = await _fetch_validated(url, enforce_domain_allowlist=True)
         except _SSRFError as e:
-            return {"error": str(e)}
+            return _redact_ssrf_error("fetch_document", e)
         except Exception:
             logger.warning("fetch_document_failed url=%s", url[:100])
             return {"error": "Fetch failed"}
@@ -599,7 +613,7 @@ def build_chemclaw_mcp_server(
                 headers={"Authorization": f"Bearer {eln_key}"},
             )
         except _SSRFError as e:
-            return {"error": str(e)}
+            return _redact_ssrf_error("eln_fetch", e)
         except Exception as e:
             logger.warning("eln_fetch_failed exp=%s: %s", exp_id, e)
             return {"error": "ELN fetch failed"}
@@ -1222,7 +1236,7 @@ def build_chemclaw_mcp_server(
         try:
             r = await _fetch_validated(url, enforce_domain_allowlist=True)
         except _SSRFError as e:
-            return {"error": str(e), "guideline": guideline_key}
+            return _redact_ssrf_error("regulatory_fetch", e, guideline=guideline_key)
         except Exception as e:
             logger.warning("regulatory_fetch_failed guideline=%s: %s", guideline_key, e)
             return {"error": "Failed to fetch regulatory guidance", "guideline": guideline_key}
@@ -1304,7 +1318,11 @@ def build_chemclaw_mcp_server(
             try:
                 r = await _fetch_validated(url, enforce_domain_allowlist=True, timeout=10.0)
             except _SSRFError as e:
-                return field, None, str(e)  # SSRF guard is fatal for the whole call.
+                # SSRF guard is fatal for the whole call. Log the (IP-bearing)
+                # detail and surface only a generic message — same redaction
+                # policy as _redact_ssrf_error (CLAUDE.md §security-4).
+                logger.warning("cactus_ssrf_blocked field=%s name=%s: %s", field, q[:50], e)
+                return field, None, "URL rejected by SSRF guard"
             except Exception as e:
                 logger.warning("cactus_fetch_failed field=%s name=%s: %s", field, q[:50], e)
                 return field, None, None
@@ -1361,7 +1379,7 @@ def build_chemclaw_mcp_server(
                 enforce_domain_allowlist=True, timeout=15.0,
             )
         except _SSRFError as e:
-            return {"cid": None, "error": str(e)}
+            return _redact_ssrf_error("pubchem_cid_lookup", e, cid=None)
         except Exception as e:
             logger.warning("pubchem_cid_lookup_failed smiles_len=%d: %s", len(s), e)
             return {"cid": None, "error": "PubChem CID lookup failed"}
@@ -1382,7 +1400,7 @@ def build_chemclaw_mcp_server(
                 enforce_domain_allowlist=True, timeout=20.0,
             )
         except _SSRFError as e:
-            return {"cid": cid, "error": str(e)}
+            return _redact_ssrf_error("pubchem_patent_lookup", e, cid=cid)
         except Exception as e:
             logger.warning("pubchem_patent_lookup_failed cid=%s: %s", cid, e)
             return {"cid": cid, "error": "Patent xref fetch failed"}
