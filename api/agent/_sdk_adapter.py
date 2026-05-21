@@ -97,9 +97,12 @@ class McpBuilder:
 
         return decorator
 
-    def build(self) -> dict[str, Any]:
-        """Return the `McpSdkServerConfig` dict the SDK's
-        `ClaudeAgentOptions.mcp_servers` expects."""
+    def build(self) -> Any:
+        """Return the `McpSdkServerConfig` TypedDict the SDK's
+        `ClaudeAgentOptions.mcp_servers` expects. Annotated as `Any`
+        rather than `dict[str, Any]` because `McpSdkServerConfig` is
+        a `TypedDict` and mypy treats those as structurally distinct
+        from plain dicts in covariant return positions."""
         return create_sdk_mcp_server(
             self._name, version=self._version, tools=self._tools,
         )
