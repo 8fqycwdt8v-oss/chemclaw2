@@ -105,8 +105,16 @@ def _strip_artifact_payload(artifacts: Any) -> list[dict[str, Any]]:
         try:
             artifacts = json.loads(artifacts)
         except json.JSONDecodeError:
+            logger.warning(
+                "code_executions.artifacts stringified but not JSON-parseable",
+            )
             return []
     if not isinstance(artifacts, list):
+        if artifacts is not None:
+            logger.warning(
+                "code_executions.artifacts unexpected type: %s",
+                type(artifacts).__name__,
+            )
         return []
     out: list[dict[str, Any]] = []
     for a in artifacts:
@@ -187,6 +195,10 @@ async def get_execution(
         try:
             d["artifacts"] = json.loads(artifacts)
         except json.JSONDecodeError:
+            logger.warning(
+                "code_executions(id=%s).artifacts not JSON-parseable; "
+                "returning empty list", execution_id,
+            )
             d["artifacts"] = []
     elif not isinstance(artifacts, list):
         d["artifacts"] = []

@@ -7,17 +7,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies in a virtual env (cached layer).
+# Install Python dependencies in a virtual env. Copy `pyproject.toml`
+# first so the base `pip install -e .` step is cacheable when only
+# source files change.
 COPY pyproject.toml .
 RUN python -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir -e "." && \
-    /opt/venv/bin/pip install --no-cache-dir \
+    /opt/venv/bin/pip install --no-cache-dir -e "."
+
+# Copy MCP server source BEFORE installing them — pip needs the local
+# directories to exist. (Pre-existing bug from before Tier 3: the
+# previous Dockerfile ran the MCP install before copying the source,
+# which would have failed in a clean build. Docker isn't part of CI so
+# nobody noticed.)
+COPY packages/mcp-servers/ ./packages/mcp-servers/
+RUN /opt/venv/bin/pip install --no-cache-dir \
         packages/mcp-servers/mcp_molfp \
-        packages/mcp-servers/mcp_rxnfp
+        packages/mcp-servers/mcp_rxnfp \
+        packages/mcp-servers/mcp_retrosynth \
+        packages/mcp-servers/mcp_rxn_conditions \
+        packages/mcp-servers/mcp_codesandbox \
+        packages/mcp-servers/mcp_tabular
 
 # Copy application code after deps are cached.
 COPY api/ ./api/
-COPY packages/mcp-servers/ ./packages/mcp-servers/
 COPY .claude/skills ./.claude/skills
 
 # ── Runtime image ─────────────────────────────────────────────────────────────
