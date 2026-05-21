@@ -26,13 +26,15 @@ from api.db.queries.subscriptions import (
 )
 from api.db.queries.wiki_read import (
     get_wiki_page,
-    get_wiki_page_at,
     get_wiki_page_citations,
-    get_wiki_revision,
     list_wiki_pages,
     list_wiki_projects,
-    list_wiki_revisions,
     search_wiki_by_fts,
+)
+from api.db.queries.wiki_temporal import (
+    get_wiki_page_at,
+    get_wiki_revision,
+    list_wiki_revisions,
 )
 from api.db.queries.wiki_write import (
     patch_wiki_page,
