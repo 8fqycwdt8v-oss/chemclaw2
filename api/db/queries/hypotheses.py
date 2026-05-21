@@ -200,7 +200,7 @@ async def retire_hypothesis(
             """),
             {"hid": hypothesis_id, "uid": user_id},
         )
-        return result.rowcount > 0
+        return result.rowcount > 0  # type: ignore[attr-defined]
 
 
 # ── tournament ranking ───────────────────────────────────────────────────────
