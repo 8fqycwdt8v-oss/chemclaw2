@@ -159,4 +159,4 @@ async def update_world_model_entry_status(
             """),
             {"eid": entry_id, "uid": user_id, "status": status},
         )
-        return result.rowcount > 0
+        return result.rowcount > 0  # type: ignore[attr-defined]

@@ -76,7 +76,7 @@ async def set_campaign_parameter_spec(
             {"cid": campaign_id, "uid": user_id,
              "spec": spec.model_dump_json()},
         )
-        return result.rowcount > 0
+        return result.rowcount > 0  # type: ignore[attr-defined]
 
 
 async def get_campaign_parameter_spec(

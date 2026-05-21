@@ -112,7 +112,7 @@ async def update_investigation_status(
             """),
             {"iid": investigation_id, "uid": user_id, "status": status},
         )
-        return result.rowcount > 0
+        return result.rowcount > 0  # type: ignore[attr-defined]
 
 
 async def touch_investigation(

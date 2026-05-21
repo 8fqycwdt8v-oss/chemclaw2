@@ -62,14 +62,12 @@ jobs:
         run: ruff check api/ packages/
 
       - name: Type-check (mypy)
-        # continue-on-error: CI's mypy environment surfaces errors that
-        # local mypy 1.19.1 (pinned) does not, and the Actions log UI
-        # doesn't expose the error text to our tooling. The dump-and-
-        # annotate steps below make CI's actual mypy output visible so
-        # the gate can be re-enabled once the version-drift errors are
-        # fixed. CLAUDE.md §3 explicitly authorises skip-listing CI
-        # flakes with a BACKLOG note.
-        continue-on-error: true
+        # Hard gate again. The CI-vs-local mypy drift that motivated the
+        # earlier `continue-on-error: true` workaround was four
+        # `result.rowcount` accesses missing `# type: ignore[attr-defined]`
+        # markers — CI's SQLAlchemy stubs are stricter than local 1.19.1
+        # about the `Result` vs `CursorResult` distinction. Now annotated;
+        # mypy gate re-enabled in this PR.
         shell: bash
         run: |
           set -o pipefail
