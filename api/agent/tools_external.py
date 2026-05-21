@@ -1,16 +1,13 @@
-"""External-fetch tools split out of api/agent/tools.py.
+"""External-fetch MCP tools split out of api/agent/tools.py.
 
-Ten tools that reach outside the chemclaw2 process — web search, document
-fetch, ELN integration (read + ingest + manual outcome record), CACTUS
-name→structure, PubChem patent coverage, retrosynthesis (single-step +
-deep tree). All run through the SSRF-pinned `_fetch_validated` helper
-where applicable.
+Ten tools that reach outside the chemclaw2 process — web search,
+document fetch, ELN integration (read + ingest + manual outcome record),
+CACTUS name→structure, PubChem patent coverage, retrosynthesis
+(single-step + deep tree). All run through the SSRF-pinned
+`_fetch_validated` helper where applicable.
 
-Register via `register_external_tools(mcp, user_id, session_factory)`
-from `build_chemclaw_mcp_server`. Tools that write to the registry
-(`ingest_eln_experiment`, `record_manual_outcome`, `name_to_structure`'s
-CACTUS cache, `propose_retrosynthesis_deep`'s aizynth cache) need
-`user_id` for `created_by` / `fetched_by`. The rest are read-only.
+`build_external_tools(user_id, session_factory)` returns the
+`SdkMcpTool` list.
 """
 from __future__ import annotations
 
@@ -24,8 +21,10 @@ import uuid
 from typing import Any
 
 import httpx
+from claude_agent_sdk import SdkMcpTool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.agent.tool_adapter import wrap_tool
 from api.agent.tool_helpers import (
     _fetch_validated,
     _html_to_text,
@@ -37,15 +36,12 @@ from api.agent.tool_helpers import (
 logger = logging.getLogger(__name__)
 
 
-def register_external_tools(
-    mcp: Any,
+def build_external_tools(
     user_id: str,
     session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    """Attach web / fetch / ELN / chemistry-lookup tools to the MCP server."""
+) -> list[SdkMcpTool[Any]]:
+    """Build the web / fetch / ELN / chemistry-lookup tools."""
 
-    # ── web search ────────────────────────────────────────────────────────────
-    @mcp.tool()
     async def web_search(
         query: str,
         site_filter: str | None = None,
@@ -83,8 +79,6 @@ def register_external_tools(
             logger.error("web_search_failed: %s", e)
             return {"results": [], "error": "Web search failed"}
 
-    # ── document fetch ────────────────────────────────────────────────────────
-    @mcp.tool()
     async def fetch_document(
         url: str,
         format: str = "markdown",
@@ -113,7 +107,6 @@ def register_external_tools(
         # 10 K char limit matches TypeScript doc-fetch — keeps context window manageable.
         return {"content": text[:10_000], "truncated": len(r.content) > MAX_BYTES or len(text) > 10_000}
 
-    # ── ELN experiment fetch ──────────────────────────────────────────────────
     async def _fetch_eln_raw(experiment_id: str) -> dict[str, Any]:
         """Shared ELN fetch path used by both the read-through tool and ingest.
 
@@ -128,8 +121,6 @@ def register_external_tools(
         if not re.match(r'^[A-Za-z0-9_-]{1,64}$', exp_id):
             return {"error": "Invalid experiment_id format"}
         try:
-            # Path: TypeScript used /experiments/{id}; Python uses /api/eln/experiments/{id}.
-            # Verify this against the actual ELN API contract before deploying.
             r = await _fetch_validated(
                 f"{eln_base}/api/eln/experiments/{exp_id}",
                 enforce_domain_allowlist=False,
@@ -151,13 +142,10 @@ def register_external_tools(
             logger.warning("eln_fetch_parse_failed exp=%s: %s", exp_id, e)
             return {"error": "ELN response is not valid JSON"}
 
-    @mcp.tool()
     async def eln_fetch_experiment(experiment_id: str) -> dict[str, Any]:
         """Fetch a read-only experiment record from the connected ELN system."""
         return await _fetch_eln_raw(experiment_id)
 
-    # ── ELN experiment ingest (persist outcome) ───────────────────────────────
-    @mcp.tool()
     async def ingest_eln_experiment(
         experiment_id: str,
         reaction_id: str,
@@ -196,9 +184,6 @@ def register_external_tools(
         try:
             normalized: ElnExperiment = normalize_eln_payload(raw)
         except Exception as e:
-            # Pydantic ValidationError or upstream payload mangled —
-            # surface a generic message; the real exception is logged
-            # inside normalize_eln_payload.
             logger.warning(
                 "eln_normalize_failed exp=%s reaction=%s: %s",
                 experiment_id[:64], rid, e,
@@ -234,8 +219,6 @@ def register_external_tools(
             "status": normalized.status,
         }
 
-    # ── manual outcome record (user-pasted data) ──────────────────────────────
-    @mcp.tool()
     async def record_manual_outcome(
         reaction_id: str,
         status: str,
@@ -292,8 +275,6 @@ def register_external_tools(
             return {"ok": False, "error": "Failed to persist outcome"}
         return {"ok": True, "outcome_id": outcome_id}
 
-    # ── name → structure (CACTUS) ────────────────────────────────────────────
-    @mcp.tool()
     async def name_to_structure(name: str) -> dict[str, Any]:
         """Resolve a chemical name to SMILES + CAS via the NCI CACTUS service.
 
@@ -381,8 +362,6 @@ def register_external_tools(
             )
         return {**result, "cached": False}
 
-    # ── patent coverage (PubChem) ────────────────────────────────────────────
-    @mcp.tool()
     async def patent_coverage(smiles: str) -> dict[str, Any]:
         """Count patents referencing a compound via PubChem.
 
@@ -450,8 +429,6 @@ def register_external_tools(
             "sample_patent_ids": patent_ids[:10],
         }
 
-    # ── retrosynthesis disconnection proposals ───────────────────────────────
-    @mcp.tool()
     async def propose_retrosynthesis(
         target_smiles: str,
         max_routes: int = 5,
@@ -463,10 +440,6 @@ def register_external_tools(
         output to seed `confirm_synthesis_plan` or for further analog work.
         Returns {target, routes: [{transform, precursors, confidence}], total}.
         """
-        # Delegate to the standalone MCP server via subprocess JSON-RPC. Doing
-        # the call here (rather than in the MCP server directly) keeps the
-        # agent-visible tool surface uniform and lets us reuse caching /
-        # logging at the api layer.
         s = target_smiles.strip()
         if not s or len(s) > 1000:
             return {"error": "target_smiles must be 1-1000 chars"}
@@ -495,8 +468,6 @@ def register_external_tools(
             "total": len(routes),
         }
 
-    # ── §H deep retrosynthesis via AiZynthFinder ─────────────────────────────
-    @mcp.tool()
     async def propose_retrosynthesis_deep(
         target_smiles: str,
         max_routes: int = 5,
@@ -601,3 +572,15 @@ def register_external_tools(
                 fetched_by=user_id,
             )
         return {**result, "cached": False}
+
+    return [
+        wrap_tool("web_search", web_search),
+        wrap_tool("fetch_document", fetch_document),
+        wrap_tool("eln_fetch_experiment", eln_fetch_experiment),
+        wrap_tool("ingest_eln_experiment", ingest_eln_experiment),
+        wrap_tool("record_manual_outcome", record_manual_outcome),
+        wrap_tool("name_to_structure", name_to_structure),
+        wrap_tool("patent_coverage", patent_coverage),
+        wrap_tool("propose_retrosynthesis", propose_retrosynthesis),
+        wrap_tool("propose_retrosynthesis_deep", propose_retrosynthesis_deep),
+    ]

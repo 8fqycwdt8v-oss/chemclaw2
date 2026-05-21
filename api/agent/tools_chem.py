@@ -1,14 +1,15 @@
-"""Chemistry-registry @mcp.tool functions split out of api/agent/tools.py.
+"""Chemistry-registry MCP tools split out of api/agent/tools.py.
 
-These five tools all wrap `api/db/queries/{compounds,reactions,
-reaction_outcomes}` lookups over the in-house registry. They share a
-single closure dependency (`session_factory`), so the registration
-function takes that one parameter — no `user_id` / `session_id` is
-needed for any of these (all are read-only against owner-agnostic
-tables: similarity / outcome history / substructure candidates).
+Five read-only tools wrapping `api/db/queries/{compounds,reactions,
+reaction_outcomes}` lookups. They share a single closure dependency
+(`session_factory`); none reach for `user_id` / `session_id` since all
+operate on owner-agnostic tables (similarity / outcome history /
+substructure candidates).
 
-Register via `register_chem_tools(mcp, session_factory)` from
-`build_chemclaw_mcp_server`.
+`build_chem_tools(session_factory)` returns a list of `SdkMcpTool` for
+`create_sdk_mcp_server(tools=...)`. Tool bodies are written in the
+project's standard kwargs-in / raw-dict-out style and wrapped via
+`tool_adapter.wrap_tool` to match the SDK contract.
 """
 from __future__ import annotations
 
@@ -16,17 +17,17 @@ import re
 import uuid
 from typing import Any
 
+from claude_agent_sdk import SdkMcpTool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.agent.tool_adapter import wrap_tool
 
-def register_chem_tools(
-    mcp: Any,
+
+def build_chem_tools(
     session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    """Attach the chemistry-registry search tools to the given MCP server."""
+) -> list[SdkMcpTool[Any]]:
+    """Build the chemistry-registry search tools for the MCP server."""
 
-    # ── compound similarity search ───────────────────────────────────────────
-    @mcp.tool()
     async def compound_similarity_search(
         fingerprint_bits: str,
         limit: int = 20,
@@ -44,8 +45,6 @@ def register_chem_tools(
             )
         return {"type": "compound_similarity", "results": results}
 
-    # ── reaction similarity search ────────────────────────────────────────────
-    @mcp.tool()
     async def reaction_similarity_search(
         rxn_fingerprint_bits: str,
         limit: int = 20,
@@ -69,8 +68,6 @@ def register_chem_tools(
             )
         return {"type": "reaction_similarity", "results": results}
 
-    # ── condition precedent from neighbors ────────────────────────────────────
-    @mcp.tool()
     async def suggest_conditions_from_neighbors(
         rxn_fingerprint_bits: str,
         limit: int = 10,
@@ -91,8 +88,6 @@ def register_chem_tools(
             )
         return {"type": "neighbor_conditions", "neighbors": neighbors}
 
-    # ── reaction outcomes lookup ──────────────────────────────────────────────
-    @mcp.tool()
     async def list_reaction_outcomes(
         reaction_id: str,
         limit: int = 50,
@@ -113,8 +108,6 @@ def register_chem_tools(
             outcomes = await list_outcomes_for_reaction(db, rid, limit=limit)
         return {"reaction_id": rid, "outcomes": outcomes}
 
-    # ── substructure search ───────────────────────────────────────────────────
-    @mcp.tool()
     async def substructure_search(
         smarts: str,
         max_candidates: int = 500,
@@ -124,3 +117,11 @@ def register_chem_tools(
         async with session_factory() as db:
             candidates = await list_compounds_for_substructure(db, max_candidates)
         return {"smarts": smarts, "candidates": candidates}
+
+    return [
+        wrap_tool("compound_similarity_search", compound_similarity_search),
+        wrap_tool("reaction_similarity_search", reaction_similarity_search),
+        wrap_tool("suggest_conditions_from_neighbors", suggest_conditions_from_neighbors),
+        wrap_tool("list_reaction_outcomes", list_reaction_outcomes),
+        wrap_tool("substructure_search", substructure_search),
+    ]

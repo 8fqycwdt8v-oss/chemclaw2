@@ -1,4 +1,4 @@
-"""Wiki + knowledge tools split out of api/agent/tools.py.
+"""Wiki + knowledge MCP tools split out of api/agent/tools.py.
 
 Eight tools covering wiki retrieval (`wiki_lookup`), unified knowledge
 lookup across wiki / papers / properties / facts (`lookup_knowledge`),
@@ -7,11 +7,11 @@ caching (`record_external_fact`, `verify_citation`), wiki contradiction
 audit (`record_contradiction`), and ICH regulatory guidance lookup
 (`lookup_regulatory_guidance`).
 
-Register via `register_knowledge_tools(mcp, user_id, session_factory)`
-from `build_chemclaw_mcp_server`. The four write tools (`register_paper`,
+`build_knowledge_tools(user_id, session_factory)` returns the
+`SdkMcpTool` list. The four write tools (`register_paper`,
 `record_external_fact`, `record_contradiction`, the regulatory-fetch
-upsert in `lookup_regulatory_guidance`) need `user_id` for `created_by` /
-`fetched_by`. The other four are read-only.
+upsert in `lookup_regulatory_guidance`) need `user_id` for `created_by`
+/ `fetched_by`; the other four are read-only.
 """
 from __future__ import annotations
 
@@ -20,8 +20,10 @@ import logging
 import re
 from typing import Any
 
+from claude_agent_sdk import SdkMcpTool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.agent.tool_adapter import wrap_tool
 from api.agent.tool_helpers import (
     _fetch_validated,
     _html_to_text,
@@ -60,15 +62,12 @@ _ICH_URLS: dict[str, str] = {
 }
 
 
-def register_knowledge_tools(
-    mcp: Any,
+def build_knowledge_tools(
     user_id: str,
     session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    """Attach the wiki + knowledge tools to the given MCP server."""
+) -> list[SdkMcpTool[Any]]:
+    """Build the wiki + knowledge tools for the MCP server."""
 
-    # ── wiki lookup ───────────────────────────────────────────────────────────
-    @mcp.tool()
     async def wiki_lookup(
         query: str | None = None,
         slug: str | None = None,
@@ -114,8 +113,6 @@ def register_knowledge_tools(
                 results = await search_wiki_by_fts(db, query, limit=limit)
         return {"mode": mode, "results": results}
 
-    # ── lookup_knowledge ──────────────────────────────────────────────────────
-    @mcp.tool()
     async def lookup_knowledge(
         query: str,
         sources: list[str] | None = None,
@@ -159,8 +156,6 @@ def register_knowledge_tools(
             "facts": fact_results,
         }
 
-    # ── register_paper ────────────────────────────────────────────────────────
-    @mcp.tool()
     async def register_paper(
         url: str,
         title: str,
@@ -196,8 +191,6 @@ def register_knowledge_tools(
             chunks_written = await _ingest_paper_chunks(paper_id, content_text, session_factory)
         return {"id": paper_id, "already_existed": already_existed, "chunks_written": chunks_written}
 
-    # ── paper_qa (PaperQA2-style) ────────────────────────────────────────────
-    @mcp.tool()
     async def paper_qa(
         query: str,
         max_chunks: int = 8,
@@ -270,8 +263,6 @@ def register_knowledge_tools(
             "total_accepted": len(accepted),
         }
 
-    # ── record_external_fact ──────────────────────────────────────────────────
-    @mcp.tool()
     async def record_external_fact(
         source_type: str,
         source_id: str,
@@ -286,8 +277,6 @@ def register_knowledge_tools(
             )
         return {"id": fact_id}
 
-    # ── verify_citation ───────────────────────────────────────────────────────
-    @mcp.tool()
     async def verify_citation(citation_id: str) -> dict[str, Any]:
         """Check whether a wiki citation's underlying source still resolves.
 
@@ -317,8 +306,6 @@ def register_knowledge_tools(
             "stale": is_stale,
         }
 
-    # ── record_contradiction ──────────────────────────────────────────────────
-    @mcp.tool()
     async def record_contradiction(
         page_slug: str,
         citation_a: str,
@@ -346,8 +333,6 @@ def register_knowledge_tools(
                 )
         return {"id": contradiction_id}
 
-    # ── lookup_regulatory_guidance ────────────────────────────────────────────
-    @mcp.tool()
     async def lookup_regulatory_guidance(
         guideline: str,
         topic: str | None = None,
@@ -430,3 +415,14 @@ def register_knowledge_tools(
             "url": url,
             "cached": False,
         }
+
+    return [
+        wrap_tool("wiki_lookup", wiki_lookup),
+        wrap_tool("lookup_knowledge", lookup_knowledge),
+        wrap_tool("register_paper", register_paper),
+        wrap_tool("paper_qa", paper_qa),
+        wrap_tool("record_external_fact", record_external_fact),
+        wrap_tool("verify_citation", verify_citation),
+        wrap_tool("record_contradiction", record_contradiction),
+        wrap_tool("lookup_regulatory_guidance", lookup_regulatory_guidance),
+    ]
