@@ -1,10 +1,9 @@
 """HTTP-layer tests for /api/notifications — auth + validation.
 
-Query-level mark-read / count-unread logic is covered by
-`test_session_store.py` and direct query tests; this file pins the
-route surface. The `/notifications/stream` SSE endpoint is intentionally
-not exercised here — its loop sleeps 30s by default and TestClient's
-sync wrapper would block.
+Pydantic-validation and auth-only tests; success paths (which touch
+the DB through the route) live in `test_session_store.py` at the
+query layer where teardown is clean (per the asyncpg event-loop
+teardown caveat in `test_routes_v2.py`).
 """
 from __future__ import annotations
 
@@ -17,24 +16,23 @@ def test_get_notifications_requires_auth(client):
     assert resp.status_code == 401
 
 
-def test_get_notifications_default_unread_only(client, auth_header):
-    """Owner-scoped read — caller with no notifications returns empty
-    list + zero unread count, not 404."""
-    resp = client.get("/api/notifications", headers=auth_header)
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["notifications"] == []
-    assert body["unread_count"] == 0
-
-
 def test_get_notifications_limit_out_of_range_rejected(client, auth_header):
-    """limit is Query(ge=1, le=100) — FastAPI 422s on out-of-range."""
+    """limit is Query(ge=1, le=100) — FastAPI 422s on out-of-range
+    before reaching the route body."""
     resp = client.get("/api/notifications?limit=500", headers=auth_header)
     assert resp.status_code == 422
 
 
 def test_get_notifications_limit_zero_rejected(client, auth_header):
     resp = client.get("/api/notifications?limit=0", headers=auth_header)
+    assert resp.status_code == 422
+
+
+def test_get_notifications_unread_only_non_bool_rejected(client, auth_header):
+    """`unread_only` is bool-typed; an explicitly non-bool string is 422."""
+    resp = client.get(
+        "/api/notifications?unread_only=not-a-bool", headers=auth_header,
+    )
     assert resp.status_code == 422
 
 
@@ -47,7 +45,11 @@ def test_patch_notifications_requires_auth(client):
 
 
 def test_patch_notifications_empty_body_is_noop(client, auth_header):
-    """No ids + all=False → marked_read=0 without touching the DB."""
+    """No ids + all=False → marked_read=0 without touching the DB.
+
+    This is the only route-path test in this file that returns 200 from
+    the route body — but it's safe because the route's early return
+    skips the DB call when both ids and all are empty/None."""
     resp = client.patch(
         "/api/notifications",
         headers=auth_header,
@@ -57,25 +59,11 @@ def test_patch_notifications_empty_body_is_noop(client, auth_header):
     assert resp.json() == {"marked_read": 0}
 
 
-def test_patch_notifications_mark_all_owner_scoped(client, auth_header):
-    """all=True for a user with no notifications → marked_read=0 (no
-    cross-user mark; mark_all_read is owner-scoped)."""
+def test_patch_notifications_ids_wrong_type_rejected(client, auth_header):
+    """`ids` is list[str] | None — a scalar string is 422."""
     resp = client.patch(
         "/api/notifications",
         headers=auth_header,
-        json={"all": True},
+        json={"ids": "not-a-list"},
     )
-    assert resp.status_code == 200
-    assert resp.json() == {"marked_read": 0}
-
-
-def test_patch_notifications_unknown_ids_is_noop(client, auth_header):
-    """Marking ids that don't belong to the caller → marked_read=0
-    (owner-scoped UPDATE; no exception)."""
-    resp = client.patch(
-        "/api/notifications",
-        headers=auth_header,
-        json={"ids": ["nonexistent-1", "nonexistent-2"]},
-    )
-    assert resp.status_code == 200
-    assert resp.json() == {"marked_read": 0}
+    assert resp.status_code == 422
