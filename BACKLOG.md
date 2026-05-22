@@ -125,7 +125,7 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 - **§H full USPTO model bundle** — current default is the ~500 MB demo bundle. Operators who want production-grade route discovery set `AIZYNTH_CONFIG_PATH`; a deployment flag for shipping the full bundle by default would be cleaner.
 - **§M SVG / PDF / HTML artefact types** — PNG only in V1. Add when an agent workflow asks for vector graphics.
 - **§M matplotlib magic-byte validation** — `_scan_artifacts` trusts `.png` extension; sniff `\x89PNG\r\n\x1a\n` before encoding to reject non-PNG content saved under a `.png` filename.
-- **Heavy-path CI lane** — `[opt]` / `[retrosynth]` happy paths land green only in opt-in deployments. One CI job with all extras installed running `@pytest.mark.heavy` would catch regressions earlier.
+- **Heavy-path CI lane** — partially shipped in PR 2 of the refactor sequence (May 2026). Matrix `lane: [cheap, heavy]` in `.github/workflows/ci.yml`; heavy installs `.[dev,opt,retrosynth]` + matplotlib. Currently `continue-on-error: true` so a flaky install doesn't gate; once it sees 5 consecutive green runs on main, flip to gating. `@pytest.mark.heavy` marker still TODO — heavy lane currently runs the full pytest suite (cheap tests skip their gated bits via `importorskip`).
 
 ### mcp_tabular follow-ups (May 2026)
 

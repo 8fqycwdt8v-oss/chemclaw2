@@ -27,6 +27,15 @@ jobs:
         lane: [cheap, heavy]
     runs-on: ubuntu-latest
     name: ci (${{ matrix.lane }})
+    # The heavy lane installs ~2 GB of torch + bofire + aizynthfinder and
+    # is the first time chemclaw2 exercises those import chains in CI.
+    # Mark it non-blocking initially so a heavy-lane-only environmental
+    # hiccup (install timeout, transitive-dep clash) doesn't stop the
+    # PR pipeline. The cheap lane stays the gating check; the heavy lane
+    # is an informational signal and a regression net for the [opt] +
+    # [retrosynth] surfaces. Once it has 5 consecutive green runs on
+    # main, flip this to false and make it gating. Tracked in BACKLOG.md.
+    continue-on-error: ${{ matrix.lane == 'heavy' }}
     services:
       postgres:
         image: pgvector/pgvector:pg16
