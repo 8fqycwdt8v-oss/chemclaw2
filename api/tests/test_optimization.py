@@ -352,3 +352,50 @@ def test_propose_via_bofire_lhs_proposals_are_diverse() -> None:
     assert len(set(temps)) >= 2, (
         f"LHS proposals collapsed to one temperature: {temps}"
     )
+
+
+def test_propose_via_bofire_gp_path_with_full_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With ≥ `BO_MIN_DATAPOINTS` completed experiments the dispatcher
+    must select the SoboStrategy + qLogEI (stage-2 GP) path.
+
+    Only runs on the heavy CI lane — the [opt] extras (~2 GB) are not
+    in the cheap lane's install. The test skips automatically there
+    via `importorskip("bofire")` + `importorskip("torch")`.
+
+    Verifies the stage-2 contract: `strategy` reports `bofire-sobo-qlei`,
+    `n_experiments_fitted` matches the input count, and each proposal
+    lies in the declared bounds (BOFIRE's tell-then-ask guarantees this
+    but we keep the assertion as a regression net against a future
+    spec change that breaks the round-trip).
+    """
+    pytest.importorskip("bofire")
+    pytest.importorskip("torch")
+    from api.db.queries.optimization import propose_via_bofire
+
+    # Lower the GP-min threshold to keep the test runtime modest — fitting
+    # a GP on 10 points is fast enough for CI, but with the env var we
+    # exercise the threshold check too.
+    monkeypatch.setenv("BO_MIN_DATAPOINTS", "5")
+
+    # Synthesise a small but real history: 6 completed experiments
+    # spanning the design space with a noisy yield surface.
+    history = [
+        {"temperature": 25.0, "solvent": "THF", "yield_pct": 18.0},
+        {"temperature": 45.0, "solvent": "THF", "yield_pct": 32.0},
+        {"temperature": 70.0, "solvent": "THF", "yield_pct": 58.0},
+        {"temperature": 80.0, "solvent": "DMF", "yield_pct": 67.0},
+        {"temperature": 95.0, "solvent": "DMF", "yield_pct": 71.0},
+        {"temperature": 110.0, "solvent": "EtOH", "yield_pct": 49.0},
+    ]
+    result = propose_via_bofire(_spec(), experiments=history, n_proposals=3)
+    assert result["strategy"] == "bofire-sobo-qlei", (
+        f"expected GP path with N≥min, got {result['strategy']!r}"
+    )
+    assert result["n_experiments_fitted"] == 6
+    assert len(result["proposals"]) == 3
+    for p in result["proposals"]:
+        cond = p["conditions"]
+        assert 20 <= cond["temperature"] <= 120
+        assert cond["solvent"] in {"THF", "DMF", "EtOH"}
