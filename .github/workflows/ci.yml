@@ -15,7 +15,18 @@ permissions:
 
 jobs:
   ci:
+    # Matrix lanes:
+    #   - cheap (default): no heavy extras. Asserts the [tabicl] extra is
+    #     not installed; bofire/aizynth-gated tests skip via importorskip.
+    #   - heavy: installs [opt,retrosynth] + matplotlib so the bofire GP
+    #     path, the AiZynthFinder smoke wrapper, and the sandbox figure-
+    #     capture test all execute against real deps.
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [cheap, heavy]
     runs-on: ubuntu-latest
+    name: ci (${{ matrix.lane }})
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -38,14 +49,28 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install Python dependencies
+      - name: Install Python dependencies (cheap)
+        if: matrix.lane == 'cheap'
         run: pip install -e ".[dev]"
+
+      - name: Install Python dependencies (heavy)
+        # Heavy lane installs the [opt] (bofire+torch) and [retrosynth]
+        # (aizynthfinder) extras plus matplotlib so figure-capture lands
+        # a real PNG. Skipped on the cheap lane to keep its install
+        # under 60s; ~2 GB extra wheels on the heavy lane.
+        if: matrix.lane == 'heavy'
+        run: pip install -e ".[dev,opt,retrosynth]" matplotlib
 
       - name: Install MCP servers
         run: |
           pip install packages/mcp-servers/mcp_molfp packages/mcp-servers/mcp_rxnfp packages/mcp-servers/mcp_retrosynth packages/mcp-servers/mcp_rxn_conditions packages/mcp-servers/mcp_codesandbox packages/mcp-servers/mcp_tabular
 
       - name: Assert mcp_tabular imports + tabicl lazy guard
+        # Only meaningful on the cheap lane — that's where the lazy
+        # guard's "tabicl extra not installed" branch is exercised.
+        # Heavy lane skips since it could legitimately have tabicl
+        # installed by a future change.
+        if: matrix.lane == 'cheap'
         run: |
           python -c "
           import mcp_tabular.server  # noqa
@@ -111,7 +136,9 @@ jobs:
         # access a way to read CI's actual mypy output via the GitHub
         # API. Idempotent: searches for an existing comment with the
         # marker and updates rather than appending a new one each push.
-        if: github.event_name == 'pull_request' && always()
+        # Restricted to the cheap lane so cheap + heavy don't race to
+        # update the same comment.
+        if: matrix.lane == 'cheap' && github.event_name == 'pull_request' && always()
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -161,7 +188,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mypy-log
+          name: mypy-log-${{ matrix.lane }}
           path: /tmp/mypy.log
           if-no-files-found: ignore
 
@@ -234,6 +261,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-log
+          name: pytest-log-${{ matrix.lane }}
           path: /tmp/pytest.log
           if-no-files-found: ignore
