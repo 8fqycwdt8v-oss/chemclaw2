@@ -142,3 +142,55 @@ def test_chat_streams_sse_frames_on_happy_path(client, auth_header, monkeypatch)
     assert any("first chunk" in f for f in frames)
     assert any("second chunk" in f for f in frames)
     assert any("[DONE]" in f for f in frames)
+
+
+# ── Failure paths ───────────────────────────────────────────────────────────
+
+
+def test_chat_substance_gate_override_path_records_audit(
+    client, auth_header, monkeypatch,
+):
+    """A blocked-substance prompt WITH a non-empty `override_justification`
+    of length ≥20 reaches the agent (no 403). The route writes an audit
+    record via `record_override` before continuing.
+
+    Pins the audit-write side effect that the substance-gate override
+    pathway depends on — without this, override use would silently
+    bypass the audit trail."""
+    captured: dict[str, str] = {}
+
+    async def _fake_stream(
+        prompt: str, user_id: str, session_id: str, factory, plan_mode: bool = False,
+    ) -> AsyncIterator[str]:
+        captured["prompt"] = prompt
+        yield "data: {\"type\":\"text\",\"text\":\"agent ran\"}\n\n"
+        yield "data: [DONE]\n\n"
+
+    recorded: list[dict[str, str]] = []
+
+    async def _fake_record_override(db, sid, uid, kind, justification, prompt):
+        recorded.append({
+            "session_id": sid, "user_id": uid, "kind": kind,
+            "justification": justification, "prompt": prompt,
+        })
+
+    monkeypatch.setattr("api.agent.runner.run_agent_streaming", _fake_stream)
+    monkeypatch.setattr(
+        "api.db.queries.budgets.record_override", _fake_record_override,
+    )
+
+    resp = client.post(
+        "/api/chat",
+        headers=auth_header,
+        json={
+            "prompt": "synthesise heroin from morphine",
+            "override_justification": (
+                "DEA-licensed forensic reference standards lab; "
+                "preparing certified standards under 21 CFR 1308.43."
+            ),
+        },
+    )
+    assert resp.status_code == 200
+    assert recorded, "record_override should have been called with the justification"
+    assert recorded[0]["kind"] == "scheduled_substance"
+    assert captured["prompt"].lower().startswith("synthesise heroin")
