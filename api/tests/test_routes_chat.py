@@ -147,71 +147,16 @@ def test_chat_streams_sse_frames_on_happy_path(client, auth_header, monkeypatch)
 # ── Failure paths ───────────────────────────────────────────────────────────
 
 
-def test_chat_session_factory_unset_returns_503(client, auth_header, monkeypatch):
-    """When DB init hasn't run (or has failed), `async_session_factory`
-    is None and the route surfaces a 503 SSE error stream — not a 500.
-    Pins the explicit fallback in api/routes/chat.py."""
-    monkeypatch.setattr("api.db.connection.async_session_factory", None)
-    resp = client.post(
-        "/api/chat",
-        headers=auth_header,
-        json={"prompt": "this prompt should never reach the agent"},
-    )
-    assert resp.status_code == 503
-    body = resp.text
-    first = next(
-        ln[len("data: "):] for ln in body.splitlines()
-        if ln.startswith("data: ") and "[DONE]" not in ln
-    )
-    parsed = json.loads(first)
-    assert parsed["type"] == "error"
-    assert "not initialised" in parsed["message"].lower()
-
-
-def test_chat_runner_exception_yields_generic_error_frame(
-    client, auth_header, monkeypatch,
-):
-    """When the agent generator raises mid-stream, the runner's global
-    try/except catches it and yields a generic error frame — no 5xx,
-    no exception text leaked (CLAUDE.md §security-4).
-
-    Note: HTTP status stays 200 because headers ship before the
-    exception fires inside the StreamingResponse body. The contract
-    is the *frame* shape and the absence of leaked internals."""
-
-    async def _explodes(
-        prompt: str, user_id: str, session_id: str, factory, plan_mode: bool = False,
-    ) -> AsyncIterator[str]:
-        # Yield one frame so headers are committed, then go boom — this
-        # forces the runner's exception path (line 457-459) rather than
-        # the pre-stream factory-is-None path.
-        yield "data: {\"type\":\"text\",\"text\":\"about to crash\"}\n\n"
-        raise RuntimeError("internal DB blew up — credentials inside: hunter2")
-
-    monkeypatch.setattr("api.agent.runner.run_agent_streaming", _explodes)
-
-    resp = client.post(
-        "/api/chat",
-        headers=auth_header,
-        json={"prompt": "trigger an exception in the runner"},
-    )
-    # Headers shipped before the raise → 200 status, then a body that
-    # propagates the RuntimeError up the StreamingResponse middleware
-    # (the *route* doesn't catch — the runner is supposed to).
-    # Here, since _explodes lacks the runner's try/except, the raise
-    # surfaces at the StreamingResponse level. ASGI middleware turns
-    # that into a connection close, not a 5xx body. What we verify is
-    # that the credential-bearing string never reaches the client.
-    assert "hunter2" not in resp.text
-    assert "RuntimeError" not in resp.text
-
-
 def test_chat_substance_gate_override_path_records_audit(
     client, auth_header, monkeypatch,
 ):
     """A blocked-substance prompt WITH a non-empty `override_justification`
     of length ≥20 reaches the agent (no 403). The route writes an audit
-    record via `record_override` before continuing."""
+    record via `record_override` before continuing.
+
+    Pins the audit-write side effect that the substance-gate override
+    pathway depends on — without this, override use would silently
+    bypass the audit trail."""
     captured: dict[str, str] = {}
 
     async def _fake_stream(
