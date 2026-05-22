@@ -137,3 +137,17 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 ### Discovered during refactor sweep (May 2026)
 
 - ~~**Agent runtime broken: `@mcp.tool()` API mismatch**~~ — fixed. All 42 tool registrations migrated from the broken `@mcp.tool()` pattern to the SDK's `@tool(name, description, schema)` form via a `tool_adapter.wrap_tool` shim that lets tool bodies stay in the project's kwargs-in / raw-dict-out style. `build_chemclaw_mcp_server` now calls `create_sdk_mcp_server(name, tools=[...])` with the assembled list. Regression test `api/tests/test_build_chemclaw_mcp_server.py` locks the build down. Two further latent bugs surfaced during the fix and resolved alongside: `get_campaign` (didn't exist in queries.campaigns; `propose_next_conditions` switched to `get_campaign_with_steps`); the chat path that hit `build_chemclaw_mcp_server` now works end-to-end.
+
+### From the 12-PR extensive refactor sequence (May 2026) — deferred items
+
+Shipped: PR 1 (tool-handler e2e tests, PR #147), PR 2 (CI heavy lane, PR #148), PR 3 (route-layer auth/validation tests for budgets/todos/notifications, PR #149), PR 4 (chat substance-gate override audit test, PR #150), PR 10 (tools_external.py split into ELN + retrosynth modules, PR #151).
+
+Audited and deferred:
+
+- **PR 5 — harden fixtures and drop dead conftest entries** — every fixture in `api/tests/conftest.py` is referenced by at least one test (audit done); the `session_factory`-with-TRUNCATE-teardown rework risks breaking ordering-sensitive tests for marginal gain. Re-open when a flaky-test investigation flags state leakage.
+- **PR 6 — trivial code-simplification sweep** — vulture + manual audit found no language-guaranteed redundancies (isinstance/str(int)/x-if-x-else-None patterns); the candidates the plan named all turn out to be defensive against external JSON or legitimately conditional. Re-open if a future PR introduces actual redundancies.
+- **PR 7 — parametrise `campaign_steps` status-update patterns** — the 5 transition functions share the source-state predicate but their SET clauses, JOINs, and parameter shapes are different enough that a single helper would obscure the CLAUDE.md "repeat the source-state predicate" rule rather than enforce it.
+- **PR 8 — JWKS cache via `cachetools.TTLCache`** — saves ~5 LOC but requires adding `cachetools` as a runtime dep (not currently transitive). Cost > benefit at this scale.
+- **PR 9 — split `knowledge.py` and `campaigns.py` into `_read/_write`** — both files are at 266 and 251 LOC respectively, *under* the ~400-line guideline. The split is anticipatory; defer until either crosses 400.
+- **PR 11 — shared MCP logging helper** — `JsonFormatter` + `_configure_logging()` are duplicated across 6 MCP servers (~30 LOC × 6 = 180 LOC). Extracting to a shared package needs a new `packages/mcp-servers/mcp_shared/` package + 6 pyproject.toml updates + CI install-order changes. The coordination cost outweighs the savings; revisit if a 7th MCP server is added.
+- **PR 12 — standardise MCP servers on nested layout** — high risk, current mixed layouts (3 flat + 3 nested) all install cleanly in CI. Re-open if a future install issue traces back to layout drift.
