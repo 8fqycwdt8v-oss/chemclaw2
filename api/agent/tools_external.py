@@ -1,13 +1,18 @@
-"""External-fetch MCP tools split out of api/agent/tools.py.
+"""External-fetch MCP tools — web search, document fetch, chemistry lookups.
 
-Ten tools that reach outside the chemclaw2 process — web search,
-document fetch, ELN integration (read + ingest + manual outcome record),
-CACTUS name→structure, PubChem patent coverage, retrosynthesis
-(single-step + deep tree). All run through the SSRF-pinned
-`_fetch_validated` helper where applicable.
+Four tools that reach outside the chemclaw2 process via SSRF-pinned
+`_fetch_validated`:
 
-`build_external_tools(user_id, session_factory)` returns the
-`SdkMcpTool` list.
+  - `web_search` — Brave Search API, domain-allowlisted site filter
+  - `fetch_document` — generic HTTP fetch with markdown / bytes modes
+  - `name_to_structure` — NCI CACTUS name→SMILES/CAS/IUPAC, 7-day cache
+  - `patent_coverage` — PubChem SMILES → CID → patent xref count
+
+ELN integration (`build_eln_tools`) and retrosynthesis
+(`build_retrosynth_tools`) used to live here too — they're now in
+`tools_eln.py` and `tools_retrosynth.py` respectively. The combined
+`build_external_tools` below composes all three for the existing
+single-import call sites.
 """
 from __future__ import annotations
 
@@ -17,7 +22,6 @@ import logging
 import os
 import re
 import urllib.parse
-import uuid
 from typing import Any
 
 import httpx
@@ -32,6 +36,8 @@ from api.agent.tool_helpers import (
     _redact_ssrf_error,
     _SSRFError,
 )
+from api.agent.tools_eln import build_eln_tools
+from api.agent.tools_retrosynth import build_retrosynth_tools
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +46,13 @@ def build_external_tools(
     user_id: str,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> list[SdkMcpTool[Any]]:
-    """Build the web / fetch / ELN / chemistry-lookup tools."""
+    """Build the external-fetch tools — composes web/fetch + ELN + retrosynth.
+
+    Web tools live in this file (web_search, fetch_document,
+    name_to_structure, patent_coverage). ELN and retrosynthesis tools
+    delegate to `build_eln_tools` / `build_retrosynth_tools` in their
+    dedicated modules so this file stays under the ~400-line guideline.
+    """
 
     async def web_search(
         query: str,
@@ -106,174 +118,6 @@ def build_external_tools(
             text = _html_to_text(text)
         # 10 K char limit matches TypeScript doc-fetch — keeps context window manageable.
         return {"content": text[:10_000], "truncated": len(r.content) > MAX_BYTES or len(text) > 10_000}
-
-    async def _fetch_eln_raw(experiment_id: str) -> dict[str, Any]:
-        """Shared ELN fetch path used by both the read-through tool and ingest.
-
-        Returns the raw ELN payload on HTTP 200, or ``{"error": ...}`` on
-        any failure (missing config, SSRF block, 404, non-2xx, network).
-        """
-        eln_base = os.environ.get("ELN_API_BASE_URL", "").rstrip("/")
-        if not eln_base:
-            return {"error": "ELN_API_BASE_URL not configured"}
-        eln_key = os.environ.get("ELN_API_KEY", "")
-        exp_id = experiment_id.strip()
-        if not re.match(r'^[A-Za-z0-9_-]{1,64}$', exp_id):
-            return {"error": "Invalid experiment_id format"}
-        try:
-            r = await _fetch_validated(
-                f"{eln_base}/api/eln/experiments/{exp_id}",
-                enforce_domain_allowlist=False,
-                timeout=10.0,
-                headers={"Authorization": f"Bearer {eln_key}"},
-            )
-        except _SSRFError as e:
-            return _redact_ssrf_error("eln_fetch", e)
-        except Exception as e:
-            logger.warning("eln_fetch_failed exp=%s: %s", exp_id, e)
-            return {"error": "ELN fetch failed"}
-        if r.status_code == 404:
-            return {"error": f"Experiment {exp_id} not found"}
-        if not r.is_success:
-            return {"error": f"ELN API error: {r.status_code}"}
-        try:
-            return r.json()
-        except Exception as e:
-            logger.warning("eln_fetch_parse_failed exp=%s: %s", exp_id, e)
-            return {"error": "ELN response is not valid JSON"}
-
-    async def eln_fetch_experiment(experiment_id: str) -> dict[str, Any]:
-        """Fetch a read-only experiment record from the connected ELN system."""
-        return await _fetch_eln_raw(experiment_id)
-
-    async def ingest_eln_experiment(
-        experiment_id: str,
-        reaction_id: str,
-        campaign_step_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Fetch an ELN experiment and persist it as a reaction outcome.
-
-        Idempotent on ``experiment_id``: re-calling with the same id
-        returns the existing outcome row (``already_existed=True``)
-        without duplicating. The ELN payload is normalized via the
-        ElnExperiment Pydantic model — fields outside the contract are
-        ignored, missing fields fall back to defaults (status='inconclusive'
-        when the ELN doesn't tell us). When the real ELN contract lands
-        (BACKLOG.md E2), extend ElnExperiment in api/agent/eln_payload.py.
-        """
-        from api.agent.eln_payload import ElnExperiment, normalize_eln_payload
-        from api.db.queries.reaction_outcomes import insert_outcome
-
-        try:
-            rid = str(uuid.UUID(reaction_id.strip()))
-        except (ValueError, AttributeError):
-            return {"ok": False, "error": "reaction_id must be a UUID"}
-        csid: str | None
-        if campaign_step_id is not None:
-            try:
-                csid = str(uuid.UUID(campaign_step_id.strip()))
-            except (ValueError, AttributeError):
-                return {"ok": False, "error": "campaign_step_id must be a UUID"}
-        else:
-            csid = None
-
-        raw = await _fetch_eln_raw(experiment_id)
-        if raw.get("error"):
-            return {"ok": False, "error": raw["error"]}
-
-        try:
-            normalized: ElnExperiment = normalize_eln_payload(raw)
-        except Exception as e:
-            logger.warning(
-                "eln_normalize_failed exp=%s reaction=%s: %s",
-                experiment_id[:64], rid, e,
-            )
-            return {"ok": False, "error": "ELN payload could not be normalized"}
-
-        try:
-            async with session_factory() as db:
-                async with db.begin():
-                    outcome_id, already_existed = await insert_outcome(
-                        db,
-                        reaction_id=rid,
-                        source="eln",
-                        status=normalized.status,
-                        created_by=user_id,
-                        campaign_step_id=csid,
-                        eln_experiment_id=experiment_id.strip(),
-                        yield_pct=normalized.yield_pct,
-                        conditions_actual=normalized.conditions_actual,
-                        observations=normalized.observations,
-                        failure_reason=normalized.failure_reason,
-                    )
-        except Exception:
-            logger.exception(
-                "eln_ingest_persist_failed exp=%s reaction=%s",
-                experiment_id[:64], rid,
-            )
-            return {"ok": False, "error": "Failed to persist ELN outcome"}
-        return {
-            "ok": True,
-            "outcome_id": outcome_id,
-            "already_existed": already_existed,
-            "status": normalized.status,
-        }
-
-    async def record_manual_outcome(
-        reaction_id: str,
-        status: str,
-        yield_pct: float | None = None,
-        conditions_actual: dict[str, Any] | None = None,
-        observations: str | None = None,
-        failure_reason: str | None = None,
-        campaign_step_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Persist an experimental outcome the user described in chat.
-
-        Use this when the user pastes lab data inline rather than pointing
-        at an ELN experiment. ``status`` must be one of 'success',
-        'partial', 'fail', 'inconclusive'. The outcome lands with
-        ``source='manual'`` so it can be distinguished from ELN-sourced
-        rows downstream.
-        """
-        from api.db.queries.reaction_outcomes import insert_outcome
-
-        try:
-            rid = str(uuid.UUID(reaction_id.strip()))
-        except (ValueError, AttributeError):
-            return {"ok": False, "error": "reaction_id must be a UUID"}
-        csid: str | None
-        if campaign_step_id is not None:
-            try:
-                csid = str(uuid.UUID(campaign_step_id.strip()))
-            except (ValueError, AttributeError):
-                return {"ok": False, "error": "campaign_step_id must be a UUID"}
-        else:
-            csid = None
-
-        try:
-            async with session_factory() as db:
-                async with db.begin():
-                    outcome_id, _ = await insert_outcome(
-                        db,
-                        reaction_id=rid,
-                        source="manual",
-                        status=status,
-                        created_by=user_id,
-                        campaign_step_id=csid,
-                        yield_pct=yield_pct,
-                        conditions_actual=conditions_actual,
-                        observations=observations,
-                        failure_reason=failure_reason,
-                    )
-        except ValueError as e:
-            # CLAUDE.md observability rule 3: log denials at info before returning.
-            logger.info("manual_outcome_rejected reaction=%s reason=%s", rid, e)
-            return {"ok": False, "error": str(e)}
-        except Exception:
-            logger.exception("manual_outcome_persist_failed reaction=%s", rid)
-            return {"ok": False, "error": "Failed to persist outcome"}
-        return {"ok": True, "outcome_id": outcome_id}
 
     async def name_to_structure(name: str) -> dict[str, Any]:
         """Resolve a chemical name to SMILES + CAS via the NCI CACTUS service.
@@ -429,158 +273,11 @@ def build_external_tools(
             "sample_patent_ids": patent_ids[:10],
         }
 
-    async def propose_retrosynthesis(
-        target_smiles: str,
-        max_routes: int = 5,
-    ) -> dict[str, Any]:
-        """Propose one-step retrosynthetic disconnections for a target SMILES.
-
-        Calls the mcp-retrosynth subprocess (RDKit + curated reaction-template
-        library) and returns precursor sets keyed by transform name. Use the
-        output to seed `confirm_synthesis_plan` or for further analog work.
-        Returns {target, routes: [{transform, precursors, confidence}], total}.
-        """
-        s = target_smiles.strip()
-        if not s or len(s) > 1000:
-            return {"error": "target_smiles must be 1-1000 chars"}
-        if max_routes < 1 or max_routes > 20:
-            return {"error": "max_routes must be between 1 and 20"}
-
-        # Use the in-process retrosynthesis library directly when available —
-        # the same code the stdio MCP server runs. Avoids subprocess overhead
-        # for what is a pure CPU + RDKit call.
-        try:
-            from mcp_retrosynth.disconnect import propose_disconnections
-        except ImportError:
-            return {"error": "Retrosynthesis backend not installed (mcp_retrosynth)"}
-        try:
-            routes = await asyncio.get_running_loop().run_in_executor(
-                None, propose_disconnections, s, max_routes,
-            )
-        except ValueError as e:
-            return {"error": str(e)}
-        except Exception:
-            logger.exception("retrosynth_failed smiles_len=%d", len(s))
-            return {"error": "Retrosynthesis proposal failed"}
-        return {
-            "target": s,
-            "routes": routes,
-            "total": len(routes),
-        }
-
-    async def propose_retrosynthesis_deep(
-        target_smiles: str,
-        max_routes: int = 5,
-        max_seconds: int = 300,
-    ) -> dict[str, Any]:
-        """Multi-step retrosynthesis search via AiZynthFinder.
-
-        Complements `propose_retrosynthesis` (the 11-template single-step
-        library). Use for full route discovery on a confirmed target;
-        use the fast single-step tool for first-pass disconnection
-        enumeration.
-
-        Behaviour:
-          - Requires `[retrosynth]` extras (`pip install -e .[retrosynth]`
-            on the worker). When absent: returns
-            `{"error": "[retrosynth] extras not installed"}` cleanly.
-          - First call downloads ~500 MB of demo policy + filter models
-            into AiZynthFinder's cache dir. Subsequent calls reuse them.
-            Operators can point at the full USPTO bundle via
-            `AIZYNTH_CONFIG_PATH`.
-          - Wall-cap at `max_seconds` (default 300, 1–600 allowed).
-            Tree search is sync; we offload to a thread pool so the
-            event loop stays responsive.
-          - Result cached in `external_facts` keyed by
-            `aizynth:<smiles>` for 30 days.
-
-        Returns:
-            {target, routes: [...], total, model, cached: bool} or
-            {error}. Each route is a nested AiZynthFinder reaction tree
-            (smiles, type, children, in_stock, …).
-        """
-        from datetime import datetime as _dt
-        from datetime import timedelta, timezone
-
-        from api.db.queries.knowledge import (
-            get_external_fact_by_source_id, upsert_external_fact,
-        )
-
-        s = target_smiles.strip()
-        if not s or len(s) > 1000:
-            return {"error": "target_smiles must be 1-1000 chars"}
-        if not (1 <= max_routes <= 20):
-            return {"error": "max_routes must be between 1 and 20"}
-        if not (1 <= max_seconds <= 600):
-            return {"error": "max_seconds must be between 1 and 600"}
-
-        cache_key = f"aizynth:{s}"
-        cutoff = _dt.now(tz=timezone.utc) - timedelta(days=30)
-        async with session_factory() as db:
-            cached = await get_external_fact_by_source_id(db, cache_key)
-        if cached:
-            last_seen = cached.get("last_seen")
-            if last_seen is not None and last_seen.tzinfo is None:
-                last_seen = last_seen.replace(tzinfo=timezone.utc)
-            if last_seen and last_seen >= cutoff:
-                payload = cached.get("payload") or {}
-                if isinstance(payload, str):
-                    try:
-                        payload = json.loads(payload)
-                    except json.JSONDecodeError:
-                        logger.warning(
-                            "external_facts(source_id=%s).payload not "
-                            "JSON-parseable; re-running aizynth search",
-                            cache_key,
-                        )
-                        payload = {}
-                if isinstance(payload, dict) and "routes" in payload:
-                    return {**payload, "cached": True}
-
-        try:
-            from api.agent.retrosynth_deep import run_deep_retrosynthesis
-        except ImportError:
-            return {
-                "error": (
-                    "[retrosynth] extras not installed — run "
-                    "`pip install chemclaw2-backend[retrosynth]` "
-                    "on this worker to enable deep retrosynthesis"
-                ),
-            }
-
-        try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(run_deep_retrosynthesis, s, max_routes),
-                timeout=float(max_seconds),
-            )
-        except asyncio.TimeoutError:
-            return {
-                "error": f"aizynthfinder timed out after {max_seconds}s",
-                "target": s,
-            }
-        except ValueError as e:
-            return {"error": str(e)}
-        except Exception:
-            logger.exception("aizynthfinder run failed smiles_len=%d", len(s))
-            return {"error": "deep retrosynthesis failed; see worker logs"}
-
-        async with session_factory() as db:
-            await upsert_external_fact(
-                db, "aizynth", cache_key,
-                result,
-                f"deep retrosynthesis for {s} ({result.get('total', 0)} routes)",
-                fetched_by=user_id,
-            )
-        return {**result, "cached": False}
-
     return [
         wrap_tool("web_search", web_search),
         wrap_tool("fetch_document", fetch_document),
-        wrap_tool("eln_fetch_experiment", eln_fetch_experiment),
-        wrap_tool("ingest_eln_experiment", ingest_eln_experiment),
-        wrap_tool("record_manual_outcome", record_manual_outcome),
         wrap_tool("name_to_structure", name_to_structure),
         wrap_tool("patent_coverage", patent_coverage),
-        wrap_tool("propose_retrosynthesis", propose_retrosynthesis),
-        wrap_tool("propose_retrosynthesis_deep", propose_retrosynthesis_deep),
+        *build_eln_tools(user_id, session_factory),
+        *build_retrosynth_tools(user_id, session_factory),
     ]
