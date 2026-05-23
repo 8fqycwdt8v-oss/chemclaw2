@@ -222,6 +222,14 @@ jobs:
           print('DRFP 2048-bit assertion passed')
           "
 
+      - name: Lint migrations (policy check)
+        # Structural checks only by default — filename pattern, duplicate
+        # numeric prefixes, CONCURRENTLY-must-be-single-statement. The
+        # `--strict` IF [NOT] EXISTS idempotency check is off here because
+        # 0001–0035 predate the policy and rewriting historical migrations
+        # has no effect (already applied in prod).
+        run: python -m tools.check_migrations
+
       - name: Run migrations
         # --single-transaction wraps each file so partial failure rolls
         # back the whole file; ON_ERROR_STOP fails the step on first
