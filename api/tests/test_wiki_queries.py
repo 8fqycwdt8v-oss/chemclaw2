@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -142,7 +142,7 @@ async def test_get_wiki_page_at_returns_current_when_asof_after_last_edit(
             created_by=user_id, citations=[], embed_fn=_noop_embed,
         )
     await asyncio.sleep(0.05)
-    future = datetime.now(timezone.utc) + timedelta(minutes=5)
+    future = datetime.now(UTC) + timedelta(minutes=5)
     async with session_factory() as s:
         page = await get_wiki_page_at(s, slug, future)
     assert page is not None
@@ -166,7 +166,7 @@ async def test_get_wiki_page_at_returns_none_when_asof_before_creation(
             s, slug=slug, title="T", content={}, content_text="x " * 30,
             created_by=user_id, citations=[], embed_fn=_noop_embed,
         )
-    past = datetime.now(timezone.utc) - timedelta(days=365)
+    past = datetime.now(UTC) - timedelta(days=365)
     async with session_factory() as s:
         result = await get_wiki_page_at(s, slug, past)
     assert result is None
@@ -190,7 +190,7 @@ async def test_get_wiki_page_at_warns_when_asof_predates_revisions(
     # Bookmark: any as_of between creation and the next edit will catch
     # the current row, so we need to FIRST capture an as_of after creation,
     # THEN do a second edit that bumps updated_at past it.
-    between = datetime.now(timezone.utc)
+    between = datetime.now(UTC)
     await asyncio.sleep(0.05)
     async with session_factory() as s:
         await upsert_wiki_page(

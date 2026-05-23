@@ -57,6 +57,20 @@ _RL_READ_REQ = Depends(rate_limit("wiki-read", 60))
 _RL_WRITE = Depends(rate_limit("wiki", 20))
 
 
+async def _load_owned_wiki_page(
+    db: AsyncSession,
+    slug: str,
+    user_id: str,
+) -> dict[str, Any]:
+    """Fetch a wiki page, raising 404 if missing or 403 if not owned by `user_id`."""
+    existing = await get_wiki_page(db, slug, include_archived=True)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
+    if existing["created_by"] != user_id:
+        raise HTTPException(status_code=403, detail="You can only edit your own wiki pages")
+    return existing
+
+
 class CitationIn(BaseModel):
     citation_id: str
     source_type: str
@@ -128,7 +142,7 @@ async def list_wiki(
         try:
             cursor_updated_at = datetime.fromisoformat(cursor[:sep])
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid cursor")
+            raise HTTPException(status_code=400, detail="Invalid cursor") from None
         cursor_id = cursor[sep + 1:]
         if not _UUID_RE.match(cursor_id):
             raise HTTPException(status_code=400, detail="Invalid cursor")
@@ -139,9 +153,7 @@ async def list_wiki(
     last = pages[-1] if len(pages) == 50 else None
     next_cursor = None
     if last:
-        ts = last["updated_at"]
-        if hasattr(ts, 'isoformat'):
-            ts = ts.isoformat()
+        ts = last["updated_at"].isoformat()
         next_cursor = f"{ts}_{last['id']}"
     return {"pages": pages, "nextCursor": next_cursor}
 
@@ -192,7 +204,7 @@ async def get_wiki(
         try:
             as_of_dt = datetime.fromisoformat(as_of)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid asOf timestamp")
+            raise HTTPException(status_code=400, detail="Invalid asOf timestamp") from None
         page = await get_wiki_page_at(db, slug, as_of_dt)
         if not page:
             raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found at {as_of}")
@@ -212,11 +224,7 @@ async def update_wiki(
     user_id: str = Depends(get_current_user),
 ):
     """Replace a wiki page's content, title, and citations. Triggers re-embed."""
-    existing = await get_wiki_page(db, slug, include_archived=True)
-    if not existing:
-        raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
-    if existing["created_by"] != user_id:
-        raise HTTPException(status_code=403, detail="You can only edit your own wiki pages")
+    await _load_owned_wiki_page(db, slug, user_id)
     page_id = await upsert_wiki_page(
         db,
         slug,
@@ -239,11 +247,7 @@ async def patch_wiki(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    existing = await get_wiki_page(db, slug, include_archived=True)
-    if not existing:
-        raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
-    if existing["created_by"] != user_id:
-        raise HTTPException(status_code=403, detail="You can only edit your own wiki pages")
+    await _load_owned_wiki_page(db, slug, user_id)
     result = await patch_wiki_page(
         db, slug, user_id,
         body.needs_review, body.archived, body.maturity, body.project,

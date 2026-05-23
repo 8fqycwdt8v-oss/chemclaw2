@@ -73,19 +73,19 @@ async def _call_mcp_tool(server_module: str, tool_name: str, tool_input: dict[st
         if stderr_bytes:
             logger.debug("mcp_stderr server=%s tool=%s: %s", server_module, tool_name,
                          stderr_bytes.decode(errors="replace")[:500])
-    except asyncio.TimeoutError:
+    except TimeoutError:
         try:
             proc.terminate()
         except Exception:
             pass
         try:
             await asyncio.wait_for(proc.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             try:
                 proc.kill()
             except Exception:
                 pass
-        raise RuntimeError(f"MCP call to {server_module}.{tool_name} timed out")
+        raise RuntimeError(f"MCP call to {server_module}.{tool_name} timed out") from None
 
     for line in reversed(stdout.decode().strip().splitlines()):
         if line.strip().startswith('{'):
@@ -197,7 +197,8 @@ async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    from api.observability.logging import configure_logging
+    configure_logging()
     from api.db.connection import async_session_factory as factory
     from api.db.connection import init_db
     init_db()

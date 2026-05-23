@@ -1,14 +1,16 @@
 import asyncio
 import logging
 import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.auth import validate_auth_config
 from api.db.connection import init_db
+from api.observability.logging import configure_logging
+from api.observability.middleware import RequestIdMiddleware
 from api.routes.admin import router as admin_router
 from api.routes.audit import router as audit_router
 from api.routes.budgets import router as budgets_router
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    configure_logging()
     validate_auth_config()
     init_db()
     # Optional: run fingerprint worker in-process (controlled by env var).
@@ -67,16 +70,39 @@ def create_app() -> FastAPI:
     # Set CORS_ALLOWED_ORIGINS to a comma-separated list in production
     # (e.g. "https://app.chemclaw.com,https://staging.chemclaw.com").
     raw_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "")
-    allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()] or [
-        "http://localhost:3000",
-        "http://localhost:5173",
-    ]
+    env = os.environ.get("ENV", "").lower()
+    allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    if env in {"prod", "production"}:
+        # Fail closed in production: refuse to expose dev origins or wildcards.
+        # Parse out the hostname so legitimate origins like
+        # https://localhost-mirror.example.com aren't rejected by a substring
+        # match, and equivalent dev origins (127.0.0.1, [::1]) are caught.
+        from urllib.parse import urlsplit
+        _DEV_HOSTNAMES = {"localhost", "127.0.0.1", "::1"}
+        bad = []
+        for o in allowed_origins:
+            if o == "*":
+                bad.append(o)
+                continue
+            host = urlsplit(o).hostname or ""
+            if host.lower() in _DEV_HOSTNAMES:
+                bad.append(o)
+        if not allowed_origins or bad:
+            raise RuntimeError(
+                "CORS_ALLOWED_ORIGINS must be set to an explicit non-localhost "
+                f"origin list when ENV={env} (rejected: {bad or 'empty'})",
+            )
+    elif not allowed_origins:
+        allowed_origins = ["http://localhost:3000", "http://localhost:5173"]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Request ID + access logging. Added after CORS so OPTIONS preflights
+    # get a request id too (helpful for debugging cross-origin breakage).
+    app.add_middleware(RequestIdMiddleware)
 
     app.include_router(health_router)
     app.include_router(chat_router)

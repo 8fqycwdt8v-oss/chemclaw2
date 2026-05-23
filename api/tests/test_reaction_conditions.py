@@ -22,7 +22,6 @@ from api.db.queries.reaction_conditions import (
 )
 from api.db.queries.reactions import find_neighbor_conditions
 
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _drfp_bits(seed: int = 0) -> str:

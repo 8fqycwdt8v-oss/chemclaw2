@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+
 from fastapi import Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 _RL_UNSAFE = re.compile(r"[^A-Za-z0-9-]")
 
 
-def _escape_byte(m: "re.Match[str]") -> str:
+def _escape_byte(m: re.Match[str]) -> str:
     # Hex-encode each byte of the matched code-point so the result stays
     # 7-bit ASCII regardless of input encoding.
     return "".join(f"_{b:02x}_" for b in m.group(0).encode("utf-8"))

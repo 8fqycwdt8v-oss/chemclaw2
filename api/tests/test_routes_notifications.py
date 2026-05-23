@@ -7,7 +7,6 @@ teardown caveat in `test_routes_v2.py`).
 """
 from __future__ import annotations
 
-
 # ── GET /api/notifications ───────────────────────────────────────────────────
 
 

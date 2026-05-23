@@ -1,0 +1,97 @@
+# Local dev environment for chemclaw2.
+#
+# Usage:
+#   cp .env.example .env   # then fill in ANTHROPIC_API_KEY + OPENAI_API_KEY + CLERK_DOMAIN
+#   docker compose up      # Postgres+pgvector boots, migrations apply, app + worker start
+#   curl localhost:8080/api/readiness
+#
+# Production deploys to Fly.io via .github/workflows/deploy.yml and read
+# secrets from `fly secrets`, not from this file.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: chemclaw2
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d chemclaw2"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations:ro
+    environment:
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: chemclaw2
+    command: >
+      sh -c "
+        set -e;
+        for f in /migrations/*.sql; do
+          echo applying $$f;
+          if grep -Eqi 'CREATE[[:space:]]+INDEX[[:space:]]+CONCURRENTLY|REINDEX.*CONCURRENTLY' \"$$f\"; then
+            psql -v ON_ERROR_STOP=1 -f \"$$f\";
+          else
+            psql --single-transaction -v ON_ERROR_STOP=1 -f \"$$f\";
+          fi;
+        done
+      "
+
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/chemclaw2
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      CLERK_DOMAIN: ${CLERK_DOMAIN}
+      CLERK_ISSUER: ${CLERK_ISSUER}
+      CLERK_JWKS_URL: ${CLERK_JWKS_URL}
+      ADMIN_USER_IDS: ${ADMIN_USER_IDS:-}
+      ENV: ${ENV:-dev}
+      ALLOW_MOCK_AUTH: ${ALLOW_MOCK_AUTH:-0}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      LOG_FORMAT: ${LOG_FORMAT:-plain}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      RUN_WORKER_IN_PROCESS: "0"
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/health',timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  worker:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/chemclaw2
+      LOG_FORMAT: ${LOG_FORMAT:-plain}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    command: ["python", "-m", "api.workers.fp_worker"]
+
+volumes:
+  postgres-data:

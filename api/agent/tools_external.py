@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import urllib.parse
+from datetime import UTC
 from typing import Any
 
 import httpx
@@ -129,7 +130,7 @@ def build_external_tools(
         or {error, name} on failure.
         """
         from datetime import datetime as _dt
-        from datetime import timedelta, timezone
+        from datetime import timedelta
 
         from api.db.queries.knowledge import get_external_fact_by_source_id, upsert_external_fact
 
@@ -141,13 +142,13 @@ def build_external_tools(
         # an arbitrary-length write into external_facts.source_id.
         norm = re.sub(r"\s+", " ", q.lower())
         cache_key = f"cactus:{norm}"
-        cutoff = _dt.now(tz=timezone.utc) - timedelta(days=7)
+        cutoff = _dt.now(tz=UTC) - timedelta(days=7)
         async with session_factory() as db:
             cached = await get_external_fact_by_source_id(db, cache_key)
         if cached:
             last_seen = cached.get("last_seen")
             if last_seen is not None and last_seen.tzinfo is None:
-                last_seen = last_seen.replace(tzinfo=timezone.utc)
+                last_seen = last_seen.replace(tzinfo=UTC)
             if last_seen and last_seen >= cutoff:
                 payload = cached.get("payload") or {}
                 if isinstance(payload, str):
@@ -186,7 +187,7 @@ def build_external_tools(
             return field, first, None
 
         responses = await asyncio.gather(*(
-            _fetch_one(url, field) for url, field in zip(urls, fields)
+            _fetch_one(url, field) for url, field in zip(urls, fields, strict=True)
         ))
         result: dict[str, Any] = {"name": q}
         for field, value, fatal in responses:

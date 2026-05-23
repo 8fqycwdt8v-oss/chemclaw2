@@ -73,7 +73,7 @@ async def _resolve_to_global_ip(hostname: str) -> str:
         try:
             addr = ipaddress.ip_address(ip_str)
         except ValueError:
-            raise ValueError(f"SSRF blocked: unrecognised address format {ip_str}")
+            raise ValueError(f"SSRF blocked: unrecognised address format {ip_str}") from None
         # is_global treats multicast (224.0.0.0/4, ff00::/8) as globally
         # routed, so check it separately — outbound HTTP must never target
         # a multicast destination.
@@ -280,7 +280,7 @@ async def _ingest_paper_chunks(
             "text": txt,
             "embedding": emb,
         }
-        for (idx, section, txt), emb in zip(parts, embeddings)
+        for (idx, section, txt), emb in zip(parts, embeddings, strict=True)
     ]
     # insert_paper_chunks manages its own transaction; we just provide a session.
     async with session_factory() as db:

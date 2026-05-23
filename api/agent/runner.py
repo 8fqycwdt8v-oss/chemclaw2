@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import re
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from claude_agent_sdk import query
 from claude_agent_sdk.types import (

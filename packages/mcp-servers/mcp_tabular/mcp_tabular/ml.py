@@ -9,19 +9,26 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import (
+    GradientBoostingClassifier,
+    GradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
+)
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.metrics import (
-    accuracy_score, f1_score, mean_absolute_error, mean_squared_error,
-    r2_score, roc_auc_score,
+    accuracy_score,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+    roc_auc_score,
 )
 from sklearn.model_selection import KFold, StratifiedKFold, cross_validate, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.compose import ColumnTransformer
-
 
 _MODELS_CLF = {
     "logreg": lambda rs: LogisticRegression(max_iter=1000, random_state=rs),
@@ -199,7 +206,7 @@ def _extract_importances(est, numeric_cols, categorical_cols, pre) -> dict[str, 
     if feature_names is None or len(feature_names) != len(importances):
         # Fall back to raw indices
         return {f"f{i}": _round(v) for i, v in enumerate(importances)}
-    return {n: _round(v) for n, v in zip(feature_names, importances)}
+    return {n: _round(v) for n, v in zip(feature_names, importances, strict=True)}
 
 
 def predict_holdout(

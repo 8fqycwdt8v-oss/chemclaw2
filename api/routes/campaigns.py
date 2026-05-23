@@ -48,7 +48,7 @@ async def list_campaigns(
         try:
             cursor_updated_at = datetime.fromisoformat(cursor[:sep])
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid cursor")
+            raise HTTPException(status_code=400, detail="Invalid cursor") from None
         cursor_id = cursor[sep + 1:]
         if not _UUID_RE.match(cursor_id):
             raise HTTPException(status_code=400, detail="Invalid cursor")

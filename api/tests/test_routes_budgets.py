@@ -14,7 +14,6 @@ include here.
 """
 from __future__ import annotations
 
-
 # ── GET /api/budgets/{project_key} ────────────────────────────────────────────
 
 

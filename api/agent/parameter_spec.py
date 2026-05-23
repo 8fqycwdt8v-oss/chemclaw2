@@ -23,7 +23,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-
 _MAX_CATEGORICAL_LEVELS = 8
 
 

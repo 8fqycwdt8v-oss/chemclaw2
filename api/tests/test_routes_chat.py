@@ -13,8 +13,7 @@ rate limiter still run for real — they're per-request, in-process.
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator
-
+from collections.abc import AsyncIterator
 
 # ── Pydantic validation on ChatRequest ───────────────────────────────────────
 

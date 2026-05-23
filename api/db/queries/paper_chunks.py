@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.embeddings import EMBED_DIM
 
-
 # ── chunking ──────────────────────────────────────────────────────────────────
 
 def chunk_paper_text(
@@ -266,7 +265,7 @@ async def hybrid_search_paper_chunks(
             entry["sem_rank"] = rank
 
     scored: list[dict[str, Any]] = []
-    for cid, entry in merged.items():
+    for _cid, entry in merged.items():
         s = 0.0
         if entry["fts_rank"] is not None:
             s += 1.0 / (K + entry["fts_rank"])

@@ -7,7 +7,6 @@ pytest.importorskip("mcp_tabular")
 pytest.importorskip("sklearn")
 
 import numpy as np  # noqa: E402
-
 from mcp_tabular import ml, tables  # noqa: E402
 
 

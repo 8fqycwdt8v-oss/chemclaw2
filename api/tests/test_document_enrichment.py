@@ -12,7 +12,6 @@ import pytest
 
 from api.integrations import document_enrichment as de
 
-
 # ── extract_doi ──────────────────────────────────────────────────────────────
 
 

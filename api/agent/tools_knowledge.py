@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import UTC
 from typing import Any
 
 from claude_agent_sdk import SdkMcpTool
@@ -284,19 +285,19 @@ def build_knowledge_tools(
         whether the fact is still current (last_seen within 30 days).
         """
         from datetime import datetime as _dt
-        from datetime import timedelta, timezone
+        from datetime import timedelta
 
         from api.db.queries.knowledge import get_external_fact_by_source_id
         async with session_factory() as db:
             row = await get_external_fact_by_source_id(db, citation_id)
         if not row:
             return {"found": False, "source_type": None, "last_seen": None, "stale": None}
-        cutoff = _dt.now(tz=timezone.utc) - timedelta(days=30)
+        cutoff = _dt.now(tz=UTC) - timedelta(days=30)
         last_seen = row["last_seen"]
         if last_seen is None:
             is_stale = True
         elif last_seen.tzinfo is None:
-            is_stale = last_seen.replace(tzinfo=timezone.utc) < cutoff
+            is_stale = last_seen.replace(tzinfo=UTC) < cutoff
         else:
             is_stale = last_seen < cutoff
         return {
@@ -343,7 +344,7 @@ def build_knowledge_tools(
         Returns the guideline page text or a topic-filtered excerpt.
         """
         from datetime import datetime as _dt
-        from datetime import timedelta, timezone
+        from datetime import timedelta
 
         from api.db.queries.knowledge import get_external_fact_by_source_id, upsert_external_fact
 
@@ -352,7 +353,7 @@ def build_knowledge_tools(
         guideline_key = re.sub(r'\([^)]*\)', '', guideline_key).strip()
 
         cache_source_id = f"regulatory:{guideline_key}"
-        freshness_cutoff = _dt.now(tz=timezone.utc) - timedelta(hours=24)
+        freshness_cutoff = _dt.now(tz=UTC) - timedelta(hours=24)
 
         async with session_factory() as db:
             # Look up by source_id (not FTS) so we always get the right guideline's cache entry.
@@ -362,7 +363,7 @@ def build_knowledge_tools(
             last_seen = entry.get("last_seen")
             if last_seen is not None:
                 if last_seen.tzinfo is None:
-                    last_seen = last_seen.replace(tzinfo=timezone.utc)
+                    last_seen = last_seen.replace(tzinfo=UTC)
             if last_seen and last_seen >= freshness_cutoff:
                 text_body = entry.get("content_text", "")
                 if topic:

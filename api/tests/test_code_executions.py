@@ -95,6 +95,7 @@ def test_strip_artifact_payload_handles_unparseable_string(
     """Malformed JSON returns [] and logs a warning. Pre-§M-cleanup
     this branch was silent."""
     import logging
+
     from api.db.queries.code_executions import _strip_artifact_payload
     with caplog.at_level(logging.WARNING):
         out = _strip_artifact_payload("not valid json {")
@@ -107,6 +108,7 @@ def test_strip_artifact_payload_handles_non_list(
 ) -> None:
     """A dict or scalar instead of a list — also fails closed with a warn."""
     import logging
+
     from api.db.queries.code_executions import _strip_artifact_payload
     with caplog.at_level(logging.WARNING):
         out = _strip_artifact_payload({"not": "a list"})
@@ -162,8 +164,8 @@ async def test_insert_execution_rejects_unowned_investigation(
     investigation belongs to a different user. The tool layer relies
     on this so a future caller that forgets the tool-layer owner check
     can't attach an execution to a stranger's investigation."""
-    from api.db.queries.investigations import create_investigation
     from api.db.queries.code_executions import insert_execution
+    from api.db.queries.investigations import create_investigation
 
     other_user = f"u-{uuid.uuid4().hex[:8]}"
     async with session_factory() as db:

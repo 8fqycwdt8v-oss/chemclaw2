@@ -185,7 +185,7 @@ async def upsert_wiki_page(
                     for i in range(len(chunks))
                 )
                 batch_params: dict[str, Any] = {"pid": page_id}
-                for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
+                for i, (chunk, emb) in enumerate(zip(chunks, embeddings, strict=True)):
                     batch_params[f"text_{i}"] = chunk
                     batch_params[f"emb_{i}"] = "[" + ",".join(map(str, emb)) + "]"
                 await db.execute(

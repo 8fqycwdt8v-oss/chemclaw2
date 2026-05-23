@@ -22,6 +22,7 @@ dependencies = [
 dev = [
   "pytest>=8",
   "pytest-asyncio>=0.24",
+  "pytest-cov>=5",
   "httpx>=0.28",
   # Pinned: mypy 1.19 ships meaningfully stricter checks on
   # SQLAlchemy result types; older 1.x versions silenced things the
@@ -29,6 +30,7 @@ dev = [
   # same diagnostics.
   "mypy==1.19.1",
   "ruff>=0.6",
+  "pip-audit>=2.7",
 ]
 chem = [
   "rdkit>=2024.3",
@@ -63,16 +65,57 @@ include = ["api*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["api"]
+markers = [
+  # Tests gated behind `[opt]` or `[retrosynth]` extras (bofire, torch,
+  # aizynthfinder). Cheap CI lane skips these via `-m "not heavy"`; heavy
+  # lane runs them. Use sparingly — prefer `pytest.importorskip` inside the
+  # test when the gate is a single import.
+  "heavy: requires the heavy install extras (bofire/torch/aizynthfinder)",
+]
+
+[tool.coverage.run]
+source = ["api"]
+omit = [
+  "api/tests/*",
+  # Workers + agent runtime exercise subprocess MCP boundaries; coverage
+  # only sees the in-process side anyway, which is misleading.
+  "api/workers/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "raise NotImplementedError",
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.:",
+]
 
 [tool.ruff]
 line-length = 120
 target-version = "py311"
 
 [tool.ruff.lint]
-# Start narrow: pycodestyle errors (E), pyflakes (F), warnings (W). Isort (I)
-# is auto-fixable but its diff is large; add later. Other rule families
-# (UP, B, SIM, RUF) deserve their own enabling pass.
-select = ["E", "F", "W"]
+# E (pycodestyle errors), F (pyflakes), W (warnings) — baseline.
+# I — isort. Auto-fixed.
+# UP — pyupgrade. Auto-fixed (Optional → X | None, etc.).
+# B — bugbear. Catches real bugs (B904 chained raises, B905 strict-zip).
+# B008 is widened to permit FastAPI's Depends/Query/Body/Path/Header pattern
+# in default arguments (idiomatic for FastAPI routes).
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom calls these in default arguments,
+# which is the canonical pattern — not a B008 footgun.
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.Query",
+  "fastapi.Body",
+  "fastapi.Path",
+  "fastapi.Header",
+  "fastapi.Cookie",
+  "fastapi.Form",
+  "fastapi.File",
+]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests use a lot of pytest.fixture closures; ignore unused-import noise
@@ -103,9 +146,12 @@ module = "claude_agent_sdk.*"
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-# The Agent SDK's TypedDicts (McpSdkServerConfig, AgentDefinition,
-# HookMatcher) don't match how the SDK's own examples use them, producing
-# ~30 errors per check. Ignore until the SDK ships better stubs.
+# Local mypy (pinned 1.19.1) is happy with these modules under the
+# default config, but the CI mypy resolves stricter SDK stubs that
+# enforce the McpSdkServerConfig / AgentDefinition / HookMatcher
+# TypedDicts the SDK's own examples ignore. ~12 errors that aren't
+# ours to fix — re-enable per module once the SDK ships matching
+# stubs.
 module = ["api.agent.tools", "api.agent.runner", "api.agent.hooks"]
 ignore_errors = true
 
