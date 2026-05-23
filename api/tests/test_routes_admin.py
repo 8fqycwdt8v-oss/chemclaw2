@@ -69,7 +69,8 @@ def test_tool_permissions_crud_cycle(client, admin_header):
         params={"scope": "user", "scope_id": scope_id},
     )
     assert listing.status_code == 200
-    matches = [p for p in listing.json()["permissions"] if p["id"] == permission_id]
+    # The list endpoint serialises uuid columns as their JSON repr (string).
+    matches = [p for p in listing.json()["permissions"] if str(p["id"]) == permission_id]
     assert len(matches) == 1
     assert matches[0]["mode"] == "allow"
     assert matches[0]["tool_name"] == "web_search"

@@ -28,27 +28,29 @@ def _reload_main(monkeypatch: pytest.MonkeyPatch, **env: str | None) -> ModuleTy
     return importlib.reload(main_module)
 
 
+# `api.main` has `app = create_app()` at module level so `uvicorn api.main:app`
+# can resolve the FastAPI app. That means `importlib.reload` runs the gate at
+# reload time — the RuntimeError surfaces inside `_reload_main`, not the
+# subsequent `main_module.create_app()` call. Wrap the reload itself.
+
 @pytest.mark.parametrize("env_value", ["prod", "production", "PROD", "Production"])
 def test_prod_refuses_empty_cors(monkeypatch: pytest.MonkeyPatch, env_value: str) -> None:
-    main_module = _reload_main(monkeypatch, ENV=env_value, CORS_ALLOWED_ORIGINS="")
     with pytest.raises(RuntimeError, match="CORS_ALLOWED_ORIGINS"):
-        main_module.create_app()
+        _reload_main(monkeypatch, ENV=env_value, CORS_ALLOWED_ORIGINS="")
 
 
 def test_prod_refuses_wildcard(monkeypatch: pytest.MonkeyPatch) -> None:
-    main_module = _reload_main(monkeypatch, ENV="prod", CORS_ALLOWED_ORIGINS="*")
     with pytest.raises(RuntimeError, match="CORS_ALLOWED_ORIGINS"):
-        main_module.create_app()
+        _reload_main(monkeypatch, ENV="prod", CORS_ALLOWED_ORIGINS="*")
 
 
 def test_prod_refuses_localhost(monkeypatch: pytest.MonkeyPatch) -> None:
-    main_module = _reload_main(
-        monkeypatch,
-        ENV="prod",
-        CORS_ALLOWED_ORIGINS="https://app.example.com,http://localhost:3000",
-    )
     with pytest.raises(RuntimeError, match="CORS_ALLOWED_ORIGINS"):
-        main_module.create_app()
+        _reload_main(
+            monkeypatch,
+            ENV="prod",
+            CORS_ALLOWED_ORIGINS="https://app.example.com,http://localhost:3000",
+        )
 
 
 def test_prod_accepts_explicit_origins(monkeypatch: pytest.MonkeyPatch) -> None:

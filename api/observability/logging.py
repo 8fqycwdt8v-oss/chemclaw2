@@ -89,10 +89,15 @@ def configure_logging(*, level: str | None = None, fmt: str | None = None) -> No
     log_format = (fmt or os.environ.get("LOG_FORMAT") or "plain").lower()
 
     root = logging.getLogger()
-    for handler in list(root.handlers):
-        root.removeHandler(handler)
+    # Remove only handlers we previously installed — leave pytest's caplog
+    # handler (and any platform-installed handler) alone so test capture
+    # and host log shipping still work.
+    for h in list(root.handlers):
+        if getattr(h, "_chemclaw2_owned", False):
+            root.removeHandler(h)
 
-    handler = logging.StreamHandler(stream=sys.stdout)
+    handler: logging.Handler = logging.StreamHandler(stream=sys.stdout)
+    handler._chemclaw2_owned = True  # type: ignore[attr-defined]
     handler.addFilter(_RequestIdFilter())
     if log_format == "json":
         handler.setFormatter(_JsonFormatter())
