@@ -7,7 +7,19 @@ primary_region = "fra"
   PORT = "8080"
 
 [processes]
-  web = "uvicorn api.main:app --host 0.0.0.0 --port 8080"
+  # Production-tuned uvicorn:
+  #   --workers 2           — two worker processes per machine (1-GB VM).
+  #                           Scale via Fly machines, not uvicorn workers.
+  #   --timeout-keep-alive  — drop idle conns aggressively so Fly's
+  #                           connection pool doesn't grow unbounded.
+  #   --timeout-graceful-shutdown
+  #                         — give in-flight requests 30 s to drain on
+  #                           SIGTERM before forcing a kill (paired with
+  #                           Fly's rolling-deploy default).
+  #   --proxy-headers / --forwarded-allow-ips
+  #                         — trust Fly's edge proxy so request.client.host
+  #                           reflects the real client IP for rate limiting.
+  web = "uvicorn api.main:app --host 0.0.0.0 --port 8080 --workers 2 --timeout-keep-alive 30 --timeout-graceful-shutdown 30 --proxy-headers --forwarded-allow-ips=*"
   worker = "python -m api.workers.fp_worker"
 
 [http_service]
