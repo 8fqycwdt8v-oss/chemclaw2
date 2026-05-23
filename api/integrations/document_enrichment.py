@@ -283,9 +283,9 @@ async def extract_entities_from_text(
     except asyncio.TimeoutError:
         logger.warning("entity_extraction_timed_out chars=%d", len(snippet))
         return {"compounds": [], "citations": [], "error": "timeout"}
-    except Exception as e:
-        logger.warning("entity_extraction_failed err=%s", e)
-        return {"compounds": [], "citations": [], "error": str(e)[:200]}
+    except Exception:
+        logger.exception("entity_extraction_failed chars=%d", len(snippet))
+        return {"compounds": [], "citations": [], "error": "entity extraction failed"}
 
     # The response.content is a list of blocks; pull the tool_use block.
     for block in response.content:
