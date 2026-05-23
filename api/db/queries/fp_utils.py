@@ -34,7 +34,7 @@ def tanimoto(a: bytearray, b: bytearray) -> float:
     """Tanimoto (Jaccard) similarity over packed bit arrays."""
     and_count = 0
     or_count = 0
-    for x, y in zip(a, b):
+    for x, y in zip(a, b, strict=True):
         and_count += bin(x & y).count('1')
         or_count += bin(x | y).count('1')
     return and_count / or_count if or_count else 0.0

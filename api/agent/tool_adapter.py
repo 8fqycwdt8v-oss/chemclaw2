@@ -31,7 +31,8 @@ import inspect
 import json
 import logging
 import types
-from typing import Any, Awaitable, Callable, Union, get_args, get_origin, get_type_hints
+from collections.abc import Awaitable, Callable
+from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from claude_agent_sdk import SdkMcpTool, tool
 

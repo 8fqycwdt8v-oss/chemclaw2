@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import UTC
 from typing import Any
 
 from claude_agent_sdk import SdkMcpTool
@@ -106,7 +107,7 @@ def build_retrosynth_tools(
             (smiles, type, children, in_stock, …).
         """
         from datetime import datetime as _dt
-        from datetime import timedelta, timezone
+        from datetime import timedelta
 
         from api.db.queries.knowledge import (
             get_external_fact_by_source_id,
@@ -122,13 +123,13 @@ def build_retrosynth_tools(
             return {"error": "max_seconds must be between 1 and 600"}
 
         cache_key = f"aizynth:{s}"
-        cutoff = _dt.now(tz=timezone.utc) - timedelta(days=30)
+        cutoff = _dt.now(tz=UTC) - timedelta(days=30)
         async with session_factory() as db:
             cached = await get_external_fact_by_source_id(db, cache_key)
         if cached:
             last_seen = cached.get("last_seen")
             if last_seen is not None and last_seen.tzinfo is None:
-                last_seen = last_seen.replace(tzinfo=timezone.utc)
+                last_seen = last_seen.replace(tzinfo=UTC)
             if last_seen and last_seen >= cutoff:
                 payload = cached.get("payload") or {}
                 if isinstance(payload, str):
@@ -160,7 +161,7 @@ def build_retrosynth_tools(
                 asyncio.to_thread(run_deep_retrosynthesis, s, max_routes),
                 timeout=float(max_seconds),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {
                 "error": f"aizynthfinder timed out after {max_seconds}s",
                 "target": s,

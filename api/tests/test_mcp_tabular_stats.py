@@ -11,7 +11,6 @@ import pytest
 pytest.importorskip("mcp_tabular")
 
 import numpy as np  # noqa: E402
-
 from mcp_tabular import stats, tables  # noqa: E402
 
 

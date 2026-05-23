@@ -17,7 +17,6 @@ from api.db.queries.fp_utils import bit_string_to_pg_bytes
 from api.db.queries.reaction_outcomes import insert_outcome, list_outcomes_for_reaction
 from api.db.queries.reactions import find_similar_reactions
 
-
 # Two 2048-bit DRFP fingerprints, chosen to be near-identical (Tanimoto ~ 1)
 # so the rerank keeps both above the default min_similarity=0.4 threshold.
 _FP_ALL_ONES = "1" * 2048

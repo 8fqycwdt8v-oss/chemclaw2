@@ -1,7 +1,7 @@
 """Budget queries — Python port of packages/db/src/queries/budgets.ts."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -11,7 +11,7 @@ BudgetPeriod = str  # 'day' | 'week' | 'month'
 
 
 def period_start_for(period: BudgetPeriod, now: datetime | None = None) -> datetime:
-    d = (now or datetime.now(tz=timezone.utc)).replace(tzinfo=timezone.utc)
+    d = (now or datetime.now(tz=UTC)).replace(tzinfo=UTC)
     if period == "day":
         return d.replace(hour=0, minute=0, second=0, microsecond=0)
     if period == "week":

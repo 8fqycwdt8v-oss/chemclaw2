@@ -95,6 +95,18 @@ jobs:
       - name: Lint (ruff)
         run: ruff check api/ packages/
 
+      - name: Dependency audit (pip-audit)
+        # Only meaningful on the cheap lane; the heavy lane installs ~2 GB
+        # of torch + bofire wheels whose CVE feeds churn weekly and add
+        # noise without changing the security posture of the API.
+        # `--skip-editable` so the editable install of chemclaw2-backend
+        # itself isn't flagged. Non-blocking until we've seen 5 consecutive
+        # clean runs on main (same rollout pattern as the heavy lane);
+        # use `--ignore-vuln <GHSA>` here for any unfixable transitive.
+        if: matrix.lane == 'cheap'
+        continue-on-error: true
+        run: pip-audit --skip-editable
+
       - name: Type-check (mypy)
         # Hard gate again. The CI-vs-local mypy drift that motivated the
         # earlier `continue-on-error: true` workaround was four

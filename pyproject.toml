@@ -95,10 +95,27 @@ line-length = 120
 target-version = "py311"
 
 [tool.ruff.lint]
-# Start narrow: pycodestyle errors (E), pyflakes (F), warnings (W). Isort (I)
-# is auto-fixable but its diff is large; add later. Other rule families
-# (UP, B, SIM, RUF) deserve their own enabling pass.
-select = ["E", "F", "W"]
+# E (pycodestyle errors), F (pyflakes), W (warnings) — baseline.
+# I — isort. Auto-fixed.
+# UP — pyupgrade. Auto-fixed (Optional → X | None, etc.).
+# B — bugbear. Catches real bugs (B904 chained raises, B905 strict-zip).
+# B008 is widened to permit FastAPI's Depends/Query/Body/Path/Header pattern
+# in default arguments (idiomatic for FastAPI routes).
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom calls these in default arguments,
+# which is the canonical pattern — not a B008 footgun.
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.Query",
+  "fastapi.Body",
+  "fastapi.Path",
+  "fastapi.Header",
+  "fastapi.Cookie",
+  "fastapi.Form",
+  "fastapi.File",
+]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests use a lot of pytest.fixture closures; ignore unused-import noise
@@ -128,12 +145,10 @@ check_untyped_defs = true
 module = "claude_agent_sdk.*"
 ignore_errors = true
 
-[[tool.mypy.overrides]]
-# The Agent SDK's TypedDicts (McpSdkServerConfig, AgentDefinition,
-# HookMatcher) don't match how the SDK's own examples use them, producing
-# ~30 errors per check. Ignore until the SDK ships better stubs.
-module = ["api.agent.tools", "api.agent.runner", "api.agent.hooks"]
-ignore_errors = true
+# Note: the historical `ignore_errors = true` override on api.agent.tools/
+# runner/hooks was dropped — the SDK's TypedDict drift was resolved upstream
+# and those modules now type-check cleanly under the project's default
+# (non-strict, but check_untyped_defs=true) config.
 
 [[tool.mypy.overrides]]
 module = "api.tests.*"

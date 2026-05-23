@@ -9,14 +9,15 @@ a crashloop, never as a silently-permissive deployment.
 from __future__ import annotations
 
 import importlib
+from types import ModuleType
 
 import pytest
 
 
-def _reload_main(monkeypatch: pytest.MonkeyPatch, **env: str | None) -> None:
+def _reload_main(monkeypatch: pytest.MonkeyPatch, **env: str | None) -> ModuleType:
     """Re-import api.main with the given env vars so create_app sees them.
 
-    Returns the imported module so tests can call create_app() on it.
+    Returns the freshly-imported module so tests can call create_app() on it.
     """
     for k, v in env.items():
         if v is None:

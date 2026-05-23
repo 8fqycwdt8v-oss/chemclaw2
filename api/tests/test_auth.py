@@ -39,7 +39,7 @@ def patched_jwks(monkeypatch: pytest.MonkeyPatch, rsa_key) -> rsa.RSAPublicKey:
             def __init__(self, k: rsa.RSAPublicKey) -> None:
                 self.key = k
 
-        def get_signing_key_from_jwt(self, token: str) -> "_Stub._Key":
+        def get_signing_key_from_jwt(self, token: str) -> _Stub._Key:
             return _Stub._Key(pub)
 
     monkeypatch.setattr(auth_mod, "_get_jwks_client", lambda: _Stub())

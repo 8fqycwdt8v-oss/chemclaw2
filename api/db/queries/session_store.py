@@ -132,7 +132,7 @@ class PostgresSessionStore:
 def scoped_session_store(
     session_factory: async_sessionmaker[AsyncSession],
     project_key: str,
-) -> "ScopedPostgresSessionStore":
+) -> ScopedPostgresSessionStore:
     """Returns a store that forces every key to use the given project_key.
     Mirrors TypeScript's scopedSessionStore() for multi-tenant isolation.
     """

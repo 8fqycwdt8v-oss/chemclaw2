@@ -118,7 +118,7 @@ def _verify_svc_token(token: str, secret: str) -> str:
     try:
         iat = int(iat_str)
     except ValueError:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="Unauthorized") from None
     age = int(time.time()) - iat
     if abs(age) > _SVC_TOKEN_MAX_AGE:
         logger.warning("svc_token_expired sub=%s age=%ds", sub, age)
@@ -201,14 +201,16 @@ async def get_current_user(authorization: str | None = Header(None)) -> str:
             raise HTTPException(status_code=401, detail="Unauthorized: missing sub claim")
         return user_id
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
+        raise HTTPException(status_code=401, detail="Token expired") from None
     except jwt.PyJWKClientError as e:
-        # JWKS fetch failure (network error, kid not found, etc.) — fail closed
+        # JWKS fetch failure (network error, kid not found, etc.) — fail closed.
+        # Suppress the inner exception so 401 responses don't leak JWKS URLs
+        # or network error detail (OWASP A05).
         logger.warning("jwks_client_error: %s", e)
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="Unauthorized") from None
     except jwt.InvalidTokenError as e:
         logger.warning("jwt_validation_failed: %s", e)
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="Unauthorized") from None
 
 
 async def get_optional_user(authorization: str | None = Header(None)) -> str | None:

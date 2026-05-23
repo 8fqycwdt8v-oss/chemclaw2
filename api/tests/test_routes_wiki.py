@@ -9,7 +9,6 @@ seeded paths.
 """
 from __future__ import annotations
 
-
 # ── POST /api/wiki — create page ─────────────────────────────────────────────
 
 

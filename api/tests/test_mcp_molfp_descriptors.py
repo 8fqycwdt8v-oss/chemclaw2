@@ -21,7 +21,6 @@ pytest.importorskip("mcp_molfp")
 
 from mcp_molfp.server import compute_descriptors  # noqa: E402
 
-
 # (smiles, name, expected) with reasonable tolerance bands.
 KNOWN_COMPOUNDS = [
     # Ethanol

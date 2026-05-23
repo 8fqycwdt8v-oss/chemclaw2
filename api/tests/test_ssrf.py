@@ -179,7 +179,7 @@ class _StubAsyncClient:
         self._responses = list(responses)
         self.calls: list[dict[str, Any]] = []
 
-    async def __aenter__(self) -> "_StubAsyncClient":
+    async def __aenter__(self) -> _StubAsyncClient:
         return self
 
     async def __aexit__(self, *a: Any) -> None:

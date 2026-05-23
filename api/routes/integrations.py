@@ -158,10 +158,10 @@ async def upload_document(
             reader = pypdf.PdfReader(io.BytesIO(content))
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
         except ImportError:
-            raise HTTPException(status_code=422, detail="PDF support not available")
+            raise HTTPException(status_code=422, detail="PDF support not available") from None
         except Exception:
             logger.exception("doc_upload_pdf_parse_failed filename=%s", file.filename)
-            raise HTTPException(status_code=422, detail="Failed to parse PDF")
+            raise HTTPException(status_code=422, detail="Failed to parse PDF") from None
     else:
         text = content.decode("utf-8", errors="replace")
 

@@ -376,7 +376,7 @@ async def run_python(
                     proc.communicate(), timeout=wall_seconds,
                 )
                 status = "completed"
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Wall-clock blew past the budget — SIGTERM then SIGKILL.
                 # Guard each cleanup step per CLAUDE.md observability rules:
                 # raises inside a finally cancel the outer coroutine.
@@ -388,7 +388,7 @@ async def run_python(
                     pass
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=2.0)
-                except (asyncio.TimeoutError, ProcessLookupError):
+                except (TimeoutError, ProcessLookupError):
                     try:
                         proc.kill()
                     except Exception:

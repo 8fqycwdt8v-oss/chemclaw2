@@ -33,7 +33,6 @@ from api.db.queries.world_model import (
     update_world_model_entry_status,
 )
 
-
 # ── investigations ───────────────────────────────────────────────────────────
 
 

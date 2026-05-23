@@ -142,7 +142,7 @@ async def list_wiki(
         try:
             cursor_updated_at = datetime.fromisoformat(cursor[:sep])
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid cursor")
+            raise HTTPException(status_code=400, detail="Invalid cursor") from None
         cursor_id = cursor[sep + 1:]
         if not _UUID_RE.match(cursor_id):
             raise HTTPException(status_code=400, detail="Invalid cursor")
@@ -204,7 +204,7 @@ async def get_wiki(
         try:
             as_of_dt = datetime.fromisoformat(as_of)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid asOf timestamp")
+            raise HTTPException(status_code=400, detail="Invalid asOf timestamp") from None
         page = await get_wiki_page_at(db, slug, as_of_dt)
         if not page:
             raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found at {as_of}")
