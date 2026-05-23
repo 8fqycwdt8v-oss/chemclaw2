@@ -24,7 +24,7 @@ def test_tool_permissions_post_rejects_non_admin(client, auth_header):
     r = client.post(
         "/api/admin/tool-permissions",
         headers=auth_header,
-        json={"scope": "user", "scope_id": "u-x", "tool_name": "web_search", "mode": "allow"},
+        json={"scope": "user", "scope_id": "user_test", "tool_name": "web_search", "mode": "allow"},
     )
     assert r.status_code == 403
 
@@ -52,8 +52,12 @@ def test_admin_health_ok(client, admin_header):
 
 
 def test_tool_permissions_crud_cycle(client, admin_header):
-    """End-to-end CRUD: list (empty subset) → create → list (contains) → delete → 404 on re-delete."""
-    scope_id = f"u-test-{uuid.uuid4().hex[:8]}"
+    """End-to-end CRUD: list (empty subset) → create → list (contains) → delete → 404 on re-delete.
+
+    `scope_id` must match the `tool_permissions_scope_shape_chk` constraint
+    (migration 0029): scope='user' → scope_id matches `^user_[A-Za-z0-9]+$`.
+    """
+    scope_id = f"user_test{uuid.uuid4().hex[:12]}"
     create = client.post(
         "/api/admin/tool-permissions",
         headers=admin_header,
