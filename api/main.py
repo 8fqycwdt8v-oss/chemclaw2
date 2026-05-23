@@ -9,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.auth import validate_auth_config
 from api.db.connection import init_db
+from api.observability.logging import configure_logging
+from api.observability.middleware import RequestIdMiddleware
 from api.routes.admin import router as admin_router
 from api.routes.audit import router as audit_router
 from api.routes.budgets import router as budgets_router
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    configure_logging()
     validate_auth_config()
     init_db()
     # Optional: run fingerprint worker in-process (controlled by env var).
@@ -84,6 +87,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Request ID + access logging. Added after CORS so OPTIONS preflights
+    # get a request id too (helpful for debugging cross-origin breakage).
+    app.add_middleware(RequestIdMiddleware)
 
     app.include_router(health_router)
     app.include_router(chat_router)

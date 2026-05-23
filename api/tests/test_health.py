@@ -20,12 +20,20 @@ def client():
 
 
 def test_health_ok(client):
+    """Liveness probe — process up, event loop responsive. No DB."""
     resp = client.get("/api/health")
-    # 200 when DB is up, 503 when DB is down — both are valid response shapes.
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+def test_readiness_ok(client):
+    resp = client.get("/api/readiness")
+    # 200 when DB is up + backlog under threshold, 503 otherwise.
     assert resp.status_code in (200, 503)
     data = resp.json()
-    assert "ok" in data
+    assert "ready" in data
     assert "db" in data
+    assert "fingerprint_backlog" in data
 
 
 def test_chat_requires_auth(client):
