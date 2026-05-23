@@ -17,6 +17,7 @@ import os
 import sys
 from collections.abc import Mapping
 from contextvars import ContextVar
+from datetime import UTC, datetime
 from typing import Any
 
 # Bound by the request-id middleware on every inbound HTTP request, and
@@ -53,8 +54,13 @@ class _JsonFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
+        # `logging.Formatter.formatTime` delegates to `time.strftime`, which
+        # doesn't honour `%f` — the directive would land in the output
+        # verbatim. Build the timestamp from the record's float `created`
+        # directly so milliseconds survive.
+        ts = datetime.fromtimestamp(record.created, tz=UTC).isoformat(timespec="milliseconds")
         payload: dict[str, Any] = {
-            "ts": self.formatTime(record, datefmt="%Y-%m-%dT%H:%M:%S.%fZ"),
+            "ts": ts,
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

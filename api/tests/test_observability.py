@@ -54,6 +54,31 @@ def test_inbound_request_id_unsafe_chars_dropped(client):
     assert " " not in r.headers["X-Request-ID"]
 
 
+def test_access_log_carries_request_id(client, capsys):
+    """Regression guard — the access log line MUST land while the request-id
+    contextvar is still bound. A previous version cleared the contextvar in
+    `finally` before the log emit, leaking `-` instead of the real id."""
+    configure_logging(level="INFO", fmt="json")
+    try:
+        r = client.get(
+            "/api/wiki",  # any non-probe route so the access log fires
+            headers={"X-Request-ID": "rid-access-log-test"},
+        )
+    finally:
+        configure_logging(level="INFO", fmt="plain")
+    # Response header confirms the middleware bound the id correctly.
+    assert r.headers["X-Request-ID"] == "rid-access-log-test"
+    captured = capsys.readouterr()
+    access_lines = [
+        ln for ln in captured.out.splitlines()
+        if ln.startswith("{") and '"request_complete"' in ln
+    ]
+    assert access_lines, "expected a request_complete access log line"
+    payload = json.loads(access_lines[-1])
+    assert payload["request_id"] == "rid-access-log-test"
+    assert payload["route"] == "/api/wiki"
+
+
 # ── Liveness vs readiness split ──────────────────────────────────────────────
 
 def test_health_is_pure_liveness(client):
@@ -118,6 +143,12 @@ def test_json_formatter_emits_single_line(capsys):
     assert payload["user_id"] == "u-x"
     assert payload["route"] == "/x"
     assert payload["level"] == "INFO"
+    # `ts` must be a real ISO-8601 timestamp, not the literal `%f` —
+    # `logging.Formatter.formatTime` delegates to `strftime` which doesn't
+    # understand `%f`, so the previous implementation embedded the literal
+    # directive in the payload.
+    assert "%f" not in payload["ts"]
+    assert payload["ts"].endswith("+00:00") or payload["ts"].endswith("Z")
 
 
 def test_json_formatter_handles_unserialisable_extras(capsys):

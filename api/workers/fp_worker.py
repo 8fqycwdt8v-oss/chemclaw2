@@ -197,7 +197,8 @@ async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    from api.observability.logging import configure_logging
+    configure_logging()
     from api.db.connection import async_session_factory as factory
     from api.db.connection import init_db
     init_db()

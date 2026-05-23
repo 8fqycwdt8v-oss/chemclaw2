@@ -74,10 +74,23 @@ def create_app() -> FastAPI:
     allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
     if env in {"prod", "production"}:
         # Fail closed in production: refuse to expose dev origins or wildcards.
-        if not allowed_origins or any("localhost" in o or o == "*" for o in allowed_origins):
+        # Parse out the hostname so legitimate origins like
+        # https://localhost-mirror.example.com aren't rejected by a substring
+        # match, and equivalent dev origins (127.0.0.1, [::1]) are caught.
+        from urllib.parse import urlsplit
+        _DEV_HOSTNAMES = {"localhost", "127.0.0.1", "::1"}
+        bad = []
+        for o in allowed_origins:
+            if o == "*":
+                bad.append(o)
+                continue
+            host = urlsplit(o).hostname or ""
+            if host.lower() in _DEV_HOSTNAMES:
+                bad.append(o)
+        if not allowed_origins or bad:
             raise RuntimeError(
                 "CORS_ALLOWED_ORIGINS must be set to an explicit non-localhost "
-                f"origin list when ENV={env}",
+                f"origin list when ENV={env} (rejected: {bad or 'empty'})",
             )
     elif not allowed_origins:
         allowed_origins = ["http://localhost:3000", "http://localhost:5173"]

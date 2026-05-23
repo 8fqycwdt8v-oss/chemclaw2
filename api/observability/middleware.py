@@ -53,32 +53,35 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         token = bind_request_id(request_id)
         start = time.monotonic()
         try:
-            response = await call_next(request)
-        except Exception:
+            try:
+                response = await call_next(request)
+            except Exception:
+                elapsed_ms = int((time.monotonic() - start) * 1000)
+                logger.exception(
+                    "request_failed",
+                    extra={
+                        "route": request.url.path,
+                        "method": request.method,
+                        "latency_ms": elapsed_ms,
+                    },
+                )
+                raise
             elapsed_ms = int((time.monotonic() - start) * 1000)
-            logger.exception(
-                "request_failed",
-                extra={
-                    "route": request.url.path,
-                    "method": request.method,
-                    "latency_ms": elapsed_ms,
-                },
-            )
-            raise
+            response.headers[_REQUEST_ID_HEADER] = request_id
+            # Don't log /metrics or the health probes at INFO — they're polled
+            # constantly by the platform and would flood the log. The access
+            # log MUST land before the `finally` resets the contextvar, or
+            # the bound request_id is gone by the time _RequestIdFilter reads it.
+            if request.url.path not in {"/metrics", "/api/health", "/api/readiness"}:
+                logger.info(
+                    "request_complete",
+                    extra={
+                        "route": request.url.path,
+                        "method": request.method,
+                        "status": response.status_code,
+                        "latency_ms": elapsed_ms,
+                    },
+                )
+            return response
         finally:
             reset_request_id(token)
-        elapsed_ms = int((time.monotonic() - start) * 1000)
-        response.headers[_REQUEST_ID_HEADER] = request_id
-        # Don't log /metrics or /api/health at INFO — they're polled
-        # constantly by the platform's probe and would flood the log.
-        if request.url.path not in {"/metrics", "/api/health", "/api/readiness"}:
-            logger.info(
-                "request_complete",
-                extra={
-                    "route": request.url.path,
-                    "method": request.method,
-                    "status": response.status_code,
-                    "latency_ms": elapsed_ms,
-                },
-            )
-        return response
