@@ -21,9 +21,27 @@ import logging
 import re
 import time
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _rate_limit_headers(
+    max_requests: int,
+    result: dict[str, int | bool],
+) -> dict[str, str]:
+    """Build the RFC-draft `X-RateLimit-*` headers + a `Retry-After` for 429s."""
+    count = int(result.get("count", 0))
+    window_start = int(result.get("window_start", 0))
+    window_ms = int(result.get("window_ms", 60_000))
+    reset_epoch_s = (window_start + window_ms) // 1000
+    retry_after = max(1, reset_epoch_s - int(time.time()))
+    return {
+        "X-RateLimit-Limit": str(max_requests),
+        "X-RateLimit-Remaining": str(max(0, max_requests - count)),
+        "X-RateLimit-Reset": str(reset_epoch_s),
+        "Retry-After": str(retry_after),
+    }
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +78,15 @@ async def pg_rate_limit(
     key: str,
     max_requests: int,
     window_ms: int,
-) -> dict[str, bool]:
+) -> dict[str, int | bool]:
+    """Increment + check the bucket. Returns:
+        limited       — True when count > max_requests.
+        count         — post-increment count in the current window.
+        window_start  — start-of-window epoch (ms).
+        window_ms     — bucket size, echoed for header calculation.
+    Fail-closed: a DB error returns limited=True with count=max_requests+1
+    so callers report 0 remaining and a 1-second Retry-After.
+    """
     window_start = (int(time.time() * 1000) // window_ms) * window_ms
     try:
         result = await db.execute(
@@ -76,14 +102,17 @@ async def pg_rate_limit(
         row = result.one_or_none()
         if row is None:
             logger.error("rate_limit_no_row_returned", extra={"key": key})
-            return {"limited": True}
+            return {"limited": True, "count": max_requests + 1, "window_start": window_start, "window_ms": window_ms}
         await db.commit()
-        # Alias the returned column to `cnt` because `row.count` is otherwise
-        # the SQLAlchemy Row built-in count() method, not the column.
-        return {"limited": row.cnt > max_requests}
+        return {
+            "limited": row.cnt > max_requests,
+            "count": int(row.cnt),
+            "window_start": window_start,
+            "window_ms": window_ms,
+        }
     except Exception:
         logger.exception("rate_limit_db_fail_closed", extra={"key": key})
-        return {"limited": True}
+        return {"limited": True, "count": max_requests + 1, "window_start": window_start, "window_ms": window_ms}
 
 
 async def sweep_rate_limit_rows(
@@ -149,25 +178,44 @@ def rate_limit(
     # the Pydantic ForwardRef path entirely.
     if optional_user:
         async def _dep_optional(
+            response: Response,
             db: AsyncSession = Depends(get_db),
             user_id: str | None = Depends(get_optional_user),
         ) -> None:
             result = await pg_rate_limit(db, make_key(bucket, user_id), max_requests, window_ms)
+            headers = _rate_limit_headers(max_requests, result)
             if result["limited"]:
                 logger.warning("rate_limit_denied bucket=%s user=%s", bucket, user_id or "anon")
-                raise HTTPException(status_code=429, detail="Too many requests")
+                # Lazy import to avoid bootstrap cycles for modules that
+                # pre-import api.db.queries.rate_limit at startup.
+                from api.observability.metrics import rate_limit_blocked_total
+                rate_limit_blocked_total.labels(bucket=bucket).inc()
+                # `headers=` on HTTPException reaches the 429 response;
+                # the FastAPI exception handler builds a new Response from
+                # the raise, so headers we set on `response` above would
+                # NOT make it to the client. Attach to the raise instead.
+                raise HTTPException(status_code=429, detail="Too many requests", headers=headers)
+            # Happy path: stamp headers on the in-flight response.
+            for k, v in headers.items():
+                response.headers[k] = v
 
         _dep_optional.__name__ = f"rate_limit_{bucket.replace('-', '_')}"
         return _dep_optional
 
     async def _dep(
+        response: Response,
         db: AsyncSession = Depends(get_db),
         user_id: str = Depends(get_current_user),
     ) -> None:
         result = await pg_rate_limit(db, make_key(bucket, user_id), max_requests, window_ms)
+        headers = _rate_limit_headers(max_requests, result)
         if result["limited"]:
             logger.warning("rate_limit_denied bucket=%s user=%s", bucket, user_id)
-            raise HTTPException(status_code=429, detail="Too many requests")
+            from api.observability.metrics import rate_limit_blocked_total
+            rate_limit_blocked_total.labels(bucket=bucket).inc()
+            raise HTTPException(status_code=429, detail="Too many requests", headers=headers)
+        for k, v in headers.items():
+            response.headers[k] = v
 
     _dep.__name__ = f"rate_limit_{bucket.replace('-', '_')}"
     return _dep

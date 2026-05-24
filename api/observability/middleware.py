@@ -17,6 +17,10 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from api.observability.logging import bind_request_id, reset_request_id
+from api.observability.metrics import (
+    http_request_duration_seconds,
+    http_requests_total,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +56,11 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         request_id = inbound or uuid.uuid4().hex
         token = bind_request_id(request_id)
         start = time.monotonic()
+        # Pull the path early so the metric label is set even when
+        # call_next raises (otherwise the histogram observation in
+        # `finally` would refer to the variable before it's defined).
+        route = request.url.path
+        method = request.method
         try:
             try:
                 response = await call_next(request)
@@ -59,25 +68,32 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 logger.exception(
                     "request_failed",
-                    extra={
-                        "route": request.url.path,
-                        "method": request.method,
-                        "latency_ms": elapsed_ms,
-                    },
+                    extra={"route": route, "method": method, "latency_ms": elapsed_ms},
+                )
+                # 500 is a fair label for an uncaught exception — the
+                # actual response Starlette returns will also be 500.
+                http_requests_total.labels(route=route, method=method, status=500).inc()
+                http_request_duration_seconds.labels(route=route, method=method).observe(
+                    time.monotonic() - start
                 )
                 raise
-            elapsed_ms = int((time.monotonic() - start) * 1000)
+            elapsed = time.monotonic() - start
+            elapsed_ms = int(elapsed * 1000)
             response.headers[_REQUEST_ID_HEADER] = request_id
+            http_requests_total.labels(
+                route=route, method=method, status=response.status_code
+            ).inc()
+            http_request_duration_seconds.labels(route=route, method=method).observe(elapsed)
             # Don't log /metrics or the health probes at INFO — they're polled
             # constantly by the platform and would flood the log. The access
             # log MUST land before the `finally` resets the contextvar, or
             # the bound request_id is gone by the time _RequestIdFilter reads it.
-            if request.url.path not in {"/metrics", "/api/health", "/api/readiness"}:
+            if route not in {"/metrics", "/api/health", "/api/readiness"}:
                 logger.info(
                     "request_complete",
                     extra={
-                        "route": request.url.path,
-                        "method": request.method,
+                        "route": route,
+                        "method": method,
                         "status": response.status_code,
                         "latency_ms": elapsed_ms,
                     },

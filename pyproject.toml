@@ -16,6 +16,10 @@ dependencies = [
   "python-multipart>=0.0.9",
   "pgvector>=0.3",
   "pypdf>=5.0",
+  # Postgres-first observability: prometheus-client is the off-the-shelf
+  # scraping surface (no Datadog/Sentry agent). 13 KB pure-python wheel,
+  # zero transitive deps.
+  "prometheus-client>=0.20",
 ]
 
 [project.optional-dependencies]

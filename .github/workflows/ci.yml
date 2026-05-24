@@ -266,8 +266,13 @@ jobs:
         run: |
           set -o pipefail
           if [ "${{ matrix.lane }}" = "cheap" ]; then
+            # --cov-fail-under is set deliberately conservative — the agent
+            # tool surfaces are partially blocked behind MCP subprocesses
+            # and external services that aren't exercised on the cheap lane.
+            # Ratchet up by 5% each time it lands at 5% above the floor.
             pytest api/ -v --tb=long --color=no \
               --cov=api --cov-report=xml --cov-report=term-missing:skip-covered \
+              --cov-fail-under=50 \
               2>&1 | tee /tmp/pytest.log
           else
             pytest api/ -v --tb=long --color=no 2>&1 | tee /tmp/pytest.log

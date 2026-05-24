@@ -37,6 +37,10 @@ def scheduled_substance_gate(prompt: str) -> dict[str, Any]:
     matched = bool(_CONTROLLED_SUBSTANCES.search(normalized)) and bool(_SYNTHESIS_VERBS.search(normalized))
     if matched:
         logger.error("scheduled_substance_attempt", extra={"prompt_len": len(prompt)})
+        # Lazy import keeps prometheus_client off the hot path for callers
+        # that import this module before the observability package is wired.
+        from api.observability.metrics import substance_gate_blocked_total
+        substance_gate_blocked_total.inc()
         return {
             "blocked": True,
             "matched": True,

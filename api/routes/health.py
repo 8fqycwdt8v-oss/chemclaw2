@@ -1,12 +1,14 @@
 import logging
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.connection import get_db
 from api.db.queries.compounds import count_pending_fingerprints
+from api.observability import metrics as _metrics  # noqa: F401  (ensures registry init)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -71,4 +73,24 @@ async def readiness(db: AsyncSession = Depends(get_db)):
         "worker_warn": backlog > 500,
         "backlog_degraded": backlog >= _BACKLOG_DEGRADED_THRESHOLD,
     }
+    # Side-effect: refresh the fp_worker backlog gauges from the same query
+    # so Prometheus scrapes stay in sync with the readiness probe.
+    if db_ok:
+        _metrics.fp_worker_backlog.labels(kind="compound").set(pending_compounds)
+        _metrics.fp_worker_backlog.labels(kind="reaction").set(pending_reactions)
     return JSONResponse(content=body, status_code=200 if ready else 503)
+
+
+@router.get("/metrics")
+async def metrics() -> Response:
+    """Prometheus scrape endpoint.
+
+    Returns the default registry in the standard exposition format.
+    Restrict at the edge (Fly's internal-only network policy or an
+    Nginx allowlist) — the metrics expose route names + counts of
+    blocked requests, which are sensitive in aggregate.
+    """
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
