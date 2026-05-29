@@ -130,3 +130,36 @@ async def touch_investigation(
         """),
         {"iid": investigation_id},
     )
+
+
+async def get_or_create_corpus_investigation(
+    db: AsyncSession,
+    title: str,
+    objective: str,
+    created_by: str,
+) -> str:
+    """Return the id of the investigation owned by `created_by` with this exact
+    `title`, creating it if none exists.
+
+    Used as the anchor for document-derived world-model entries (the "corpus"
+    investigation for a drive or for a user's uploads). There's no unique
+    constraint on (created_by, title); a concurrent first-call race could in
+    principle create two, but the drive-sync worker holds a per-drive advisory
+    lock and the upload path is low-frequency, so the benign duplicate is
+    acceptable rather than adding an index. Owner-scoped on `created_by`.
+    """
+    existing = await db.execute(
+        text("""
+            SELECT id::text
+            FROM investigations
+            WHERE created_by = :uid AND title = :title
+            ORDER BY created_at
+            LIMIT 1
+        """),
+        {"uid": created_by, "title": title},
+    )
+    row = existing.first()
+    if row is not None:
+        return row[0]
+    return await create_investigation(db, title, objective, created_by)
+

@@ -23,8 +23,10 @@ from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries.hypotheses import create_hypothesis
 from api.db.queries.knowledge import upsert_external_fact, upsert_paper
 from api.db.queries.wiki_write import upsert_wiki_page
+from api.db.queries.world_model import add_world_model_entry
 from api.embeddings import embed_texts
 from api.integrations.document_enrichment import (
     extract_doi,
@@ -35,6 +37,7 @@ from api.integrations.document_enrichment import (
     slugify_doi,
 )
 from api.integrations.extractors import extract_text
+from api.integrations.kg_extraction import extract_world_model
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +57,20 @@ async def ingest_document(
     content_type: str,
     user_id: str,
     extract: Literal["basic", "full"] = "basic",
+    extract_kg: bool = False,
+    investigation_id: str | None = None,
 ) -> dict[str, Any]:
     """Extract text from `content` and persist it across the knowledge surfaces.
 
-    Returns a summary dict (fact id, title, doi, wiki slug, extracted entities).
-    Raises `UnsupportedContentType` / `ExtractionError` from the extractor if
-    the bytes can't be parsed.
+    When `extract_kg` is set and an `investigation_id` is given, also run the
+    LLM knowledge-graph pass and write the resulting facts/evidence (with
+    confidence + source provenance) and hypotheses into that investigation —
+    the "generate knowledge" step. Best-effort: a KG failure never fails the
+    ingest.
+
+    Returns a summary dict (fact id, title, doi, wiki slug, extracted entities,
+    kg counts). Raises `UnsupportedContentType` / `ExtractionError` from the
+    extractor if the bytes can't be parsed.
     """
     text = extract_text(content, content_type)
 
@@ -149,6 +160,19 @@ async def ingest_document(
         user_id=user_id,
     )
 
+    kg = {"facts": 0, "hypotheses": 0}
+    if extract_kg and investigation_id:
+        kg = await _populate_kg(
+            db,
+            investigation_id=investigation_id,
+            user_id=user_id,
+            text=text,
+            source_id=source_id,
+            wiki_slug=wiki_slug,
+            title=title,
+            doi=doi,
+        )
+
     return {
         "fact_id": fact_id,
         "chars": len(text),
@@ -159,7 +183,81 @@ async def ingest_document(
         "extracted_compounds": entities.get("compounds") or [],
         "extracted_citations": entities.get("citations") or [],
         "resolved_smiles": resolved_smiles,
+        "kg": kg,
     }
+
+
+async def _populate_kg(
+    db: AsyncSession,
+    *,
+    investigation_id: str,
+    user_id: str,
+    text: str,
+    source_id: str,
+    wiki_slug: str | None,
+    title: str | None,
+    doi: str | None,
+) -> dict[str, int]:
+    """Run the KG extraction LLM pass and persist facts + hypotheses.
+
+    Each world-model entry carries source provenance (the doc's wiki slug +
+    content hash) in its payload so the knowledge is auditable back to the
+    document. Every write is individually guarded — one malformed entry can't
+    abort the rest — and the whole step is best-effort. Returns counts persisted.
+    """
+    try:
+        extracted = await extract_world_model(text, max_chars=_ENTITY_CAP)
+    except Exception:
+        logger.exception("ingest_kg_extract_failed source_id=%s", source_id)
+        return {"facts": 0, "hypotheses": 0}
+
+    source = {
+        "type": "document",
+        "source_id": source_id,
+        "wiki_slug": wiki_slug,
+        "title": title,
+        "doi": doi,
+    }
+
+    facts_added = 0
+    for f in extracted.get("facts", []):
+        try:
+            await add_world_model_entry(
+                db,
+                investigation_id,
+                user_id,
+                kind=f["kind"],
+                content=f["content"],
+                payload={"source": source, "context": f.get("context", "")},
+                confidence=f.get("confidence"),
+            )
+            facts_added += 1
+        except Exception:
+            logger.exception("ingest_kg_fact_failed source_id=%s", source_id)
+
+    provenance = f"[source: {title or source_id}"
+    provenance += f" ({wiki_slug})]" if wiki_slug else "]"
+    hyps_added = 0
+    for h in extracted.get("hypotheses", []):
+        statement = (h.get("statement") or "").strip()
+        if not statement:
+            continue
+        rationale = (h.get("rationale") or "").strip()
+        rationale = f"{rationale}\n\n{provenance}" if rationale else provenance
+        try:
+            await create_hypothesis(
+                db, investigation_id, user_id, statement=statement, rationale=rationale
+            )
+            hyps_added += 1
+        except Exception:
+            logger.exception("ingest_kg_hypothesis_failed source_id=%s", source_id)
+
+    if facts_added or hyps_added:
+        logger.info(
+            "ingest_kg_populated source_id=%s facts=%d hypotheses=%d",
+            source_id, facts_added, hyps_added,
+        )
+    return {"facts": facts_added, "hypotheses": hyps_added}
 
 
 async def _build_wiki_draft(
