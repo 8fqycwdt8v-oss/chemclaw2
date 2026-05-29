@@ -94,10 +94,11 @@ async def update_campaign_status(
             WHERE id = CAST(:id AS uuid)
               AND created_by = :user_id
               AND status = ANY(:statuses)
+            RETURNING id
         """),
         params,
     )
-    return result.rowcount > 0
+    return result.one_or_none() is not None
 
 
 async def system_advance_campaign(
@@ -131,10 +132,11 @@ async def system_advance_campaign(
             SET status = :status, updated_at = now(){plan_clause}
             WHERE id = CAST(:id AS uuid)
               AND status = ANY(:statuses)
+            RETURNING id
         """),
         params,
     )
-    return result.rowcount > 0
+    return result.one_or_none() is not None
 
 
 async def get_running_campaigns(db: AsyncSession) -> list[dict[str, Any]]:
