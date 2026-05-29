@@ -7,6 +7,7 @@ this module touches SQLAlchemy primitives for the `drive_sync_state` table
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any
 
@@ -14,6 +15,31 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+
+def _drive_lock_key(drive_id: str) -> int:
+    """Stable, cross-process advisory-lock key for a drive id.
+
+    Same rationale as fp_worker's lock key: Python's hash() is per-process
+    randomised, so derive a deterministic BIGINT-range int from a SHA-256 of
+    the drive id instead.
+    """
+    return int.from_bytes(hashlib.sha256(drive_id.encode()).digest()[:8], "big") % (2**63)
+
+
+async def try_acquire_drive_lock(db: AsyncSession, drive_id: str) -> bool:
+    """Non-blocking session-level advisory lock so only one instance syncs a
+    drive at a time. Held until released or the holding connection closes."""
+    result = await db.execute(
+        text("SELECT pg_try_advisory_lock(:k)"), {"k": _drive_lock_key(drive_id)}
+    )
+    return bool(result.scalar())
+
+
+async def release_drive_lock(db: AsyncSession, drive_id: str) -> None:
+    await db.execute(
+        text("SELECT pg_advisory_unlock(:k)"), {"k": _drive_lock_key(drive_id)}
+    )
 
 
 async def get_sync_state(db: AsyncSession, drive_id: str) -> dict[str, Any] | None:

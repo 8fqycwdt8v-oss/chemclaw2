@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 from collections.abc import Callable
 
 from api.agent.tool_helpers import _html_to_text
@@ -119,6 +120,33 @@ SUPPORTED_CONTENT_TYPES = frozenset(_HANDLERS)
 # magic-byte-checks these the same way it checks %PDF, since the Content-Type
 # header is attacker-controlled.
 ZIP_CONTENT_TYPES = frozenset({DOCX, PPTX, XLSX})
+
+
+_EXT_CONTENT_TYPES = {
+    ".pdf": PDF,
+    ".docx": DOCX,
+    ".pptx": PPTX,
+    ".xlsx": XLSX,
+    ".html": HTML,
+    ".htm": HTML,
+    ".txt": TEXT,
+    ".md": MARKDOWN,
+    ".markdown": MARKDOWN,
+}
+
+
+def resolve_content_type(filename: str, declared: str | None = None) -> str | None:
+    """Pick a supported content type for a file, or None if unsupported.
+
+    Trusts a `declared` MIME type (e.g. Graph's `file.mimeType`) when it's one
+    we handle; otherwise falls back to the filename extension. Used by the
+    drive-sync worker, where files arrive with a name + an often-imprecise
+    declared type.
+    """
+    if declared and declared in SUPPORTED_CONTENT_TYPES:
+        return declared
+    _, ext = os.path.splitext(filename.lower())
+    return _EXT_CONTENT_TYPES.get(ext)
 
 
 def extract_text(content: bytes, content_type: str) -> str:
