@@ -103,6 +103,8 @@ ALLOWED_DOMAINS = [
     'elsevier.com',
     'ich.org',
     'cactus.nci.nih.gov',  # NCI CACTUS — name↔SMILES↔CAS resolver
+    'graph.microsoft.com',  # SharePoint/OneDrive drive sync (delta + content)
+    'sharepoint.com',       # host the Graph /content endpoint 302-redirects to
 ]
 
 

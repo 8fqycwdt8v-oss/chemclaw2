@@ -16,6 +16,10 @@ dependencies = [
   "python-multipart>=0.0.9",
   "pgvector>=0.3",
   "pypdf>=5.0",
+  # Microsoft Graph app-only auth (client-credentials) for SharePoint/
+  # OneDrive drive sync. Off-the-shelf token acquisition + caching; the
+  # Graph data calls reuse the shared SSRF-pinned httpx helper.
+  "msal>=1.31",
   # Postgres-first observability: prometheus-client is the off-the-shelf
   # scraping surface (no Datadog/Sentry agent). 13 KB pure-python wheel,
   # zero transitive deps.
