@@ -6,6 +6,9 @@
 -- `<~>` ordering. DRFP is a binary fingerprint, so Tanimoto/Jaccard is the
 -- correct similarity. Replaced by a bit_jaccard_ops index in 0048.
 --
--- Single-statement file; see migrations/MIGRATIONS.md for the
--- CONCURRENTLY/autocommit handling.
-DROP INDEX CONCURRENTLY IF EXISTS reactions_drfp_hnsw;
+-- Plain (non-concurrent) drop — see 0045 for the rationale: a concurrent
+-- drop cannot run in a transaction, and the CI apply loop only routes
+-- index *builds* (not drops) to autocommit, so it would be wrapped in
+-- --single-transaction and error out. Dropping an index is fast; the
+-- non-blocking rebuild is on the build side (0048).
+DROP INDEX IF EXISTS reactions_drfp_hnsw;
