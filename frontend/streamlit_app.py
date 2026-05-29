@@ -27,13 +27,16 @@ def _handle_redirect() -> None:
     """Handle the redirect back from Entra (success or denial)."""
     params = dict(st.query_params)
     # Denial (e.g. user not assigned to the app / not in the AD group) comes
-    # back as ?error=…&error_description=… with NO code — surface it.
+    # back as ?error=…&error_description=… with NO code. Show a fixed message
+    # rather than reflecting the attacker-influenceable error_description.
     if "error" in params:
-        st.error(f"Sign-in denied: {params.get('error_description', params['error'])}")
+        st.error("Sign-in was denied or could not be completed.")
         st.query_params.clear()
         auth.clear_flow()
         return
-    if "code" in params and auth.get_token() is None:
+    # Always validate a present ?code via MSAL (state/PKCE is the CSRF defense)
+    # and always clear it from the URL — don't gate on current login state.
+    if "code" in params:
         result = auth.complete_login(params)
         st.query_params.clear()  # always drop code/state, success or failure
         if result is not None:
