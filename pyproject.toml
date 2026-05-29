@@ -16,6 +16,11 @@ dependencies = [
   "python-multipart>=0.0.9",
   "pgvector>=0.3",
   "pypdf>=5.0",
+  # Office-document text extraction for the ingest pipeline (upload route +
+  # drive sync). Off-the-shelf parsers; imported lazily inside their handlers.
+  "python-docx>=1.1",
+  "python-pptx>=1.0",
+  "openpyxl>=3.1",
   # Microsoft Graph app-only auth (client-credentials) for SharePoint/
   # OneDrive drive sync. Off-the-shelf token acquisition + caching; the
   # Graph data calls reuse the shared SSRF-pinned httpx helper.

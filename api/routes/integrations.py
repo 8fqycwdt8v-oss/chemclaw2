@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import io
 import json
 import logging
 import os
@@ -16,25 +15,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth import get_current_user
 from api.db.connection import get_db
 from api.db.queries.compounds import insert_compound
-from api.db.queries.knowledge import upsert_external_fact, upsert_paper
+from api.db.queries.knowledge import upsert_external_fact
 from api.db.queries.rate_limit import pg_rate_limit, rate_limit
-from api.db.queries.wiki_write import upsert_wiki_page
-from api.embeddings import embed_texts
-from api.integrations.document_enrichment import (
-    extract_doi,
-    extract_entities_from_text,
-    fetch_crossref_metadata,
-    first_nonempty_line,
-    resolve_compound_name_to_smiles,
-    slugify_doi,
+from api.integrations.extractors import (
+    PDF,
+    SUPPORTED_CONTENT_TYPES,
+    ZIP_CONTENT_TYPES,
+    ExtractionError,
+    UnsupportedContentType,
 )
+from api.integrations.ingest import ingest_document
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_ALLOWED_MIME_TYPES = {"application/pdf", "text/plain", "text/markdown"}
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+# Magic bytes per container family — the Content-Type header is attacker-
+# controlled, so PDFs must start with %PDF and OOXML (docx/pptx/xlsx) files
+# must be ZIP archives (PK\x03\x04).
+_PDF_MAGIC = b"%PDF"
+_ZIP_MAGIC = b"PK\x03\x04"
 
 
 class ELNWebhookBody(BaseModel):
@@ -121,17 +122,25 @@ async def upload_document(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Upload a PDF, plain-text, or Markdown document and persist it as an external fact.
+    """Upload a document (PDF / text / Markdown / HTML / docx / pptx / xlsx)
+    and persist it across the knowledge surfaces.
 
     Auth: Bearer JWT (get_current_user).
     Rate limit: 5 per 60 s per user.
     Max size: 10 MB.
+
+    HTTP concerns (size, magic bytes, status mapping) live here; the actual
+    extraction + persistence is the shared `ingest_document` path, also used by
+    the drive-sync worker.
     """
     content_type = file.content_type or ""
-    if content_type not in _ALLOWED_MIME_TYPES:
+    if content_type not in SUPPORTED_CONTENT_TYPES:
         raise HTTPException(
             status_code=415,
-            detail=f"Unsupported file type '{content_type}'. Allowed: pdf, plain text, markdown.",
+            detail=(
+                f"Unsupported file type '{content_type}'. Allowed: PDF, plain "
+                "text, Markdown, HTML, Word (docx), PowerPoint (pptx), Excel (xlsx)."
+            ),
         )
 
     # Read in chunks to enforce size limit before buffering the whole file.
@@ -147,183 +156,25 @@ async def upload_document(
         chunks.append(chunk)
     content = b"".join(chunks)
 
-    # Validate magic bytes for PDFs — Content-Type header alone is attacker-controlled.
-    if content_type == "application/pdf" and not content.startswith(b"%PDF"):
+    # Magic-byte validation — the Content-Type header alone is attacker-controlled.
+    if content_type == PDF and not content.startswith(_PDF_MAGIC):
         raise HTTPException(status_code=415, detail="File does not appear to be a valid PDF")
+    if content_type in ZIP_CONTENT_TYPES and not content.startswith(_ZIP_MAGIC):
+        raise HTTPException(
+            status_code=415, detail="File does not appear to be a valid Office document"
+        )
 
-    if content_type == "application/pdf":
-        try:
-            import pypdf  # optional dep — import inside function for graceful failure
-
-            reader = pypdf.PdfReader(io.BytesIO(content))
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
-        except ImportError:
-            raise HTTPException(status_code=422, detail="PDF support not available") from None
-        except Exception:
-            logger.exception("doc_upload_pdf_parse_failed filename=%s", file.filename)
-            raise HTTPException(status_code=422, detail="Failed to parse PDF") from None
-    else:
-        text = content.decode("utf-8", errors="replace")
-
-    source_id = hashlib.sha256(content).hexdigest()
-    doi = extract_doi(text)
-
-    # Enrich with CrossRef metadata when a DOI is present. Network call is
-    # best-effort: a CrossRef miss or timeout falls back to the
-    # first-non-empty-line heuristic — the upload still succeeds.
-    metadata: dict[str, Any] = {}
-    if doi:
-        crossref = await fetch_crossref_metadata(doi)
-        if crossref:
-            metadata = crossref
-
-    title = metadata.get("title") or first_nonempty_line(text)
-    abstract = metadata.get("abstract")
-
-    # Optional LLM entity extraction. Best-effort: any failure is logged
-    # but the upload still succeeds with the basic-mode payload.
-    entities: dict[str, Any] = {"compounds": [], "citations": []}
-    resolved_smiles: list[dict[str, Any]] = []
-    if extract == "full":
-        entities = await extract_entities_from_text(text)
-        # Resolve each compound name through PubChem in parallel. Cap to
-        # 20 (the schema limit) so we never fan out unboundedly.
-        compound_names = [
-            c.get("name", "").strip()
-            for c in (entities.get("compounds") or [])
-            if isinstance(c, dict) and c.get("name")
-        ][:20]
-        if compound_names:
-            import asyncio
-            results = await asyncio.gather(
-                *(resolve_compound_name_to_smiles(n) for n in compound_names),
-                return_exceptions=True,
-            )
-            for name, result in zip(compound_names, results, strict=False):
-                if isinstance(result, str):
-                    resolved_smiles.append({"name": name, "smiles": result})
-                # Failures (None or exception) are silently dropped — the
-                # name still appears in `entities.compounds` for curator review.
-
-    fact_id, _ = await upsert_external_fact(
-        db,
-        source_type="document",
-        source_id=source_id,
-        payload={
-            "filename": file.filename,
-            "content_type": content_type,
-            "doi": doi,
-            "title": title,
-            "abstract": abstract,
-            "authors": metadata.get("authors") or [],
-            "container_title": metadata.get("container_title"),
-            "published_year": metadata.get("published_year"),
-            "extracted_compounds": entities.get("compounds") or [],
-            "extracted_citations": entities.get("citations") or [],
-            "resolved_smiles": resolved_smiles,
-        },
-        content_text=text[:500_000],
-        fetched_by=user_id,
-    )
-
-    if title:
-        try:
-            await upsert_paper(
-                db,
-                url=(f"https://doi.org/{doi}" if doi else f"upload:{source_id}"),
-                title=title,
-                doi=doi,
-                abstract=abstract,
-                content_text=text[:500_000] if not abstract else None,
-                created_by=user_id,
-            )
-        except Exception:
-            logger.exception(
-                "doc_upload_upsert_paper_failed source_id=%s", source_id
-            )
-
-    # Wiki page draft (needs_review=True so the curator queue surfaces it).
-    # Idempotent: stable slug per (doi or content hash) means re-uploading
-    # the same paper updates rather than duplicates.
-    wiki_slug: str | None = None
-    if title:
-        slug_base = slugify_doi(doi) if doi else f"doc-{source_id[:12]}"
-        # Truncate to wiki slug length budget; the regex requires alnum endpoints.
-        wiki_slug = slug_base[:80].rstrip("-") or f"doc-{source_id[:12]}"
-        try:
-            authors_str = ", ".join(metadata.get("authors") or [])
-            container = metadata.get("container_title")
-            year = metadata.get("published_year")
-            body_lines = [
-                f"# {title}",
-                "",
-                f"**Source:** {file.filename or 'uploaded document'}",
-            ]
-            if doi:
-                body_lines.append(f"**DOI:** [{doi}](https://doi.org/{doi})")
-            if authors_str:
-                body_lines.append(f"**Authors:** {authors_str}")
-            if container:
-                body_lines.append(f"**Journal:** {container}")
-            if year:
-                body_lines.append(f"**Year:** {year}")
-            if abstract:
-                body_lines.extend(["", "## Abstract", "", abstract])
-            # Surface LLM-extracted entities so the curator sees them
-            # without having to dig through external_facts.
-            if resolved_smiles:
-                body_lines.extend(["", "## Compounds (auto-extracted)", ""])
-                for cs in resolved_smiles:
-                    body_lines.append(f"- **{cs['name']}** — `{cs['smiles']}`")
-            unresolved = [
-                c for c in (entities.get("compounds") or [])
-                if isinstance(c, dict)
-                and c.get("name")
-                and not any(r["name"] == c["name"] for r in resolved_smiles)
-            ]
-            if unresolved:
-                body_lines.extend(["", "## Compound mentions (unresolved)", ""])
-                for c in unresolved[:10]:
-                    body_lines.append(f"- {c['name']} — _{c.get('context', '')[:120]}_")
-            extracted_citations = entities.get("citations") or []
-            if extracted_citations:
-                body_lines.extend(["", "## Citations (auto-extracted)", ""])
-                for cit in extracted_citations[:10]:
-                    if not isinstance(cit, dict):
-                        continue
-                    ident = cit.get("identifier", "").strip()
-                    if not ident:
-                        continue
-                    body_lines.append(f"- `{ident}` — _{cit.get('context', '')[:120]}_")
-            body_lines.extend(["", "## Extracted text (excerpt)", "", text[:5000]])
-            wiki_text = "\n".join(body_lines)
-            await upsert_wiki_page(
-                db,
-                slug=wiki_slug,
-                title=title,
-                content={"type": "doc", "content": []},
-                content_text=wiki_text,
-                created_by=user_id,
-                citations=[],
-                embed_fn=embed_texts,
-                project="papers",
-                needs_review=True,
-            )
-        except Exception:
-            logger.exception(
-                "doc_upload_upsert_wiki_failed source_id=%s slug=%s",
-                source_id, wiki_slug,
-            )
-            wiki_slug = None
-
-    return {
-        "fact_id": fact_id,
-        "chars": len(text),
-        "title": title,
-        "doi": doi,
-        "wiki_slug": wiki_slug,
-        "abstract": abstract,
-        "extracted_compounds": entities.get("compounds") or [],
-        "extracted_citations": entities.get("citations") or [],
-        "resolved_smiles": resolved_smiles,
-    }
+    try:
+        return await ingest_document(
+            db,
+            content=content,
+            filename=file.filename,
+            content_type=content_type,
+            user_id=user_id,
+            extract=extract,
+        )
+    except UnsupportedContentType:
+        raise HTTPException(status_code=415, detail=f"Unsupported file type '{content_type}'") from None
+    except ExtractionError:
+        logger.exception("doc_upload_extract_failed filename=%s", file.filename)
+        raise HTTPException(status_code=422, detail="Failed to parse document") from None
