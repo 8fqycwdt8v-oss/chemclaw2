@@ -25,7 +25,6 @@ os.environ.setdefault(
 )
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-placeholder")
 os.environ.setdefault("OPENAI_API_KEY", "sk-placeholder")
-os.environ.setdefault("CLERK_SECRET_KEY", "sk_test_placeholder")
 # ADMIN_USER_IDS — populated so admin-route tests can opt in via the
 # admin_user_id fixture below.
 os.environ.setdefault("ADMIN_USER_IDS", "admin-test-user")

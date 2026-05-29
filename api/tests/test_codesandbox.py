@@ -99,7 +99,7 @@ async def test_env_isolation_blocks_inherited_secrets() -> None:
     code = (
         "import os\n"
         "leaked = [k for k in os.environ "
-        "if k.startswith(('ANTHROPIC_', 'OPENAI_', 'DATABASE_', 'CLERK_', 'AWS_'))]\n"
+        "if k.startswith(('ANTHROPIC_', 'OPENAI_', 'DATABASE_', 'AZURE_', 'AWS_'))]\n"
         "print('LEAKED:' + ','.join(leaked) if leaked else 'isolated')\n"
     )
     result = await run_python(code)

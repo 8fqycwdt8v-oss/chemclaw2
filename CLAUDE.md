@@ -92,7 +92,7 @@ Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational agen
 | Molecule fingerprints | RDKit Morgan/ECFP4 via MCP server (`mcp_molfp`) |
 | Reaction fingerprints | DRFP via MCP server (`mcp_rxnfp`) |
 | Job queue | asyncio polling worker + Postgres advisory locks |
-| Auth | Clerk (PyJWT + JWKS) |
+| Auth | Microsoft Entra ID (PyJWT + JWKS); Streamlit/MSAL frontend |
 | Embeddings | OpenAI Python SDK (`text-embedding-3-small`) |
 | CI/CD | GitHub Actions |
 

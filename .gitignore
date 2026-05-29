@@ -11,6 +11,8 @@ __pycache__/
 .env.test.local
 .env.production.local
 .env.staging.local
+# Streamlit frontend secrets (Entra client secret etc.) — never commit.
+frontend/.streamlit/secrets.toml
 chemclaw2_backend.egg-info/
 __pycache__/
 *.pyc

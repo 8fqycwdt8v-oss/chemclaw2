@@ -1,7 +1,23 @@
-"""Clerk JWT validation — Python port of @clerk/nextjs auth middleware.
+"""Microsoft Entra ID (Azure AD) JWT validation.
 
-Fetches JWKS from Clerk on startup, caches with 1-hour TTL,
-validates incoming Bearer tokens using PyJWT.
+The Streamlit frontend logs the user in against Entra (MSAL, authorization-code
+flow) and acquires an access token whose audience is *this* backend API
+(``api://<AZURE_BACKEND_CLIENT_ID>/access_as_user``). It forwards that token
+verbatim as a ``Bearer`` header — a pass-through, not an On-Behalf-Of exchange,
+because the backend's own downstream calls (Anthropic, OpenAI, Postgres, the
+MCP servers) are not Entra-protected and so never need a second token hop.
+
+This module fetches Entra's public JWKS, caches it with a 1-hour TTL, and
+validates each incoming token's signature, issuer, audience, and expiry. Access
+is gated to a single Microsoft Entra security group via an **app role**: the
+group is assigned to one app role on the backend app registration, the role
+arrives in the ``roles`` claim, and ``AZURE_REQUIRED_ROLE`` must be present.
+"Assignment required" on the enterprise app is the primary gate (Entra refuses
+to mint a token for a non-member); the role check here is defence in depth.
+
+Identity is the ``oid`` claim — the stable directory object id for the user,
+which is the same across every app in the tenant. (``sub`` is pairwise per app
+and would change if the token audience ever changed.)
 """
 from __future__ import annotations
 
@@ -44,13 +60,18 @@ _mock_auth_warned: bool = False
 # ALLOW_MOCK_AUTH=1 raises at startup.
 _DEV_ENVS = {"dev", "development", "test", "local"}
 
+# Entra config env vars that must be present outside dev so token validation
+# is not silently weakened (issuer + audience + role gate all derive from them).
+_REQUIRED_ENTRA_VARS = ("AZURE_TENANT_ID", "AZURE_BACKEND_CLIENT_ID", "AZURE_REQUIRED_ROLE")
+
 
 def validate_auth_config() -> None:
     """One-shot startup validation of auth configuration.
 
-    Loads ADMIN_USER_IDS into a frozenset, and refuses startup when
-    ALLOW_MOCK_AUTH=1 is set outside a dev env (ENV ∉ {dev, development,
-    test, local}).
+    Loads ADMIN_USER_IDS into a frozenset, refuses startup when
+    ALLOW_MOCK_AUTH=1 is set outside a dev env, and — outside dev — requires
+    the Entra config (tenant, audience, required role) so token validation
+    and the group gate are actually enforced rather than silently skipped.
     """
     global _admin_user_ids, _admin_ids_loaded
 
@@ -62,18 +83,22 @@ def validate_auth_config() -> None:
             raise RuntimeError(
                 f"ALLOW_MOCK_AUTH=1 is set but ENV={env!r} is not a dev "
                 f"environment ({sorted(_DEV_ENVS)}). Refusing to start — "
-                f"this combination would bypass Clerk in production."
+                f"this combination would bypass Entra in production."
             )
         logger.warning("ALLOW_MOCK_AUTH is enabled (ENV=%s) — never set this in production", env)
 
-    # In non-dev environments, require CLERK_ISSUER so the `iss` claim is
-    # validated. Without it, jwt.decode() is called with issuer=None and
-    # skips issuer validation entirely — leaving only the signature check.
-    if not is_dev and not os.environ.get("CLERK_ISSUER"):
-        raise RuntimeError(
-            f"CLERK_ISSUER must be set when ENV={env!r} (non-dev). "
-            f"Without it, JWT issuer validation is silently skipped."
-        )
+    # Outside dev, require the full Entra config. Without AZURE_TENANT_ID the
+    # JWKS URL and expected issuer can't be derived; without
+    # AZURE_BACKEND_CLIENT_ID audience validation is skipped (token-confusion
+    # risk); without AZURE_REQUIRED_ROLE the AD-group gate doesn't fire.
+    if not is_dev:
+        missing = [v for v in _REQUIRED_ENTRA_VARS if not os.environ.get(v)]
+        if missing:
+            raise RuntimeError(
+                f"{', '.join(missing)} must be set when ENV={env!r} (non-dev). "
+                f"Without them Entra token validation or the AD-group gate is "
+                f"silently skipped."
+            )
 
     raw = os.environ.get("ADMIN_USER_IDS", "")
     _admin_user_ids = frozenset(x.strip() for x in raw.split(",") if x.strip())
@@ -85,22 +110,50 @@ def validate_auth_config() -> None:
 
 
 def _make_jwks_client() -> PyJWKClient:
-    """Create a PyJWKClient pointing at the Clerk Frontend API JWKS endpoint.
+    """Create a PyJWKClient pointing at the Entra tenant's public JWKS endpoint.
 
-    Clerk's public JWKS is at https://<clerk-domain>/.well-known/jwks.json.
-    Set CLERK_JWKS_URL to override (required in production).
+    Entra publishes signing keys at
+    ``https://login.microsoftonline.com/<tenant>/discovery/v2.0/keys``.
     """
-    jwks_url = os.environ.get("CLERK_JWKS_URL")
-    if not jwks_url:
-        # Derive from CLERK_DOMAIN if set, else fall back to api.clerk.com for
-        # environments that configure tokens without a custom domain.
-        clerk_domain = os.environ.get("CLERK_DOMAIN", "")
-        jwks_url = (
-            f"https://{clerk_domain}/.well-known/jwks.json"
-            if clerk_domain
-            else "https://api.clerk.com/v1/jwks"
-        )
+    tenant = os.environ.get("AZURE_TENANT_ID")
+    if not tenant:
+        raise RuntimeError("AZURE_TENANT_ID must be set to validate Entra tokens")
+    jwks_url = f"https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys"
     return PyJWKClient(jwks_url, headers={"User-Agent": "chemclaw2-backend/1.0"})
+
+
+def _expected_issuer() -> str | None:
+    """The v2.0 token issuer for the configured tenant, or None if unset.
+
+    Requires the backend app registration to set ``accessTokenAcceptedVersion``
+    to 2 so tokens carry this issuer (v1 tokens use ``sts.windows.net``).
+    """
+    tenant = os.environ.get("AZURE_TENANT_ID")
+    return f"https://login.microsoftonline.com/{tenant}/v2.0" if tenant else None
+
+
+def _expected_audience() -> list[str] | None:
+    """Accepted ``aud`` values: the backend client id and its App ID URI form."""
+    client_id = os.environ.get("AZURE_BACKEND_CLIENT_ID")
+    if not client_id:
+        return None
+    return [client_id, f"api://{client_id}"]
+
+
+def _require_app_role(claims: dict[str, Any]) -> None:
+    """Enforce the AD-group gate via the app-role claim. Fail closed (403).
+
+    The Entra security group is assigned to a single app role on the backend
+    app registration, so membership surfaces as ``roles: [<AZURE_REQUIRED_ROLE>]``.
+    No-op when AZURE_REQUIRED_ROLE is unset (dev).
+    """
+    required = os.environ.get("AZURE_REQUIRED_ROLE")
+    if not required:
+        return
+    roles = claims.get("roles") or []
+    if required not in roles:
+        logger.warning("entra_role_denied oid=%s required=%s", claims.get("oid"), required)
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 def _verify_svc_token(token: str, secret: str) -> str:
@@ -141,12 +194,13 @@ def _get_jwks_client() -> PyJWKClient:
 
 
 async def get_current_user(authorization: str | None = Header(None)) -> str:
-    """FastAPI dependency that returns the Clerk userId from a Bearer JWT.
+    """FastAPI dependency that returns the Entra user's oid from a Bearer JWT.
 
-    Raises 401 if the header is absent or the token is invalid.
+    Raises 401 if the header is absent or the token is invalid, and 403 if the
+    user lacks the required app role (AD-group gate).
 
     Local dev: set ALLOW_MOCK_AUTH=1 and pass "Bearer mock:<userId>" to bypass
-    Clerk validation. This env var must never be set in production.
+    Entra validation. This env var must never be set in production.
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -185,20 +239,25 @@ async def get_current_user(authorization: str | None = Header(None)) -> str:
                 raise HTTPException(status_code=401, detail="Unauthorized")
         except ImportError:
             pass  # cryptography package unavailable; skip algorithm-confusion check
-        # CLERK_ISSUER is required in non-dev envs (enforced at startup by
-        # validate_auth_config()). In dev/test it may be unset, in which case
-        # issuer validation is skipped.
-        issuer = os.environ.get("CLERK_ISSUER") or None
+        # Issuer + audience are required in non-dev envs (enforced at startup by
+        # validate_auth_config()). In dev/test they may be unset, in which case
+        # the corresponding check is skipped.
+        issuer = _expected_issuer()
+        audience = _expected_audience()
         claims: dict[str, Any] = jwt.decode(
             token,
             signing_key.key,
             algorithms=["RS256"],
             issuer=issuer,
-            options={"verify_aud": False},  # Clerk tokens don't always have audience
+            audience=audience,
+            options={"verify_aud": audience is not None},
         )
-        user_id = claims.get("sub", "")
+        # AD-group gate (app role). Raises 403; not a jwt error, so it
+        # propagates past the except clauses below unchanged.
+        _require_app_role(claims)
+        user_id = claims.get("oid", "")
         if not user_id:
-            raise HTTPException(status_code=401, detail="Unauthorized: missing sub claim")
+            raise HTTPException(status_code=401, detail="Unauthorized: missing oid claim")
         return user_id
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired") from None
@@ -220,7 +279,7 @@ async def get_optional_user(authorization: str | None = Header(None)) -> str | N
     try:
         return await get_current_user(authorization)
     except HTTPException as exc:
-        if exc.status_code != 401:
+        if exc.status_code not in (401, 403):
             logger.warning("get_optional_user_unexpected_error status=%d", exc.status_code)
             raise
         return None
@@ -230,7 +289,8 @@ async def get_admin_user(authorization: str | None = Header(None)) -> str:
     """Dependency that requires the caller to be in ADMIN_USER_IDS env var.
 
     ADMIN_USER_IDS is parsed once at startup by validate_auth_config(); this
-    dependency just checks membership in the cached frozenset.
+    dependency just checks membership in the cached frozenset. The ids are
+    Entra ``oid`` values (the same string get_current_user returns).
     """
     user_id = await get_current_user(authorization)
     if not _admin_ids_loaded:
