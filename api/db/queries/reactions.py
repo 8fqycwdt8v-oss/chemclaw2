@@ -35,7 +35,10 @@ async def find_similar_reactions(
             SELECT id::text, rxn_smiles, name, conditions, drfp::text AS fp
             FROM reactions
             WHERE drfp IS NOT NULL
-            ORDER BY drfp <~> CAST(:bits AS bit(2048))
+            -- `<%>` = Jaccard distance (1 - Tanimoto), matching the
+            -- bit_jaccard_ops HNSW index (migrations 0048) and the Tanimoto
+            -- rerank below. Hamming (`<~>`) pruned by the wrong metric.
+            ORDER BY drfp <%> CAST(:bits AS bit(2048))
             LIMIT 100
         """),
         {"bits": bit_string_to_pg_bytes(query_fp_bits)},

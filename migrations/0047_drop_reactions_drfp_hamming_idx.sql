@@ -1,0 +1,14 @@
+-- Drop the Hamming-distance HNSW index on reactions.drfp.
+--
+-- Same metric-mismatch fix as 0045 applied to the reaction fingerprint
+-- path: find_similar_reactions (api/db/queries/reactions.py) reranks DRFP
+-- neighbours by Tanimoto, but the 0002 index used bit_hamming_ops with a
+-- `<~>` ordering. DRFP is a binary fingerprint, so Tanimoto/Jaccard is the
+-- correct similarity. Replaced by a bit_jaccard_ops index in 0048.
+--
+-- Plain (non-concurrent) drop — see 0045 for the rationale: a concurrent
+-- drop cannot run in a transaction, and the CI apply loop only routes
+-- index *builds* (not drops) to autocommit, so it would be wrapped in
+-- --single-transaction and error out. Dropping an index is fast; the
+-- non-blocking rebuild is on the build side (0048).
+DROP INDEX IF EXISTS reactions_drfp_hnsw;
