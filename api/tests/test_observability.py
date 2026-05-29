@@ -151,6 +151,57 @@ def test_json_formatter_emits_single_line(capsys):
     assert payload["ts"].endswith("+00:00") or payload["ts"].endswith("Z")
 
 
+# ── X-RateLimit-* headers ────────────────────────────────────────────────────
+
+def test_rate_limit_headers_on_happy_path(client, auth_header):
+    """Successful requests through a rate-limited route carry the
+    X-RateLimit-{Limit,Remaining,Reset} + Retry-After triplet so the
+    client can pre-empt 429s."""
+    r = client.get("/api/wiki", headers=auth_header)
+    # 200 or 503 (DB blip); both are happy-path responses for the dep.
+    if r.status_code in (200, 503):
+        assert "X-RateLimit-Limit" in r.headers
+        assert "X-RateLimit-Remaining" in r.headers
+        assert "X-RateLimit-Reset" in r.headers
+        # Limit is a positive int.
+        assert int(r.headers["X-RateLimit-Limit"]) > 0
+        # Remaining is non-negative and ≤ Limit.
+        assert 0 <= int(r.headers["X-RateLimit-Remaining"]) <= int(r.headers["X-RateLimit-Limit"])
+
+
+# ── Prometheus metrics ───────────────────────────────────────────────────────
+
+def test_metrics_endpoint_returns_prometheus_exposition(client):
+    """The `/metrics` endpoint returns the standard Prometheus text format
+    so a scrape agent (Grafana Agent, vmagent, prometheus itself) can
+    consume it without any adapter."""
+    r = client.get("/metrics")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+    body = r.text
+    # Counters appear as `# HELP` + `# TYPE` blocks. The wiring is correct
+    # if our metric names show up in the exposition.
+    assert "http_requests_total" in body
+    assert "rate_limit_blocked_total" in body
+    assert "substance_gate_blocked_total" in body
+
+
+def test_http_request_metric_increments(client):
+    """A real request through the stack increments the http_requests_total
+    counter for that (route, method, status) label triple."""
+    from api.observability.metrics import http_requests_total
+    # Fire a known-to-succeed probe.
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    # The label-set has to match the same labelnames the middleware uses;
+    # status comes back as int in our middleware, so it's stringified by
+    # prometheus_client in the exposition. Read the metric back via the
+    # private `_value` accessor — stable across prometheus_client versions
+    # for Counter children.
+    child = http_requests_total.labels(route="/api/health", method="GET", status=200)
+    assert child._value.get() >= 1
+
+
 def test_json_formatter_handles_unserialisable_extras(capsys):
     """An object that can't be JSON-serialised falls back to str() rather
     than dropping the whole log line."""

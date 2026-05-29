@@ -12,12 +12,12 @@ from sqlalchemy.ext.asyncio import (
 logger = logging.getLogger(__name__)
 
 
-def _int_env(name: str, default: int, min_value: int = 0) -> int:
-    """Read an int env var with a sane default and lower bound.
+def _int_env(name: str, default: int, min_value: int = 0, max_value: int | None = None) -> int:
+    """Read an int env var with a sane default and bounds.
 
     Falls back to `default` on missing var, non-numeric value, or a value
-    below `min_value`. Logs the fallback so misconfigurations don't go
-    silently to the default.
+    outside `[min_value, max_value]`. Logs the fallback so misconfigurations
+    don't go silently to the default.
     """
     raw = os.environ.get(name)
     if raw is None:
@@ -30,6 +30,9 @@ def _int_env(name: str, default: int, min_value: int = 0) -> int:
     if value < min_value:
         logger.warning("env %s=%d below minimum %d, using default %d", name, value, min_value, default)
         return default
+    if max_value is not None and value > max_value:
+        logger.warning("env %s=%d above maximum %d, using default %d", name, value, max_value, default)
+        return default
     return value
 
 
@@ -39,10 +42,13 @@ def _make_engine() -> AsyncEngine:
     if url.startswith("postgresql://") and "+asyncpg" not in url:
         url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
     # Pool sizing: DB_POOL_SIZE × replicas + DB_POOL_MAX_OVERFLOW headroom
-    # must stay under Postgres's `max_connections`. Operators tune via env
-    # at deploy time; defaults match the original baseline (5 + 10 = 15).
-    pool_size = _int_env("DB_POOL_SIZE", default=5, min_value=1)
-    max_overflow = _int_env("DB_POOL_MAX_OVERFLOW", default=10, min_value=0)
+    # must stay under Postgres's `max_connections`. With Fly's default
+    # uvicorn --workers 2 + a separate worker process, ~3 machines saturate
+    # a shared Postgres at max_connections=100. Caps below catch the
+    # obvious misconfig before it manifests as `QueuePool limit exceeded`
+    # in production.
+    pool_size = _int_env("DB_POOL_SIZE", default=5, min_value=1, max_value=50)
+    max_overflow = _int_env("DB_POOL_MAX_OVERFLOW", default=10, min_value=0, max_value=100)
     return create_async_engine(
         url,
         pool_size=pool_size,

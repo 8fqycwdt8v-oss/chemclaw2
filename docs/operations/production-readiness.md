@@ -20,7 +20,7 @@ push (new deployment region, traffic order-of-magnitude jump).
       state (wave 2 + pre-existing)
 - [x] Observability + readiness + request-id middleware tests (wave 5)
 - [x] Migration linter has its own tests (wave 6)
-- [ ] Coverage threshold `--cov-fail-under=75` (next wave)
+- [x] Coverage threshold (`--cov-fail-under=50` floor, ratchets up over time)
 
 ## Build & packaging
 
@@ -45,8 +45,8 @@ push (new deployment region, traffic order-of-magnitude jump).
 - [x] Structured logging (`LOG_FORMAT=json`) (wave 5)
 - [x] Request-id middleware (`X-Request-ID` round-trip) (wave 5)
 - [x] /api/readiness reflects DB + worker backlog (wave 5)
-- [ ] Prometheus `/metrics` endpoint (next wave: prometheus-client)
-- [ ] Worker queue-depth gauge (next wave)
+- [x] Prometheus `/metrics` endpoint (prometheus-client)
+- [x] Worker queue-depth gauge (`fp_worker_backlog{kind}`, refreshed on /readiness scrape)
 
 ## Security
 
@@ -79,10 +79,14 @@ push (new deployment region, traffic order-of-magnitude jump).
 
 ## Open follow-ups for next initiative
 
-- Lockfile (uv) for reproducible installs.
-- Prometheus `/metrics` endpoint + worker queue-depth gauge.
-- X-RateLimit-{Limit,Remaining,Reset} headers on every rate-limited route.
-- Coverage threshold gate in CI.
+- Lockfile (uv) for reproducible installs — `uv lock` currently surfaces
+  a real dep conflict between `[chem]` (rdkit>=2024.3) and
+  `[retrosynth]` (aizynthfinder pins rdkit<2024). Resolve by bumping
+  aizynthfinder to a rdkit-2024-compatible version, splitting the
+  extras so they don't co-resolve, or pinning rdkit in the project's
+  base deps.
+- Ratchet `--cov-fail-under` from 50 → 75 in 5%-step PRs as coverage
+  grows. Current floor catches accidental "all tests deleted".
 - mypy strict mode (currently non-strict but `check_untyped_defs=True`).
 - Flip the heavy CI lane + pip-audit from `continue-on-error: true`
   to gating once each has 5 consecutive clean runs on main.

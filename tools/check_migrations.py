@@ -68,20 +68,78 @@ _IDEMPOTENT_PATTERNS = [
 ]
 
 
+_DOLLAR_TAG_RE = re.compile(r"\$([A-Za-z0-9_]*)\$")
+
+
+def _scrub_sql(sql: str) -> str:
+    """Strip comments + string-literal + dollar-quoted bodies so downstream
+    regexes (CREATE INDEX detection, statement splitting) don't false-match
+    on text inside `'...'` literals, `$$...$$` function bodies, or
+    `-- comments`.
+
+    The replacement preserves structure (whitespace + final `;`) so the
+    output retains the original statement count. Inside literal/comment
+    spans, every character becomes a space — the regexes are word-boundary
+    sensitive but length-agnostic, so this is safe.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        # /* ... */ block comment.
+        if ch == "/" and i + 1 < n and sql[i + 1] == "*":
+            j = sql.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            out.append(" " * (j - i))
+            i = j
+            continue
+        # -- line comment.
+        if ch == "-" and i + 1 < n and sql[i + 1] == "-":
+            j = sql.find("\n", i)
+            j = n if j == -1 else j
+            out.append(" " * (j - i))
+            i = j
+            continue
+        # Single-quoted string literal. Postgres escapes `''` inside.
+        if ch == "'":
+            j = i + 1
+            while j < n:
+                if sql[j] == "'":
+                    if j + 1 < n and sql[j + 1] == "'":
+                        j += 2  # escaped quote
+                        continue
+                    j += 1
+                    break
+                j += 1
+            out.append(" " * (j - i))
+            i = j
+            continue
+        # Dollar-quoted body: $tag$ ... $tag$ (tag may be empty: $$).
+        if ch == "$":
+            m = _DOLLAR_TAG_RE.match(sql, i)
+            if m:
+                tag = m.group(0)
+                end = sql.find(tag, m.end())
+                end = n if end == -1 else end + len(tag)
+                out.append(" " * (end - i))
+                i = end
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _strip_comments(sql: str) -> str:
-    """Remove `-- line comments` and `/* block comments */` so lint regexes
-    don't fire on commented-out DDL examples in migration files."""
-    # Block comments first so a `--` inside a /* ... */ doesn't escape.
-    sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
-    sql = re.sub(r"--[^\n]*", "", sql)
-    return sql
+    """Back-compat shim — `_scrub_sql` is the real implementation."""
+    return _scrub_sql(sql)
 
 
 def _split_statements(sql: str) -> list[str]:
-    """Split on top-level `;` — naive but adequate for migration files
-    that don't use dollar-quoting (no PL/pgSQL function bodies)."""
-    stripped = _strip_comments(sql)
-    return [stmt.strip() for stmt in stripped.split(";") if stmt.strip()]
+    """Split on top-level `;`. Safe across dollar-quoted function bodies
+    and string literals because `_scrub_sql` blanks them out first."""
+    scrubbed = _scrub_sql(sql)
+    return [stmt.strip() for stmt in scrubbed.split(";") if stmt.strip()]
 
 
 def check_file(path: Path, *, strict: bool) -> list[str]:

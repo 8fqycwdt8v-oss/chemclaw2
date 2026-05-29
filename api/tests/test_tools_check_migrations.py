@@ -92,3 +92,64 @@ def test_non_strict_mode_silent_on_historical_pattern(tmp_path):
     don't gate every PR."""
     f = _write(tmp_path, "0001_history.sql", "CREATE TABLE foo (id int);")
     assert check_file(f, strict=False) == []
+
+
+# ── Dollar-quoted function bodies ────────────────────────────────────────────
+
+def test_dollar_quoted_function_body_does_not_false_split(tmp_path):
+    """A `CREATE FUNCTION ... AS $$ ... ; ... $$` body contains semicolons
+    that must not count as statement separators."""
+    f = _write(tmp_path, "0050_thing.sql", """
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS foo ON bar (x);
+    """)
+    assert check_file(f, strict=False) == []
+
+    f2 = _write(tmp_path, "0051_func.sql", """
+        CREATE OR REPLACE FUNCTION audit_log_insert() RETURNS trigger AS $$
+        BEGIN
+            INSERT INTO audit (id) VALUES (NEW.id);
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+    """)
+    # Function body has 2 semicolons inside $$ ... $$, plus the final ;.
+    # Without dollar-quote awareness this would look like 3 statements.
+    from tools.check_migrations import _split_statements
+    assert len(_split_statements(f2.read_text())) == 1
+
+
+def test_dollar_quoted_concurrently_only_is_ok(tmp_path):
+    """The DO $$ ... $$ block is one statement; combined with a single
+    CONCURRENTLY DDL is two — flag it. Combined alone, no flag."""
+    f = _write(tmp_path, "0052_thing.sql", """
+        DO $$ BEGIN
+            RAISE NOTICE 'hello; world';
+        END $$;
+    """)
+    assert check_file(f, strict=False) == []
+
+
+# ── String-literal awareness ─────────────────────────────────────────────────
+
+def test_string_literal_does_not_trip_create_index_check(tmp_path):
+    """A string literal mentioning CREATE INDEX must not look like real DDL
+    to the linter."""
+    f = _write(tmp_path, "0053_thing.sql", """
+        INSERT INTO migration_log (note) VALUES ('CREATE INDEX -- not really');
+    """)
+    # Non-strict: no CREATE INDEX or CONCURRENTLY issue.
+    assert check_file(f, strict=False) == []
+    # Strict: same — the CREATE INDEX inside the string literal must
+    # not trigger the unguarded-DDL warning.
+    assert check_file(f, strict=True) == []
+
+
+def test_string_literal_with_dashes_not_treated_as_comment(tmp_path):
+    """`-- ` inside a string literal must survive the comment stripper."""
+    f = _write(tmp_path, "0054_thing.sql", """
+        INSERT INTO note (text) VALUES ('hyphen -- dash is fine');
+        CREATE TABLE IF NOT EXISTS foo (id int);
+    """)
+    from tools.check_migrations import _split_statements
+    # Two statements regardless of the dashes inside the literal.
+    assert len(_split_statements(f.read_text())) == 2

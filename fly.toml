@@ -35,11 +35,24 @@ primary_region = "fra"
     hard_limit = 250
     soft_limit = 200
 
+  # Liveness — process up + event loop responsive. Failure restarts the
+  # machine. Aggressive interval; cheap probe (no DB).
   [[http_service.checks]]
     grace_period = "10s"
-    interval = "30s"
+    interval = "10s"
     method = "GET"
     path = "/api/health"
+    timeout = "3s"
+
+  # Readiness — DB ping + fingerprint backlog gate. Failure should drain
+  # traffic without restarting (Fly's HTTP-check failure stops routing
+  # new requests, which is the intent of the wave-5 split). Slower
+  # interval since this hits Postgres.
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    path = "/api/readiness"
     timeout = "5s"
 
 [[vm]]
