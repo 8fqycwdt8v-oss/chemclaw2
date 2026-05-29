@@ -111,12 +111,12 @@ def complete_login(auth_response: dict[str, str]) -> dict[str, Any] | None:
     app = _build_app(cache)
     try:
         result = app.acquire_token_by_auth_code_flow(flow, auth_response)
-    except ValueError as exc:
+    except ValueError:
         # Stale or mismatched code/state (e.g. a reused redirect URL) — MSAL
-        # raises ValueError. Surface it cleanly and reset, rather than letting
-        # the page crash with a traceback.
+        # raises ValueError. Reset and show a generic message rather than
+        # crashing the page or reflecting raw MSAL/state detail to the client.
         st.session_state.pop(_FLOW_KEY, None)
-        st.error(f"Login could not be completed — please sign in again. ({exc})")
+        st.error("Login could not be completed — please sign in again.")
         return None
     _save_cache(cache)
     st.session_state.pop(_FLOW_KEY, None)

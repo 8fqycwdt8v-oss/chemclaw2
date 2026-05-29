@@ -28,11 +28,29 @@ class BackendError(Exception):
         super().__init__(f"{status_code}: {detail}")
 
 
+def _build_url(path: str) -> str:
+    """Join a server-relative path onto the backend base, refusing anything
+    that could reparent the request to another host.
+
+    Concatenating an arbitrary string onto the base is a token-exfiltration
+    footgun: a path like ``@evil.com/x`` makes httpx parse ``evil.com`` as the
+    host and ship the user's Bearer token there. Require an absolute,
+    non-protocol-relative path and verify the resolved host is unchanged.
+    """
+    if not path.startswith("/") or path.startswith("//"):
+        raise ValueError("path must be server-relative (start with a single '/')")
+    base = _base_url()
+    url = httpx.URL(base + path)
+    if url.host != httpx.URL(base).host:
+        raise ValueError("path must not change the request host")
+    return str(url)
+
+
 def get(path: str, token: str, params: dict[str, Any] | None = None) -> Any:
     """Authenticated GET. Returns parsed JSON, or raises BackendError."""
     headers = {"Authorization": f"Bearer {token}"}
     with httpx.Client(timeout=_TIMEOUT) as client:
-        resp = client.get(f"{_base_url()}{path}", headers=headers, params=params)
+        resp = client.get(_build_url(path), headers=headers, params=params)
     if resp.status_code >= 400:
         raise BackendError(resp.status_code, _safe_detail(resp))
     return resp.json()

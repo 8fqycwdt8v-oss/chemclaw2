@@ -77,6 +77,7 @@ def _claims(oid: str = "oid-abc", **extra: Any) -> dict[str, Any]:
         "oid": oid,
         "iss": _ISSUER,
         "aud": _AUD,
+        "scp": "access_as_user",  # marks a delegated user token (not app-only)
         "iat": now,
         "exp": now + 3600,
     }
@@ -269,6 +270,26 @@ async def test_jwt_app_id_uri_audience_accepted(
     priv, _ = rsa_key
     token = _sign(priv, _claims(aud=f"api://{_AUD}"))
     assert await get_current_user(f"Bearer {token}") == "oid-abc"
+
+
+@pytest.mark.asyncio
+async def test_app_only_token_rejected(
+    entra_env, monkeypatch: pytest.MonkeyPatch, rsa_key, patched_jwks
+) -> None:
+    """An app-only (client-credentials) token — valid aud/iss/oid and even the
+    required app role, but NO `scp` claim — must be rejected (401), not trusted
+    as a user. Otherwise a service principal granted the app role as an
+    application permission would bypass the 'Assignment required' group gate."""
+    from api.auth import get_current_user
+
+    monkeypatch.setenv("AZURE_REQUIRED_ROLE", _ROLE)
+    priv, _ = rsa_key
+    claims = _claims(oid="service-principal", roles=[_ROLE])
+    del claims["scp"]  # app-only tokens carry roles but never scp
+    token = _sign(priv, claims)
+    with pytest.raises(HTTPException) as ei:
+        await get_current_user(f"Bearer {token}")
+    assert ei.value.status_code == 401
 
 
 # ── App-role gate (AD-group restriction) ──────────────────────────────────────

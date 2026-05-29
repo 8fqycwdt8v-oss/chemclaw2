@@ -140,6 +140,20 @@ def _expected_audience() -> list[str] | None:
     return [client_id, f"api://{client_id}"]
 
 
+def _require_delegated_token(claims: dict[str, Any]) -> None:
+    """Reject app-only (client-credentials) tokens. Fail closed (401).
+
+    Delegated user tokens carry the ``scp`` (scope) claim — the backend exposes
+    only ``access_as_user``, so a real user token issued to the frontend has it.
+    App-only tokens (a service principal authenticating as itself) never carry
+    ``scp`` even though they may carry an app-role ``roles`` claim; trusting
+    their ``oid`` as a user would bypass the "Assignment required" group gate.
+    """
+    if not claims.get("scp"):
+        logger.warning("entra_app_only_token_rejected oid=%s", claims.get("oid"))
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 def _require_app_role(claims: dict[str, Any]) -> None:
     """Enforce the AD-group gate via the app-role claim. Fail closed (403).
 
@@ -241,7 +255,11 @@ async def get_current_user(authorization: str | None = Header(None)) -> str:
                 logger.warning("jwks_key_type_unexpected type=%s", type(signing_key.key).__name__)
                 raise HTTPException(status_code=401, detail="Unauthorized")
         except ImportError:
-            pass  # cryptography package unavailable; skip algorithm-confusion check
+            # cryptography unavailable → algorithm-confusion key-type guard
+            # skipped. jwt.decode(algorithms=["RS256"]) still fails closed
+            # (PyJWT's RS256 needs cryptography), but log the disabled guard
+            # so the degraded posture is observable (CLAUDE.md security rule).
+            logger.error("cryptography_unavailable_rsa_keytype_guard_skipped")
         # Issuer + audience are required in non-dev envs (enforced at startup by
         # validate_auth_config()). In dev/test they may be unset, in which case
         # the corresponding check is skipped.
@@ -255,6 +273,13 @@ async def get_current_user(authorization: str | None = Header(None)) -> str:
             audience=audience,
             options={"verify_aud": audience is not None},
         )
+        # Reject app-only (client-credentials) tokens. A service principal
+        # granted this backend's app role as an *application* permission would
+        # carry roles=[AZURE_REQUIRED_ROLE] + a valid aud/iss/oid and otherwise
+        # pass the gate below — but it represents no delegated user. Delegated
+        # user tokens carry the `scp` (scope) claim; app-only tokens never do.
+        # Requiring scp ensures we only trust `oid` as a real user identity.
+        _require_delegated_token(claims)
         # AD-group gate (app role). Raises 403; not a jwt error, so it
         # propagates past the except clauses below unchanged.
         _require_app_role(claims)
