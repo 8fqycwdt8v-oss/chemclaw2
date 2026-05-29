@@ -59,7 +59,10 @@ async def find_similar_compounds(
                    morgan_fp::text AS fp
             FROM compounds
             WHERE {where}
-            ORDER BY morgan_fp <~> CAST(:bits AS bit(2048))
+            -- `<%>` = Jaccard distance (1 - Tanimoto), matching the
+            -- bit_jaccard_ops HNSW index (migrations 0046) and the Tanimoto
+            -- rerank below. Hamming (`<~>`) pruned by the wrong metric.
+            ORDER BY morgan_fp <%> CAST(:bits AS bit(2048))
             LIMIT 100
         """),
         params,

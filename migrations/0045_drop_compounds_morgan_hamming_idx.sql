@@ -1,0 +1,15 @@
+-- Drop the Hamming-distance HNSW index on compounds.morgan_fp.
+--
+-- The fingerprint similarity path ranks and thresholds neighbours by
+-- Tanimoto (= Jaccard) similarity (see api/db/queries/compounds.py and
+-- api/db/queries/fp_utils.py:rerank_by_tanimoto), but the original index
+-- from migrations/0002_chem.sql was built with bit_hamming_ops and the
+-- query ordered by `<~>` (Hamming distance). The ANN graph therefore
+-- pruned the candidate pool by a metric that does not match the final
+-- ranking, so genuine top-Tanimoto neighbours could be dropped before the
+-- reranker ever saw them. Replaced by a bit_jaccard_ops index in 0046.
+--
+-- Single-statement file. DROP INDEX CONCURRENTLY cannot run inside a
+-- transaction; the CI apply loop greps for "CONCURRENTLY" and uses
+-- autocommit (see migrations/MIGRATIONS.md).
+DROP INDEX CONCURRENTLY IF EXISTS compounds_morgan_fp_hnsw;
