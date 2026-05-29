@@ -69,8 +69,11 @@ def _sync_due(last_synced_at: datetime | None, interval_hours: float) -> bool:
 async def run_sync_once(session_factory: async_sessionmaker[AsyncSession]) -> dict[str, Any]:
     """Run a single delta sync of the configured drive. Returns a summary dict.
 
-    No-ops with status 'skipped' when MSGRAPH_* isn't configured. On a Graph
-    failure it records the error in drive_sync_state (preserving the prior
+    No-ops with status 'skipped' when MSGRAPH_* isn't configured. Holds a
+    per-drive advisory lock for the whole run so the scheduled worker and a
+    manual admin trigger (and multi-instance deploys) can't sync the same drive
+    concurrently — returns status 'busy' if another sync holds the lock. On a
+    Graph failure it records the error in drive_sync_state (preserving the prior
     cursor) and returns status 'error' without raising. Per-file failures are
     logged and counted; one bad file never aborts the batch.
     """
@@ -78,6 +81,23 @@ async def run_sync_once(session_factory: async_sessionmaker[AsyncSession]) -> di
     if config is None:
         return {"status": "skipped", "reason": "not configured"}
 
+    # Hold the advisory lock on a dedicated connection for the entire sync; the
+    # body opens its own (sequential) sessions for each step. Released in
+    # finally even if the body raises.
+    async with session_factory() as lock_db:
+        if not await try_acquire_drive_lock(lock_db, config.drive_id):
+            logger.info("drive_sync_lock_busy drive=%s", config.drive_id)
+            return {"status": "busy"}
+        try:
+            return await _sync_locked(session_factory, config)
+        finally:
+            await release_drive_lock(lock_db, config.drive_id)
+
+
+async def _sync_locked(
+    session_factory: async_sessionmaker[AsyncSession], config: GraphConfig
+) -> dict[str, Any]:
+    """The delta-sync body, run while the per-drive advisory lock is held."""
     async with session_factory() as db:
         investigation_id = await get_or_create_corpus_investigation(
             db,
@@ -146,6 +166,10 @@ async def run_sync_once(session_factory: async_sessionmaker[AsyncSession]) -> di
             "drive_sync_deletions drive=%s count=%d (left in place)",
             config.drive_id, len(deleted),
         )
+    if failed:
+        # The cursor still advances past failed files, so a transient download
+        # error drops a file from this window — surface it for ops.
+        logger.warning("drive_sync_partial_failures drive=%s failed=%d", config.drive_id, failed)
     logger.info(
         "drive_sync_complete drive=%s files=%d ingested=%d skipped=%d failed=%d deleted=%d",
         config.drive_id, len(files), ingested, skipped, failed, len(deleted),
@@ -163,8 +187,8 @@ async def run_sync_once(session_factory: async_sessionmaker[AsyncSession]) -> di
 async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Poll loop: every POLL_INTERVAL_SECONDS, sync the drive if it's due.
 
-    Holds a per-drive advisory lock for the duration of a sync so multiple
-    instances don't sync the same drive concurrently.
+    `run_sync_once` takes the per-drive advisory lock itself, so the loop just
+    gates on the wall-clock cadence before calling it.
     """
     logger.info("sync_worker_started interval_hours=%s", _sync_interval_hours())
     _cycle = 0
@@ -184,17 +208,8 @@ async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
                 last = state["last_synced_at"] if state else None
                 if not _sync_due(last, _sync_interval_hours()):
                     continue
-                # Hold the advisory lock on a dedicated connection for the whole
-                # sync; release in finally even if run_sync_once raises.
-                async with session_factory() as lock_db:
-                    if not await try_acquire_drive_lock(lock_db, config.drive_id):
-                        logger.info("sync_worker_lock_busy drive=%s", config.drive_id)
-                        continue
-                    try:
-                        result = await run_sync_once(session_factory)
-                        logger.info("sync_worker_cycle %s", result)
-                    finally:
-                        await release_drive_lock(lock_db, config.drive_id)
+                result = await run_sync_once(session_factory)
+                logger.info("sync_worker_cycle %s", result)
             except Exception:
                 logger.exception("sync_worker_cycle_error")
             finally:

@@ -152,6 +152,22 @@ async def test_run_sync_once_records_error_on_delta_failure(
     assert state["delta_token"] is None  # nothing to advance to
 
 
+@pytest.mark.asyncio
+async def test_run_sync_once_busy_when_locked(session_factory, graph_env) -> None:
+    """A second sync of the same drive returns 'busy' while the per-drive
+    advisory lock is held — guards the admin trigger vs scheduled run race."""
+    from api.db.queries.drive_sync import release_drive_lock, try_acquire_drive_lock
+
+    drive_id = graph_env
+    async with session_factory() as holder:
+        assert await try_acquire_drive_lock(holder, drive_id)
+        try:
+            result = await sw.run_sync_once(session_factory)
+            assert result == {"status": "busy"}
+        finally:
+            await release_drive_lock(holder, drive_id)
+
+
 # ── admin trigger route ───────────────────────────────────────────────────────
 
 def test_admin_drive_sync_requires_admin(client, auth_header) -> None:
