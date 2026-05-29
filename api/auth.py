@@ -34,8 +34,8 @@ import jwt
 from fastapi import Header, HTTPException
 from jwt import PyJWKClient
 
-# Matches the sub-claim regex enforced by the GUI (api_client.py:_SUB_RE).
-# No dots or colons — they would break the svc token wire format.
+# Allowed character set for a service-token subject. No dots or colons —
+# they would break the svc token wire format.
 _SVC_SUB_RE = re.compile(r"^[A-Za-z0-9_\-|]{1,255}$")
 _SVC_TOKEN_MAX_AGE = 300  # seconds — bound replay window to ±5 min
 
@@ -218,8 +218,11 @@ async def get_current_user(authorization: str | None = Header(None)) -> str:
                 raise HTTPException(status_code=401, detail="Unauthorized: empty mock user ID")
             return user_id
 
-    # Service-token path: GUI → backend via HMAC-SHA256 signed token.
-    # Only active when CHEMCLAW2_SERVICE_SECRET is set (production).
+    # Service-token path: a trusted internal service → backend via an
+    # HMAC-SHA256 signed token. Only active when CHEMCLAW2_SERVICE_SECRET is
+    # set. NOTE: this path asserts identity directly and bypasses the Entra
+    # app-role / AD-group gate — provision the secret only for callers that
+    # are themselves trusted (see BACKLOG).
     service_secret = os.environ.get("CHEMCLAW2_SERVICE_SECRET")
     if service_secret and token.startswith("svc."):
         return _verify_svc_token(token, service_secret)
@@ -279,10 +282,14 @@ async def get_optional_user(authorization: str | None = Header(None)) -> str | N
     try:
         return await get_current_user(authorization)
     except HTTPException as exc:
-        if exc.status_code not in (401, 403):
+        if exc.status_code == 401:
+            return None
+        # 403 (AD-group / app-role denial) must propagate, not be downgraded
+        # to anonymous — swallowing it would silently bypass the group gate
+        # for optional-auth endpoints. Re-raise anything that isn't a plain 401.
+        if exc.status_code != 403:
             logger.warning("get_optional_user_unexpected_error status=%d", exc.status_code)
-            raise
-        return None
+        raise
 
 
 async def get_admin_user(authorization: str | None = Header(None)) -> str:

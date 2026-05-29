@@ -24,12 +24,19 @@ st.set_page_config(page_title="chemclaw2", page_icon="🧪", layout="wide")
 
 
 def _handle_redirect() -> None:
-    """If Entra redirected back with ?code=…, complete the token exchange."""
+    """Handle the redirect back from Entra (success or denial)."""
     params = dict(st.query_params)
+    # Denial (e.g. user not assigned to the app / not in the AD group) comes
+    # back as ?error=…&error_description=… with NO code — surface it.
+    if "error" in params:
+        st.error(f"Sign-in denied: {params.get('error_description', params['error'])}")
+        st.query_params.clear()
+        auth.clear_flow()
+        return
     if "code" in params and auth.get_token() is None:
         result = auth.complete_login(params)
+        st.query_params.clear()  # always drop code/state, success or failure
         if result is not None:
-            st.query_params.clear()  # drop code/state from the URL
             st.rerun()
 
 

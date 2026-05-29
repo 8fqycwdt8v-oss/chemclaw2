@@ -18,6 +18,8 @@ that's the "good session" requirement.
 """
 from __future__ import annotations
 
+import base64
+import json
 from typing import Any
 
 import msal
@@ -69,11 +71,17 @@ def _build_app(cache: msal.SerializableTokenCache) -> msal.ConfidentialClientApp
 
 
 def login_url() -> str:
-    """Start an auth-code flow and return the Entra authorization URL.
+    """Return the Entra authorization URL, starting an auth-code flow if needed.
 
     The flow dict (state + PKCE verifier) is stashed in session_state so it
-    survives the redirect back from Entra.
+    survives the redirect back from Entra. We reuse an existing un-consumed
+    flow rather than minting a new one on every Streamlit rerun — otherwise a
+    rerun before the user clicks "sign in" would clobber the state/PKCE the
+    button's URL was built from, and the redirect would fail to validate.
     """
+    existing = st.session_state.get(_FLOW_KEY)
+    if existing and existing.get("auth_uri"):
+        return existing["auth_uri"]
     cache = _load_cache()
     app = _build_app(cache)
     flow = app.initiate_auth_code_flow(
@@ -83,6 +91,11 @@ def login_url() -> str:
     st.session_state[_FLOW_KEY] = flow
     _save_cache(cache)
     return flow["auth_uri"]
+
+
+def clear_flow() -> None:
+    """Drop any in-flight auth-code flow (e.g. after a failed/abandoned login)."""
+    st.session_state.pop(_FLOW_KEY, None)
 
 
 def complete_login(auth_response: dict[str, str]) -> dict[str, Any] | None:
@@ -96,7 +109,15 @@ def complete_login(auth_response: dict[str, str]) -> dict[str, Any] | None:
         return None
     cache = _load_cache()
     app = _build_app(cache)
-    result = app.acquire_token_by_auth_code_flow(flow, auth_response)
+    try:
+        result = app.acquire_token_by_auth_code_flow(flow, auth_response)
+    except ValueError as exc:
+        # Stale or mismatched code/state (e.g. a reused redirect URL) — MSAL
+        # raises ValueError. Surface it cleanly and reset, rather than letting
+        # the page crash with a traceback.
+        st.session_state.pop(_FLOW_KEY, None)
+        st.error(f"Login could not be completed — please sign in again. ({exc})")
+        return None
     _save_cache(cache)
     st.session_state.pop(_FLOW_KEY, None)
     if "access_token" not in result:
@@ -129,10 +150,32 @@ def get_token() -> str | None:
     return result.get("access_token")
 
 
+def _decode_jwt_payload(token: str) -> dict[str, Any]:
+    """Best-effort, unverified decode of a JWT payload for *display only*.
+
+    The backend is the authority on token validity; this just lets the UI read
+    claims for display. Returns {} on any malformed input.
+    """
+    try:
+        payload_b64 = token.split(".")[1]
+        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+        return json.loads(base64.urlsafe_b64decode(padded))
+    except (ValueError, IndexError, json.JSONDecodeError):
+        return {}
+
+
 def current_user() -> dict[str, Any]:
-    """Identity claims from the id token (name, username, oid, roles)."""
+    """Identity claims for display: name/username from the id token, plus the
+    app `roles` claim — which is emitted into the *access token* (backend
+    audience), not the id token (frontend audience)."""
     result = st.session_state.get(_RESULT_KEY) or {}
-    return result.get("id_token_claims", {})
+    claims = dict(result.get("id_token_claims", {}))
+    access = result.get("access_token")
+    if access:
+        roles = _decode_jwt_payload(access).get("roles")
+        if roles:
+            claims["roles"] = roles
+    return claims
 
 
 def logout() -> None:
