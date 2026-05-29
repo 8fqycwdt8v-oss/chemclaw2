@@ -85,6 +85,14 @@ async def _call_mcp_tool(server_module: str, tool_name: str, tool_input: dict[st
                 proc.kill()
             except Exception:
                 pass
+            # Reap the SIGKILL'd child: without a second wait() the exit
+            # status is never collected and the stdin/stdout/stderr pipe
+            # transports stay open, so repeated timeouts leak zombies + fds.
+            # (This mirrors the kill-then-wait pattern in mcp_codesandbox.)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            except Exception:
+                pass
         raise RuntimeError(f"MCP call to {server_module}.{tool_name} timed out") from None
 
     for line in reversed(stdout.decode().strip().splitlines()):

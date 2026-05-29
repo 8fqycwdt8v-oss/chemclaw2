@@ -61,12 +61,18 @@ async def update_campaign_status(
     user_id: str,
     status: str,
     plan: dict[str, Any] | None = None,
-) -> None:
+) -> bool:
     """Update campaign status for the campaign owner.
 
     Includes `created_by = :user_id` in the WHERE clause so a user can only
     advance their own campaigns. For system/worker calls use
     `system_advance_campaign()`.
+
+    Returns True iff a row was updated. A False result means the campaign
+    does not exist, is not owned by `user_id`, or is already terminal — the
+    caller MUST treat that as a failed ownership/state check and not proceed
+    with dependent writes (e.g. inserting steps). A bare-None return made the
+    zero-row case indistinguishable from success.
 
     Does NOT commit — caller manages the transaction.
     Source-state predicate excludes terminal statuses to prevent
@@ -81,7 +87,7 @@ async def update_campaign_status(
     }
     if plan is not None:
         params["plan"] = json.dumps(plan)
-    await db.execute(
+    result = await db.execute(
         text(f"""
             UPDATE synthesis_campaigns
             SET status = :status, updated_at = now(){plan_clause}
@@ -91,6 +97,7 @@ async def update_campaign_status(
         """),
         params,
     )
+    return result.rowcount > 0
 
 
 async def system_advance_campaign(
@@ -98,10 +105,16 @@ async def system_advance_campaign(
     campaign_id: str,
     status: str,
     plan: dict[str, Any] | None = None,
-) -> None:
+) -> bool:
     """Advance a campaign status from a system/worker context (no ownership check).
 
     Only callable from background workers. Never expose via HTTP routes.
+
+    Returns True iff a row was updated. The source-state predicate excludes
+    terminal statuses, so a campaign already `complete`/`failed` yields False
+    — callers MUST gate dependent side effects (completion notification, wiki
+    creation) on a True result so a re-observed campaign doesn't re-fire them.
+
     Does NOT commit — caller manages the transaction.
     """
     plan_clause = ", plan = CAST(:plan AS jsonb)" if plan is not None else ""
@@ -112,7 +125,7 @@ async def system_advance_campaign(
     }
     if plan is not None:
         params["plan"] = json.dumps(plan)
-    await db.execute(
+    result = await db.execute(
         text(f"""
             UPDATE synthesis_campaigns
             SET status = :status, updated_at = now(){plan_clause}
@@ -121,6 +134,7 @@ async def system_advance_campaign(
         """),
         params,
     )
+    return result.rowcount > 0
 
 
 async def get_running_campaigns(db: AsyncSession) -> list[dict[str, Any]]:

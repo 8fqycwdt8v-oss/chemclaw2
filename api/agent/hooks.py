@@ -25,11 +25,14 @@ _SYNTHESIS_VERBS = re.compile(
     re.IGNORECASE,
 )
 
-_ZERO_WIDTH = re.compile(r'[­​-‍⁠﻿]')
-
-
 def _normalize(s: str) -> str:
-    return _ZERO_WIDTH.sub('', unicodedata.normalize('NFKC', s))
+    normalized = unicodedata.normalize('NFKC', s)
+    # Strip every Unicode format character (category Cf): zero-width
+    # space/joiner/non-joiner, BOM, soft hyphen, bidi marks (LRM/RLM/ALM),
+    # and invisible math operators. Any of these can be interspersed inside
+    # a substance name to defeat the \b...\b regex, so an explicit small
+    # char-class (the previous approach) is not enough.
+    return ''.join(ch for ch in normalized if unicodedata.category(ch) != 'Cf')
 
 
 def scheduled_substance_gate(prompt: str) -> dict[str, Any]:
@@ -60,8 +63,12 @@ _SECRET_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
     # because Stripe's `sk_live_<rest>` has a second underscore that the
     # `[-_]` separator in the generic pattern stops on.
     (re.compile(r'\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b'), '[REDACTED-STRIPE-KEY]', 'stripe_key'),
-    # Generic short-key prefixes (OpenAI restricted/public, custom providers)
-    (re.compile(r'\b(sk|rk|pk)[-_][A-Za-z0-9]{20,}\b'), '[REDACTED-API-KEY]', 'api_key'),
+    # Generic short-key prefixes (OpenAI restricted/public, custom providers).
+    # The charset includes internal `-`/`_` so multi-segment keys are caught:
+    # current OpenAI keys are `sk-proj-…` / `sk-svcacct-…`, where only 4 chars
+    # ("proj") precede the next hyphen — a `[A-Za-z0-9]{20,}` body stops at that
+    # hyphen and the whole live key sails through unredacted.
+    (re.compile(r'\b(sk|rk|pk)[-_][A-Za-z0-9][A-Za-z0-9_-]{18,}\b'), '[REDACTED-API-KEY]', 'api_key'),
     (re.compile(r'\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{16,}\b'), 'Bearer [REDACTED]', 'bearer_token'),
     # JWT: three base64url segments separated by dots. Anchor on the eyJ
     # prefix (base64-encoded `{"`) — every real JWT header starts with it.
@@ -99,11 +106,23 @@ def _redact_secrets(s: str, tool_name: str) -> tuple[str, bool]:
     return out, matched
 
 
-def _redact_obj(obj: Any, tool_name: str) -> tuple[Any, bool]:
-    """Recursively redact secrets from nested dicts/lists/strings."""
+_REDACT_MAX_DEPTH = 12
+
+
+def _redact_obj(obj: Any, tool_name: str, depth: int = 0) -> tuple[Any, bool]:
+    """Recursively redact secrets from nested dicts/lists/tuples/strings.
+
+    Bounded at `_REDACT_MAX_DEPTH` so a pathologically deep (or cyclic)
+    tool_input can't drive a RecursionError — which the caller would catch
+    and fail open, letting the raw input through. Redacts dict *keys* as well
+    as values, and traverses tuples/sets, because a secret can appear in any
+    position the SDK hands us.
+    """
+    if depth > _REDACT_MAX_DEPTH:
+        return obj, False
     if isinstance(obj, str):
         new_s, changed = _redact_secrets(obj, tool_name)
-        if _SSN_RE.search(obj):
+        if _SSN_RE.search(new_s):
             new_s = _SSN_RE.sub('[REDACTED-SSN]', new_s)
             changed = True
         return new_s, changed
@@ -111,18 +130,19 @@ def _redact_obj(obj: Any, tool_name: str) -> tuple[Any, bool]:
         new_d = {}
         any_changed = False
         for k, v in obj.items():
-            new_v, changed = _redact_obj(v, tool_name)
-            new_d[k] = new_v
-            any_changed = any_changed or changed
+            new_k, k_changed = _redact_obj(k, tool_name, depth + 1)
+            new_v, v_changed = _redact_obj(v, tool_name, depth + 1)
+            new_d[new_k] = new_v
+            any_changed = any_changed or k_changed or v_changed
         return new_d, any_changed
-    if isinstance(obj, list):
-        new_l = []
+    if isinstance(obj, (list, tuple, set, frozenset)):
         any_changed = False
+        items = []
         for item in obj:
-            new_item, changed = _redact_obj(item, tool_name)
-            new_l.append(new_item)
+            new_item, changed = _redact_obj(item, tool_name, depth + 1)
+            items.append(new_item)
             any_changed = any_changed or changed
-        return new_l, any_changed
+        return type(obj)(items), any_changed
     return obj, False
 
 
@@ -236,8 +256,16 @@ def build_hooks(user_id: str, project_key: str, db_factory: Any) -> dict[str, li
                 return {"decision": "allow", "updatedInput": redacted_input}
             return {}
         except Exception:
+            # The controlled-substance block and the credential redaction above
+            # are security gates — if either raises we must fail CLOSED (block
+            # the call), not return {} (allow with the original, unredacted
+            # input). The budget check has its own inner try/except and is the
+            # only sanctioned fail-open path.
             logger.error("pre_tool_use_hook_error tool=%s", input_data.get("tool_name", "?"), exc_info=True)
-            return {}
+            return {
+                "decision": "block",
+                "reason": "Tool call blocked: input could not be safety-screened.",
+            }
 
     async def post_tool_use_hook(input_data: dict[str, Any]) -> dict[str, Any]:
         if input_data.get("hook_event_name") != "PostToolUse":

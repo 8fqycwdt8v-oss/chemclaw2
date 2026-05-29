@@ -57,8 +57,10 @@ def _make_engine() -> AsyncEngine:
     )
 
 
-# Module-level singletons — created once at import time (or re-created on
-# first use after startup via lifespan). Tests can monkey-patch these.
+# Module-level singletons — populated by init_db() from the lifespan startup
+# (NOT at import time: DATABASE_URL is read inside _make_engine so import never
+# fails on a missing var). They stay None until init_db() runs. Tests can
+# monkey-patch these.
 engine: AsyncEngine | None = None
 async_session_factory: async_sessionmaker[AsyncSession] | None = None
 

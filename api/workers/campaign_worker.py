@@ -197,14 +197,21 @@ async def process_running_campaigns(
             try:
                 from api.db.queries.notifications import create_notification
                 async with db.begin():
-                    await system_advance_campaign(db, campaign_id, "complete")
+                    # Gate the notification on the actual transition: if the
+                    # campaign was already 'complete' (re-observed this tick, or
+                    # advanced by a concurrent worker), system_advance_campaign
+                    # no-ops and returns False — without this guard the user
+                    # would get a duplicate completion notification every time.
+                    advanced = await system_advance_campaign(db, campaign_id, "complete")
                     created_by = campaign.get("created_by")
-                    if created_by:
+                    if advanced and created_by:
                         await create_notification(
                             db, created_by, "campaign_complete",
                             {"campaign_id": campaign_id,
                              "target_smiles": campaign.get("target_smiles")},
                         )
+                if not advanced:
+                    continue
                 logger.info("campaign_complete campaign=%s", campaign_id)
                 wiki_result = await _create_campaign_wiki(campaign, session_factory)
                 if not wiki_result["ok"]:
@@ -307,13 +314,19 @@ async def run_worker(session_factory: async_sessionmaker[AsyncSession]) -> None:
                         "campaign_worker_cycle retried=%d updated=%d backfilled=%d swept=%d",
                         retried, updated, backfilled, swept,
                     )
-                _cycle += 1
-                if _cycle % 10 == 0:
-                    logger.info("campaign_worker_heartbeat cycle=%d", _cycle)
             except Exception:
                 logger.exception("campaign_worker_cycle_error")
             finally:
                 _in_flight = False
+                # Advance the cycle counter (and emit the heartbeat) in
+                # `finally` so the modulo-gated periodic work (backfill %5,
+                # rate-limit sweep %60) and the liveness heartbeat keep their
+                # cadence even when a cycle raises — otherwise a persistently
+                # failing cycle pins _cycle and starves the heartbeat while
+                # re-running the heavy periodic passes every tick.
+                _cycle += 1
+                if _cycle % 10 == 0:
+                    logger.info("campaign_worker_heartbeat cycle=%d", _cycle)
     except asyncio.CancelledError:
         logger.info("campaign_worker_shutdown")
 

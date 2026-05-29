@@ -17,6 +17,10 @@ from api.agent.hooks import _redact_obj, _redact_secrets
 # pattern's minimum length but doesn't correspond to a real account.
 _ANTHROPIC = "sk-ant-api03-" + "A" * 30
 _OPENAI = "sk-" + "B" * 40
+# Current OpenAI key shape: sk-proj-… (also sk-svcacct-…). The "proj" segment
+# is only 4 chars before the next hyphen, so a single-segment generic pattern
+# misses it — this constant guards that regression.
+_OPENAI_PROJ = "sk-proj-" + "B" * 40
 # Generic pk-prefixed key with only one separator (matches the generic
 # (sk|rk|pk)[-_][A-Za-z0-9]{20,} pattern).
 _PUBLIC = "pk_" + "C" * 24
@@ -45,6 +49,7 @@ _SSN = "123-45-6789"
     [
         (_ANTHROPIC, "ANTHROPIC"),
         (_OPENAI, "API-KEY"),
+        (_OPENAI_PROJ, "API-KEY"),
         (_PUBLIC, "API-KEY"),
         (_STRIPE_LIVE_SK, "STRIPE"),
         (_STRIPE_TEST_PK, "STRIPE"),
@@ -109,6 +114,43 @@ def test_recursion_through_nested_dict_and_list() -> None:
     # Plain values must be preserved
     assert out["name"] == "ok"
     assert out["creds"][1]["note"] == "nothing here"
+
+
+def test_recursion_through_tuple_and_set() -> None:
+    """Secrets nested inside tuples/sets must be redacted too — the SDK can
+    hand us non-list sequence containers, and a fall-through that returns them
+    verbatim would leak the credential."""
+    obj = {"pair": ("label", _ANTHROPIC), "items": [( _GOOGLE,)]}
+    out, changed = _redact_obj(obj, "test")
+    assert changed
+    flat = repr(out)
+    assert _ANTHROPIC not in flat
+    assert _GOOGLE not in flat
+    # Container types are preserved.
+    assert isinstance(out["pair"], tuple)
+
+
+def test_secret_used_as_dict_key_is_redacted() -> None:
+    """A secret appearing as a dict KEY (not just a value) must be redacted."""
+    out, changed = _redact_obj({_ANTHROPIC: "model-choice"}, "test")
+    assert changed
+    assert _ANTHROPIC not in repr(out)
+    assert out["[REDACTED-ANTHROPIC-KEY]"] == "model-choice"
+
+
+def test_deeply_nested_input_does_not_raise() -> None:
+    """A pathologically deep input must not drive a RecursionError (which the
+    pre-tool hook would catch and fail open). It is bounded, not crashed."""
+    obj: dict = {}
+    cur = obj
+    for _ in range(200):
+        nxt: dict = {}
+        cur["n"] = nxt
+        cur = nxt
+    cur["leak"] = _ANTHROPIC
+    # Must return without raising; depth cap may leave the deepest leaf
+    # untouched, but the call completes (no RecursionError).
+    _redact_obj(obj, "test")
 
 
 def test_non_string_values_pass_through_unchanged() -> None:

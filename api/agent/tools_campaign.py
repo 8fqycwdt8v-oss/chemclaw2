@@ -68,7 +68,21 @@ def build_campaign_tools(
         # If any step insert fails the whole operation rolls back.
         async with session_factory() as db:
             async with db.begin():
-                await update_campaign_status(db, campaign_id, user_id, "running", plan=plan)
+                # update_campaign_status is owner-scoped. add_campaign_step is
+                # NOT (it trusts the caller-supplied campaign_id), so we MUST
+                # fail closed here when the owner/state check finds no row —
+                # otherwise a forged campaign_id would let one user inject steps
+                # into another user's campaign (FK ≠ access control).
+                advanced = await update_campaign_status(
+                    db, campaign_id, user_id, "running", plan=plan
+                )
+                if not advanced:
+                    return {
+                        "error": (
+                            "Campaign not found, not owned by you, or not in a "
+                            "state that accepts a plan."
+                        )
+                    }
                 pending_approval = 0
                 for step in steps:
                     requires_approval = bool(step.get("requires_approval", False))
