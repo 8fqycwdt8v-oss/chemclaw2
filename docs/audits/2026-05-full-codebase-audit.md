@@ -39,10 +39,11 @@ surface. Findings were verified against the source before action.
 
 The headline deferrals, by severity:
 
-- **HIGH — substance-gate self-approval (policy):** any user can override the
-  controlled-substance gate with a justification string; `record_override` only
-  logs. Needs a product decision (role-gated vs two-actor flow) before the
-  threat model is changed — not a unilateral code fix.
+- **~~HIGH — substance-gate self-approval (policy)~~ — RESOLVED:** product
+  decision (2026-05-29) is to **keep the override self-service with an audit
+  trail** — any user may proceed past the gate with a justification string,
+  which `record_override` logs. Intentional "log-and-allow with accountability",
+  not a bug; left as-is.
 - **HIGH — worker double-execution:** no atomic step-claim; real under
   `--workers 2` + in-process worker. Wire the existing `running` status into a
   `FOR UPDATE SKIP LOCKED`/claim transition. Needs multi-process DB to verify.
