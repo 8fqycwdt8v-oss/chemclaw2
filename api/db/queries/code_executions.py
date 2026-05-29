@@ -8,6 +8,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import clamp_limit, validate_enum
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,8 +44,7 @@ async def insert_execution(
     `artifacts` (Tier 3 §M): list of `{filename, mime, size_bytes, b64}`
     captured PNG figures from the sandbox tempdir. Stored as JSONB.
     """
-    if status not in _VALID_STATUSES:
-        raise ValueError(f"status must be one of {sorted(_VALID_STATUSES)}, got {status!r}")
+    validate_enum(status, _VALID_STATUSES, "status")
     if investigation_id is None and session_id is None:
         raise ValueError("at least one of investigation_id, session_id must be set")
     params = {
@@ -136,7 +137,7 @@ async def list_executions(
 
     `artifacts` returned with the b64 payload stripped — keeps list
     responses small. Use `get_execution(id)` for the full payload."""
-    safe_limit = min(max(1, limit), 100)
+    safe_limit = clamp_limit(limit, 100)
     params: dict[str, Any] = {"uid": user_id, "lim": safe_limit}
     clauses = ["created_by = :uid"]
     if investigation_id is not None:

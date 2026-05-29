@@ -12,6 +12,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import clamp_limit, row_to_dict, rows_to_dicts, validate_enum
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,7 +57,7 @@ async def get_investigation(
         {"iid": investigation_id, "uid": user_id},
     )
     row = result.one_or_none()
-    return dict(row._mapping) if row else None
+    return row_to_dict(row)
 
 
 async def list_investigations(
@@ -65,12 +67,11 @@ async def list_investigations(
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """List investigations owned by user_id, newest-updated first."""
-    safe_limit = min(max(1, limit), 200)
+    safe_limit = clamp_limit(limit, 200)
     params: dict[str, Any] = {"uid": user_id, "lim": safe_limit}
     status_clause = ""
     if status is not None:
-        if status not in _VALID_STATUSES:
-            raise ValueError(f"status must be one of {sorted(_VALID_STATUSES)}, got {status!r}")
+        validate_enum(status, _VALID_STATUSES, "status")
         status_clause = "AND status = :status"
         params["status"] = status
     result = await db.execute(
@@ -85,7 +86,7 @@ async def list_investigations(
         """),
         params,
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def update_investigation_status(
@@ -99,8 +100,7 @@ async def update_investigation_status(
     Owner-scoped via `created_by = :uid`. Returns True if the row was
     updated, False if it didn't exist or wasn't owned by the caller.
     """
-    if status not in _VALID_STATUSES:
-        raise ValueError(f"status must be one of {sorted(_VALID_STATUSES)}, got {status!r}")
+    validate_enum(status, _VALID_STATUSES, "status")
     async with db.begin():
         result = await db.execute(
             text("""

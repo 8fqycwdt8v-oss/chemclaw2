@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import clamp_limit, rows_to_dicts
 from api.embeddings import EMBED_DIM
 
 # ── chunking ──────────────────────────────────────────────────────────────────
@@ -184,7 +185,7 @@ async def search_paper_chunks_fts(
         """),
         params,
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def semantic_search_paper_chunks(
@@ -196,7 +197,7 @@ async def semantic_search_paper_chunks(
 ) -> list[dict[str, Any]]:
     if len(embedding) != EMBED_DIM:
         raise ValueError(f"embedding must have {EMBED_DIM} dimensions, got {len(embedding)}")
-    safe_limit = min(max(1, limit), 100)
+    safe_limit = clamp_limit(limit, 100)
     vec_str = "[" + ",".join(map(str, embedding)) + "]"
     params: dict[str, Any] = {
         "vec": vec_str,
@@ -222,7 +223,7 @@ async def semantic_search_paper_chunks(
         """),
         params,
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def hybrid_search_paper_chunks(
@@ -244,7 +245,7 @@ async def hybrid_search_paper_chunks(
     hit the same Postgres connection pool anyway, so the "parallelism"
     of gather is theatre, not real wall-time saving.
     """
-    safe_limit = min(max(1, limit), 50)
+    safe_limit = clamp_limit(limit, 50)
     leg_limit = safe_limit * 3
     fts_rows = await search_paper_chunks_fts(db, query, limit=leg_limit, paper_id=paper_id)
     sem_rows = await semantic_search_paper_chunks(

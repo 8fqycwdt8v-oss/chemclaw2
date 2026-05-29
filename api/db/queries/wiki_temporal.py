@@ -18,6 +18,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import row_to_dict, rows_to_dicts
+
 
 async def list_wiki_revisions(
     db: AsyncSession,
@@ -34,7 +36,7 @@ async def list_wiki_revisions(
         """),
         {"pid": page_id, "lim": min(limit, 50)},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def get_wiki_revision(
@@ -52,7 +54,7 @@ async def get_wiki_revision(
         {"pid": page_id, "v": version},
     )
     row = result.one_or_none()
-    return dict(row._mapping) if row else None
+    return row_to_dict(row)
 
 
 async def get_wiki_page_at(

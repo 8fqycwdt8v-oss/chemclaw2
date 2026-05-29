@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import uuid
 from typing import Any
 
 from claude_agent_sdk import SdkMcpTool
@@ -30,6 +29,7 @@ from api.agent.tool_helpers import (
     _redact_ssrf_error,
     _SSRFError,
 )
+from api.agent.tool_validation import parse_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -97,18 +97,14 @@ def build_eln_tools(
         from api.agent.eln_payload import ElnExperiment, normalize_eln_payload
         from api.db.queries.reaction_outcomes import insert_outcome
 
-        try:
-            rid = str(uuid.UUID(reaction_id.strip()))
-        except (ValueError, AttributeError):
+        rid = parse_uuid(reaction_id)
+        if rid is None:
             return {"ok": False, "error": "reaction_id must be a UUID"}
-        csid: str | None
+        csid: str | None = None
         if campaign_step_id is not None:
-            try:
-                csid = str(uuid.UUID(campaign_step_id.strip()))
-            except (ValueError, AttributeError):
+            csid = parse_uuid(campaign_step_id)
+            if csid is None:
                 return {"ok": False, "error": "campaign_step_id must be a UUID"}
-        else:
-            csid = None
 
         raw = await _fetch_eln_raw(experiment_id)
         if raw.get("error"):
@@ -171,18 +167,14 @@ def build_eln_tools(
         """
         from api.db.queries.reaction_outcomes import insert_outcome
 
-        try:
-            rid = str(uuid.UUID(reaction_id.strip()))
-        except (ValueError, AttributeError):
+        rid = parse_uuid(reaction_id)
+        if rid is None:
             return {"ok": False, "error": "reaction_id must be a UUID"}
-        csid: str | None
+        csid: str | None = None
         if campaign_step_id is not None:
-            try:
-                csid = str(uuid.UUID(campaign_step_id.strip()))
-            except (ValueError, AttributeError):
+            csid = parse_uuid(campaign_step_id)
+            if csid is None:
                 return {"ok": False, "error": "campaign_step_id must be a UUID"}
-        else:
-            csid = None
 
         try:
             async with session_factory() as db:

@@ -7,6 +7,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import row_to_dict, rows_to_dicts
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,7 +31,7 @@ async def list_tool_permissions(
         text(f"SELECT * FROM tool_permissions {where} ORDER BY scope, scope_id, tool_name"),
         params,
     )
-    return [dict(row._mapping) for row in result.fetchall()]
+    return rows_to_dicts(result)
 
 
 async def upsert_tool_permission(
@@ -87,7 +89,7 @@ async def list_eval_runs(db: AsyncSession, limit: int = 20) -> list[dict[str, An
         text("SELECT * FROM eval_runs ORDER BY started_at DESC LIMIT :lim"),
         {"lim": limit},
     )
-    return [dict(row._mapping) for row in result.fetchall()]
+    return rows_to_dicts(result)
 
 
 async def get_eval_run(db: AsyncSession, run_id: str) -> dict[str, Any] | None:
@@ -97,7 +99,7 @@ async def get_eval_run(db: AsyncSession, run_id: str) -> dict[str, Any] | None:
         {"id": run_id},
     )
     row = result.one_or_none()
-    return dict(row._mapping) if row else None
+    return row_to_dict(row)
 
 
 async def get_campaign_queue_depth(db: AsyncSession) -> int:

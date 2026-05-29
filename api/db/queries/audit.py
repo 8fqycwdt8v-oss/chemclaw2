@@ -7,6 +7,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import clamp_limit, rows_to_dicts
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,7 +24,7 @@ async def list_overrides(
     Filters on user_id, session_id, and/or gate_name when provided.
     prompt_hash is never returned to callers.
     """
-    safe_limit = max(1, min(limit, 200))
+    safe_limit = clamp_limit(limit, 200)
     params: dict[str, Any] = {"lim": safe_limit}
 
     clauses: list[str] = []
@@ -48,7 +50,7 @@ async def list_overrides(
         """),
         params,
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def get_session_replay(

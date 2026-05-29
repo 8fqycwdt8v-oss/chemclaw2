@@ -6,6 +6,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import rows_to_dicts
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,4 +57,4 @@ async def list_session_feedback(
         """),
         {"session_id": session_id, "user_id": user_id},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)

@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import clamp_limit, rows_to_dicts, validate_enum
 from api.db.queries.investigations import touch_investigation
 
 logger = logging.getLogger(__name__)
@@ -43,8 +44,7 @@ async def add_world_model_entry(
     investigation's `updated_at` in the same transaction so list ordering
     reflects recent activity.
     """
-    if kind not in _VALID_KINDS:
-        raise ValueError(f"kind must be one of {sorted(_VALID_KINDS)}, got {kind!r}")
+    validate_enum(kind, _VALID_KINDS, "kind")
     if confidence is not None and not (0.0 <= confidence <= 1.0):
         raise ValueError(f"confidence must be in [0, 1], got {confidence!r}")
     payload_json = json.dumps(payload or {})
@@ -80,11 +80,11 @@ async def list_world_model_entries(
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     """List entries for an investigation, owner-scoped."""
-    if kind is not None and kind not in _VALID_KINDS:
-        raise ValueError(f"kind must be one of {sorted(_VALID_KINDS)}, got {kind!r}")
-    if status is not None and status not in _VALID_STATUSES:
-        raise ValueError(f"status must be one of {sorted(_VALID_STATUSES)}, got {status!r}")
-    safe_limit = min(max(1, limit), 500)
+    if kind is not None:
+        validate_enum(kind, _VALID_KINDS, "kind")
+    if status is not None:
+        validate_enum(status, _VALID_STATUSES, "status")
+    safe_limit = clamp_limit(limit, 500)
     params: dict[str, Any] = {"iid": investigation_id, "uid": user_id, "lim": safe_limit}
     kind_clause = ""
     if kind is not None:
@@ -108,7 +108,7 @@ async def list_world_model_entries(
         """),
         params,
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def search_world_model_entries(
@@ -119,7 +119,7 @@ async def search_world_model_entries(
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     """FTS over an investigation's world-model entries, owner-scoped."""
-    safe_limit = min(max(1, limit), 100)
+    safe_limit = clamp_limit(limit, 100)
     result = await db.execute(
         text("""
             SELECT id::text, kind, content, payload, confidence, status,
@@ -135,7 +135,7 @@ async def search_world_model_entries(
         """),
         {"iid": investigation_id, "uid": user_id, "q": query, "lim": safe_limit},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def update_world_model_entry_status(
@@ -146,8 +146,7 @@ async def update_world_model_entry_status(
 ) -> bool:
     """Mark an entry active / superseded / closed. Owner-scoped on
     `created_by`. Returns True if a row was updated."""
-    if status not in _VALID_STATUSES:
-        raise ValueError(f"status must be one of {sorted(_VALID_STATUSES)}, got {status!r}")
+    validate_enum(status, _VALID_STATUSES, "status")
     async with db.begin():
         result = await db.execute(
             text("""

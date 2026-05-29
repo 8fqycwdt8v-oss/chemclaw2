@@ -9,6 +9,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.models import Compound
+from api.db.queries._helpers import clamp_limit, rows_to_dicts
 from api.db.queries.fp_utils import bit_string_to_pg_bytes, rerank_by_tanimoto
 
 
@@ -39,7 +40,7 @@ async def find_similar_compounds(
     created_after: str | None = None,
     has_cas: bool = False,
 ) -> list[dict[str, Any]]:
-    safe_limit = max(1, min(limit, 100))
+    safe_limit = clamp_limit(limit, 100)
     safe_min = max(0.0, min(min_tanimoto, 1.0))
 
     where_clauses = ["morgan_fp IS NOT NULL"]
@@ -63,7 +64,7 @@ async def find_similar_compounds(
         """),
         params,
     )
-    rows = [dict(r._mapping) for r in result]
+    rows = rows_to_dicts(result)
     ranked = rerank_by_tanimoto(rows, query_fp_bits, safe_min, safe_limit)
     return [
         {

@@ -11,6 +11,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import rows_to_dicts, validate_enum
+
 logger = logging.getLogger(__name__)
 
 _VALID_PROPOSED_WINNERS = frozenset(("a", "b", "inconclusive"))
@@ -46,7 +48,7 @@ async def list_contradictions(
         """),
         params,
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def create_contradiction(
@@ -58,11 +60,7 @@ async def create_contradiction(
     reason: str,
 ) -> str:
     """Insert a new contradiction record. Returns the new row's id as a string."""
-    if proposed_winner not in _VALID_PROPOSED_WINNERS:
-        raise ValueError(
-            f"proposed_winner must be one of {sorted(_VALID_PROPOSED_WINNERS)!r},"
-            f" got {proposed_winner!r}"
-        )
+    validate_enum(proposed_winner, _VALID_PROPOSED_WINNERS, "proposed_winner")
     async with db.begin():
         result = await db.execute(
             text("""
