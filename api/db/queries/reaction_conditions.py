@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import clamp_limit, row_to_dict, rows_to_dicts
 from api.db.queries.fp_utils import bit_string_to_pg_bytes
 
 
@@ -56,7 +57,7 @@ async def get_cached_prediction(
             {"smiles": rxn_smiles, "model": model},
         )
     row = result.first()
-    return dict(row._mapping) if row else None
+    return row_to_dict(row)
 
 
 async def insert_prediction(
@@ -156,7 +157,7 @@ async def list_predictions_for_reaction(
 ) -> list[dict[str, Any]]:
     """Return all predictions for a reaction, newest first. Used by the
     agent to compare model output across runs and by feedback flows."""
-    safe_limit = max(1, min(limit, 100))
+    safe_limit = clamp_limit(limit, 100)
     result = await db.execute(
         text("""
             SELECT id::text, rxn_smiles, conditions, model, confidence,
@@ -169,7 +170,7 @@ async def list_predictions_for_reaction(
         """),
         {"rid": reaction_id, "limit": safe_limit},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 def _json_dumps(value: dict[str, Any]) -> str:

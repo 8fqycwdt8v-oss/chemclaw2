@@ -17,6 +17,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import rows_to_dicts
+
 MAX_STEP_RETRIES = 3
 
 
@@ -69,7 +71,7 @@ async def get_pending_campaign_steps(
         """),
         {"campaign_id": campaign_id},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def list_campaign_steps(
@@ -89,7 +91,7 @@ async def list_campaign_steps(
         """),
         {"campaign_id": campaign_id},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def get_pending_steps_for_campaigns(
@@ -167,7 +169,7 @@ async def get_steps_for_retry(db: AsyncSession) -> list[dict[str, Any]]:
         """),
         {"max_retries": MAX_STEP_RETRIES},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def mark_step_failed(
@@ -339,4 +341,4 @@ async def list_steps_awaiting_approval(
         """),
         {"uid": user_id, "lim": limit},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)

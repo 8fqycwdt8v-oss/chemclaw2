@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from typing import Any
 
 from claude_agent_sdk import SdkMcpTool
@@ -26,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.agent.tool_adapter import wrap_tool
 from api.agent.tool_helpers import _heuristic_propose, _PredictedConditionsPayload
+from api.agent.tool_validation import is_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +175,7 @@ def build_campaign_tools(
 
         if not rxn_smiles or ">>" not in rxn_smiles:
             return {"error": "rxn_smiles must contain '>>' separator"}
-        if drfp_bits is not None and not re.match(r'^[01]{2048}$', drfp_bits):
+        if drfp_bits is not None and not is_fingerprint(drfp_bits):
             return {"error": "drfp_bits must be exactly 2048 binary digits if provided"}
 
         from api.db.queries.reaction_conditions import insert_prediction

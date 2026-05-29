@@ -12,6 +12,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import row_to_dict, rows_to_dicts
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,7 +47,7 @@ async def search_papers(
         """),
         {"q": query, "lim": limit},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def search_external_facts(
@@ -76,7 +78,7 @@ async def search_external_facts(
         """),
         params,
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def lookup_compound_properties(
@@ -94,7 +96,7 @@ async def lookup_compound_properties(
         """),
         {"cid": compound_id},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def upsert_paper(
@@ -222,7 +224,7 @@ async def get_external_fact_by_source_id(
         {"sid": source_id},
     )
     row = result.one_or_none()
-    return dict(row._mapping) if row else None
+    return row_to_dict(row)
 
 
 async def insert_compound_property(

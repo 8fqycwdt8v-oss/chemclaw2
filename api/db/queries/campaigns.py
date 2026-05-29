@@ -17,6 +17,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import rows_to_dicts
+
 # Re-exports from campaign_steps for back-compat.
 from api.db.queries.campaign_steps import (  # noqa: F401
     MAX_STEP_RETRIES,
@@ -149,7 +151,7 @@ async def get_running_campaigns(db: AsyncSession) -> list[dict[str, Any]]:
             ORDER BY updated_at
         """),
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def get_complete_campaigns_missing_wiki(
@@ -180,7 +182,7 @@ async def get_complete_campaigns_missing_wiki(
         """),
         {"lim": limit},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def list_user_campaigns(
@@ -209,7 +211,7 @@ async def list_user_campaigns(
         """),
         params,
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def get_campaign_with_steps(
@@ -242,7 +244,7 @@ async def get_campaign_with_steps(
     )
     return {
         "campaign": dict(campaign_row._mapping),
-        "steps": [dict(r._mapping) for r in steps_result],
+        "steps": rows_to_dicts(steps_result),
     }
 
 

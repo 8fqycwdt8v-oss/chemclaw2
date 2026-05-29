@@ -17,6 +17,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import clamp_limit, validate_enum
+
 logger = logging.getLogger(__name__)
 
 _VALID_SOURCES = frozenset(("eln", "manual", "campaign"))
@@ -49,10 +51,8 @@ async def insert_outcome(
     empty. That sequence is race-safe under concurrent ingest of the same
     ``eln_experiment_id``.
     """
-    if source not in _VALID_SOURCES:
-        raise ValueError(f"source must be one of {sorted(_VALID_SOURCES)!r}, got {source!r}")
-    if status not in _VALID_STATUSES:
-        raise ValueError(f"status must be one of {sorted(_VALID_STATUSES)!r}, got {status!r}")
+    validate_enum(source, _VALID_SOURCES, "source")
+    validate_enum(status, _VALID_STATUSES, "status")
     # CHECK constraint on yield_pct backs this up at the DB level; the
     # Python-side check gives a friendlier error before the SQL round-trip.
     if yield_pct is not None and not (0 <= yield_pct <= 100):
@@ -132,7 +132,7 @@ async def list_outcomes_for_reaction(
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Return outcomes for one reaction, newest first."""
-    safe_limit = max(1, min(limit, 200))
+    safe_limit = clamp_limit(limit, 200)
     result = await db.execute(
         text("""
             SELECT id::text, reaction_id::text,

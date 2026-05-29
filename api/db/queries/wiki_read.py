@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import clamp_limit, row_to_dict, rows_to_dicts
 from api.embeddings import EMBED_DIM
 
 # ── list / search ─────────────────────────────────────────────────────────────
@@ -33,7 +34,7 @@ async def search_wiki_by_fts(
         """),
         {"q": query, "lim": min(limit, 200)},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def semantic_search_wiki(
@@ -46,7 +47,7 @@ async def semantic_search_wiki(
 ) -> list[dict[str, Any]]:
     if len(embedding) != EMBED_DIM:
         raise ValueError(f"embedding must have {EMBED_DIM} dimensions, got {len(embedding)}")
-    safe_limit = min(max(1, limit), 50)
+    safe_limit = clamp_limit(limit, 50)
     archived_clause = "" if include_archived else "AND p.archived = false"
     vec_str = "[" + ",".join(map(str, embedding)) + "]"
     result = await db.execute(
@@ -63,7 +64,7 @@ async def semantic_search_wiki(
         """),
         {"vec": vec_str, "max_dist": max_distance, "pre_limit": safe_limit * 4},
     )
-    rows = [dict(r._mapping) for r in result]
+    rows = rows_to_dicts(result)
 
     # Per-page cap
     seen: dict[str, int] = {}
@@ -100,7 +101,7 @@ async def hybrid_search_wiki(
     predict whether the query benefits from lexical or semantic recall
     (the common case for natural-language wiki questions).
     """
-    safe_limit = min(max(1, limit), 50)
+    safe_limit = clamp_limit(limit, 50)
     # Over-fetch from each leg so RRF has enough candidates to fuse.
     leg_limit = safe_limit * 3
     # Sequential — same SQLAlchemy AsyncSession can't safely run two
@@ -186,9 +187,9 @@ async def list_wiki_needs_review(
             ORDER BY updated_at DESC
             LIMIT :lim
         """),
-        {"uid": user_id, "lim": min(max(1, limit), 200)},
+        {"uid": user_id, "lim": clamp_limit(limit, 200)},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def list_wiki_pages(
@@ -222,7 +223,7 @@ async def list_wiki_pages(
         """),
         params,
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def list_wiki_projects(db: AsyncSession) -> list[str]:
@@ -249,7 +250,7 @@ async def get_wiki_page(
         {"slug": slug},
     )
     row = result.one_or_none()
-    return dict(row._mapping) if row else None
+    return row_to_dict(row)
 
 
 async def get_wiki_page_citations(db: AsyncSession, page_id: str) -> list[dict[str, Any]]:
@@ -261,6 +262,6 @@ async def get_wiki_page_citations(db: AsyncSession, page_id: str) -> list[dict[s
         """),
         {"page_id": page_id},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 

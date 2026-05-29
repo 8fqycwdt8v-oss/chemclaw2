@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import clamp_limit, rows_to_dicts
 from api.db.queries.fp_utils import bit_string_to_pg_bytes, rerank_by_tanimoto
 
 
@@ -23,7 +24,7 @@ async def find_similar_reactions(
     only for the reactions that survive the Tanimoto rerank, so the cost
     scales with ``limit``, not the full HNSW candidate pool.
     """
-    safe_limit = max(1, min(limit, 100))
+    safe_limit = clamp_limit(limit, 100)
     safe_min = max(0.0, min(min_similarity, 1.0))
 
     # bit_string_to_pg_bytes packs the 2048-char 0/1 string into 256 bytes.
@@ -39,7 +40,7 @@ async def find_similar_reactions(
         """),
         {"bits": bit_string_to_pg_bytes(query_fp_bits)},
     )
-    rows = [dict(r._mapping) for r in result]
+    rows = rows_to_dicts(result)
     ranked = rerank_by_tanimoto(rows, query_fp_bits, safe_min, safe_limit)
 
     outcomes_by_reaction: dict[str, list[dict[str, Any]]] = {}

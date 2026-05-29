@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import clamp_limit, row_to_dict, rows_to_dicts, validate_enum
 from api.db.queries.investigations import touch_investigation
 
 logger = logging.getLogger(__name__)
@@ -47,8 +48,7 @@ def elo_update(
     (default 32 from FIDE blitz; pass a smaller value when many low-quality
     rounds are noise-dominating real signal).
     """
-    if winner not in _VALID_WINNERS:
-        raise ValueError(f"winner must be one of {sorted(_VALID_WINNERS)}, got {winner!r}")
+    validate_enum(winner, _VALID_WINNERS, "winner")
     if k <= 0:
         raise ValueError(f"k must be > 0, got {k!r}")
     expected_a = 1.0 / (1.0 + 10.0 ** ((rating_b - rating_a) / 400.0))
@@ -133,11 +133,9 @@ async def list_hypotheses(
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """List hypotheses for an investigation, Elo-desc."""
-    if status is not None and status not in _VALID_HYPOTHESIS_STATUSES:
-        raise ValueError(
-            f"status must be one of {sorted(_VALID_HYPOTHESIS_STATUSES)}, got {status!r}",
-        )
-    safe_limit = min(max(1, limit), 200)
+    if status is not None:
+        validate_enum(status, _VALID_HYPOTHESIS_STATUSES, "status")
+    safe_limit = clamp_limit(limit, 200)
     params: dict[str, Any] = {"iid": investigation_id, "uid": user_id, "lim": safe_limit}
     status_clause = ""
     if status is not None:
@@ -156,7 +154,7 @@ async def list_hypotheses(
         """),
         params,
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)
 
 
 async def get_hypothesis(
@@ -177,7 +175,7 @@ async def get_hypothesis(
         {"hid": hypothesis_id, "uid": user_id},
     )
     row = result.one_or_none()
-    return dict(row._mapping) if row else None
+    return row_to_dict(row)
 
 
 async def retire_hypothesis(
@@ -227,8 +225,7 @@ async def record_pairwise_ranking(
         {ranking_id, hypothesis_a: {id, new_elo_rating},
          hypothesis_b: {id, new_elo_rating}}
     """
-    if winner not in _VALID_WINNERS:
-        raise ValueError(f"winner must be one of {sorted(_VALID_WINNERS)}, got {winner!r}")
+    validate_enum(winner, _VALID_WINNERS, "winner")
     if hypothesis_a_id == hypothesis_b_id:
         raise ValueError("a hypothesis cannot be ranked against itself")
     async with db.begin():
@@ -318,7 +315,7 @@ async def list_recent_rankings(
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Audit-log view. Owner-scoped via the investigation owner check."""
-    safe_limit = min(max(1, limit), 200)
+    safe_limit = clamp_limit(limit, 200)
     result = await db.execute(
         text("""
             SELECT r.id::text, r.hypothesis_a_id::text, r.hypothesis_b_id::text,
@@ -332,4 +329,4 @@ async def list_recent_rankings(
         """),
         {"iid": investigation_id, "uid": user_id, "lim": safe_limit},
     )
-    return [dict(r._mapping) for r in result]
+    return rows_to_dicts(result)

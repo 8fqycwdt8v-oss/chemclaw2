@@ -13,14 +13,13 @@ project's standard kwargs-in / raw-dict-out style and wrapped via
 """
 from __future__ import annotations
 
-import re
-import uuid
 from typing import Any
 
 from claude_agent_sdk import SdkMcpTool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.agent.tool_adapter import wrap_tool
+from api.agent.tool_validation import is_fingerprint, parse_uuid
 
 
 def build_chem_tools(
@@ -37,7 +36,7 @@ def build_chem_tools(
     ) -> dict[str, Any]:
         """Search the compound registry by Morgan fingerprint similarity (Tanimoto ≥ threshold)."""
         from api.db.queries.compounds import find_similar_compounds
-        if not re.match(r'^[01]{2048}$', fingerprint_bits):
+        if not is_fingerprint(fingerprint_bits):
             return {"error": "fingerprint_bits must be exactly 2048 binary digits"}
         async with session_factory() as db:
             results = await find_similar_compounds(
@@ -59,7 +58,7 @@ def build_chem_tools(
         what to investigate next for a reaction step.
         """
         from api.db.queries.reactions import find_similar_reactions
-        if not re.match(r'^[01]{2048}$', rxn_fingerprint_bits):
+        if not is_fingerprint(rxn_fingerprint_bits):
             return {"error": "rxn_fingerprint_bits must be exactly 2048 binary digits"}
         async with session_factory() as db:
             results = await find_similar_reactions(
@@ -80,7 +79,7 @@ def build_chem_tools(
         be cited. Compute the DRFP bits with mcp-rxnfp.compute_drfp first.
         """
         from api.db.queries.reactions import find_neighbor_conditions
-        if not re.match(r'^[01]{2048}$', rxn_fingerprint_bits):
+        if not is_fingerprint(rxn_fingerprint_bits):
             return {"error": "rxn_fingerprint_bits must be exactly 2048 binary digits"}
         async with session_factory() as db:
             neighbors = await find_neighbor_conditions(
@@ -99,9 +98,8 @@ def build_chem_tools(
         ``reaction_outcomes``. Use this when you have a specific reaction
         in the registry and want to see what's already been tried.
         """
-        try:
-            rid = str(uuid.UUID(reaction_id.strip()))
-        except (ValueError, AttributeError):
+        rid = parse_uuid(reaction_id)
+        if rid is None:
             return {"error": "reaction_id must be a UUID"}
         from api.db.queries.reaction_outcomes import list_outcomes_for_reaction
         async with session_factory() as db:

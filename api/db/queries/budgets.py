@@ -7,6 +7,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import row_to_dict
+
 BudgetPeriod = str  # 'day' | 'week' | 'month'
 
 
@@ -28,7 +30,7 @@ async def get_project_budget(db: AsyncSession, project_key: str) -> dict[str, An
         {"pk": project_key},
     )
     row = result.one_or_none()
-    return dict(row._mapping) if row else None
+    return row_to_dict(row)
 
 
 async def get_budget_with_spend(
