@@ -167,6 +167,19 @@ async def download_item(
     return resp.content
 
 
+async def download_by_url(url: str, *, timeout: float = 60.0) -> bytes:
+    """Download a file from a Graph delta item's `@microsoft.graph.downloadUrl`.
+
+    That URL is short-lived and pre-authenticated, so we send NO Authorization
+    header — which avoids forwarding the Graph bearer cross-host to the
+    `*.sharepoint.com` download origin (the concern logged for `download_item`).
+    The host is on ALLOWED_DOMAINS and `_fetch_validated` pins/validates it.
+    """
+    resp = await _fetch_validated(url, enforce_domain_allowlist=True, timeout=timeout)
+    resp.raise_for_status()
+    return resp.content
+
+
 def select_changed_files(
     items: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[str]]:
