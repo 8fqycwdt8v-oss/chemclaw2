@@ -76,9 +76,12 @@ class GraphConfig(BaseModel):
 async def acquire_token(config: GraphConfig) -> str:
     """Acquire an app-only Graph access token via the client-credentials flow.
 
-    MSAL's `acquire_token_for_client` is synchronous and caches tokens
-    internally; we run it in the default executor so the blocking call does not
-    stall the event loop. Raises GraphError on failure — the Graph error
+    MSAL's `acquire_token_for_client` is synchronous, so we run it in the
+    default executor to avoid stalling the event loop. A new
+    ConfidentialClientApplication is built per call, so MSAL's in-process token
+    cache does not persist between calls — acceptable because the sync worker
+    acquires once per (infrequent) run; revisit with a cached app instance if a
+    hot path ever calls this. Raises GraphError on failure — the Graph error
     detail is logged server-side, never surfaced to a client (CLAUDE.md
     security-4).
     """
