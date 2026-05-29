@@ -75,6 +75,7 @@ Define a reusable, branching computational workflow (e.g. for each candidate: co
 Configure per-step retry behavior on a brittle computation so a transient failure doesn't kill the whole batch.
 3.5 R&D project lead
 Open the project's wiki landing page and see a curated, auto-fresh summary of the program's state.
+Have the wiki stay current automatically — the agent screens all connected source systems (ELN, LIMS, instruments, document repositories, literature feeds) on a regular cadence without user prompting, extracts new knowledge, and updates the knowledge graph and wiki pages.
 See the contradictions backlog for the project and triage it.
 See which wiki pages have human edits, which are system-generated only, and which are stale.
 Receive proactive notifications when something significant happens (a campaign converges, a foundational claim is invalidated, a new external compound or paper appears that's structurally similar to a project lead).
@@ -143,6 +144,7 @@ Watch a shadow-testing dashboard for prompt and skill variants: which versions a
 Cap per-session input-token and tool-call budgets, with hard ceilings the agent cannot exceed even mid-run.
 3.10 Any chemist (cross-cutting)
 Ask a question in natural language; receive a cited answer.
+Trust that every answer is grounded — the agent first consults the knowledge graph and wiki for synthesized knowledge, then reads the underlying source documents to verify each claim traces back to primary evidence before responding.
 Receive wiki page and compound/reaction links in the answer so I can navigate to durable knowledge.
 See exactly which sources were used.
 See the confidence level of each claim.
