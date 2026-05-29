@@ -1,8 +1,8 @@
-"""Tests for `api.auth` — JWT validation, mock-auth, svc tokens, admin.
+"""Tests for `api.auth` — Entra JWT validation, mock-auth, svc tokens, admin.
 
 These are pure-unit tests. JWT signing keys are generated with `cryptography`
 at test time; the JWKS client is monkey-patched to return the synthetic key.
-No network, no real Clerk, no DB.
+No network, no real Entra, no DB.
 """
 from __future__ import annotations
 
@@ -16,6 +16,12 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
+
+# Entra test fixtures: tenant, backend audience, derived issuer, app role.
+_TENANT = "test-tenant-id"
+_AUD = "api-client-id-123"
+_ISSUER = f"https://login.microsoftonline.com/{_TENANT}/v2.0"
+_ROLE = "chemclaw.user"
 
 
 @pytest.fixture
@@ -46,6 +52,16 @@ def patched_jwks(monkeypatch: pytest.MonkeyPatch, rsa_key) -> rsa.RSAPublicKey:
     return pub
 
 
+@pytest.fixture
+def entra_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set the Entra config + clear the bypass paths for JWT-path tests."""
+    monkeypatch.delenv("ALLOW_MOCK_AUTH", raising=False)
+    monkeypatch.delenv("CHEMCLAW2_SERVICE_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_REQUIRED_ROLE", raising=False)
+    monkeypatch.setenv("AZURE_TENANT_ID", _TENANT)
+    monkeypatch.setenv("AZURE_BACKEND_CLIENT_ID", _AUD)
+
+
 def _sign(priv: rsa.RSAPrivateKey, claims: dict[str, Any]) -> str:
     pem = priv.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -53,6 +69,19 @@ def _sign(priv: rsa.RSAPrivateKey, claims: dict[str, Any]) -> str:
         encryption_algorithm=serialization.NoEncryption(),
     )
     return jwt.encode(claims, pem, algorithm="RS256")
+
+
+def _claims(oid: str = "oid-abc", **extra: Any) -> dict[str, Any]:
+    now = int(time.time())
+    base: dict[str, Any] = {
+        "oid": oid,
+        "iss": _ISSUER,
+        "aud": _AUD,
+        "iat": now,
+        "exp": now + 3600,
+    }
+    base.update(extra)
+    return base
 
 
 # ── validate_auth_config ─────────────────────────────────────────────────────
@@ -63,36 +92,41 @@ def test_validate_refuses_mock_auth_in_prod(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setenv("ENV", "production")
     monkeypatch.setenv("ALLOW_MOCK_AUTH", "1")
-    monkeypatch.setenv("CLERK_ISSUER", "https://clerk.example.com")
     with pytest.raises(RuntimeError, match="ALLOW_MOCK_AUTH"):
         validate_auth_config()
 
 
-def test_validate_requires_clerk_issuer_in_prod(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_requires_entra_config_in_prod(monkeypatch: pytest.MonkeyPatch) -> None:
     from api.auth import validate_auth_config
 
     monkeypatch.setenv("ENV", "production")
     monkeypatch.delenv("ALLOW_MOCK_AUTH", raising=False)
-    monkeypatch.delenv("CLERK_ISSUER", raising=False)
-    with pytest.raises(RuntimeError, match="CLERK_ISSUER"):
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_BACKEND_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_REQUIRED_ROLE", raising=False)
+    with pytest.raises(RuntimeError, match="AZURE_TENANT_ID"):
         validate_auth_config()
 
 
-def test_validate_allows_missing_clerk_issuer_in_dev(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_allows_missing_entra_config_in_dev(monkeypatch: pytest.MonkeyPatch) -> None:
     from api.auth import validate_auth_config
 
     monkeypatch.setenv("ENV", "dev")
-    monkeypatch.delenv("CLERK_ISSUER", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_BACKEND_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_REQUIRED_ROLE", raising=False)
     # Must not raise.
     validate_auth_config()
 
 
-def test_validate_succeeds_in_prod_with_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_succeeds_in_prod_with_config(monkeypatch: pytest.MonkeyPatch) -> None:
     from api.auth import validate_auth_config
 
     monkeypatch.setenv("ENV", "production")
     monkeypatch.delenv("ALLOW_MOCK_AUTH", raising=False)
-    monkeypatch.setenv("CLERK_ISSUER", "https://clerk.example.com")
+    monkeypatch.setenv("AZURE_TENANT_ID", _TENANT)
+    monkeypatch.setenv("AZURE_BACKEND_CLIENT_ID", _AUD)
+    monkeypatch.setenv("AZURE_REQUIRED_ROLE", _ROLE)
     validate_auth_config()
 
 
@@ -128,6 +162,7 @@ async def test_mock_auth_disabled_when_env_unset(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.delenv("ALLOW_MOCK_AUTH", raising=False)
     monkeypatch.delenv("CHEMCLAW2_SERVICE_SECRET", raising=False)
+    monkeypatch.setenv("AZURE_TENANT_ID", _TENANT)
     with pytest.raises(HTTPException) as ei:
         await get_current_user("Bearer mock:attacker")
     assert ei.value.status_code == 401
@@ -156,34 +191,25 @@ async def test_mock_auth_rejects_empty_user(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_valid_jwt_returns_sub(
-    monkeypatch: pytest.MonkeyPatch, rsa_key, patched_jwks
+async def test_valid_jwt_returns_oid(
+    entra_env, rsa_key, patched_jwks
 ) -> None:
     from api.auth import get_current_user
 
-    monkeypatch.delenv("ALLOW_MOCK_AUTH", raising=False)
-    monkeypatch.delenv("CHEMCLAW2_SERVICE_SECRET", raising=False)
-    monkeypatch.delenv("CLERK_ISSUER", raising=False)
-
     priv, _ = rsa_key
-    now = int(time.time())
-    token = _sign(priv, {"sub": "user-abc", "iat": now, "exp": now + 3600})
-    assert await get_current_user(f"Bearer {token}") == "user-abc"
+    token = _sign(priv, _claims(oid="user-oid-abc"))
+    assert await get_current_user(f"Bearer {token}") == "user-oid-abc"
 
 
 @pytest.mark.asyncio
 async def test_expired_jwt_raises_401(
-    monkeypatch: pytest.MonkeyPatch, rsa_key, patched_jwks
+    entra_env, rsa_key, patched_jwks
 ) -> None:
     from api.auth import get_current_user
 
-    monkeypatch.delenv("ALLOW_MOCK_AUTH", raising=False)
-    monkeypatch.delenv("CHEMCLAW2_SERVICE_SECRET", raising=False)
-    monkeypatch.delenv("CLERK_ISSUER", raising=False)
-
     priv, _ = rsa_key
     now = int(time.time())
-    token = _sign(priv, {"sub": "user-abc", "iat": now - 7200, "exp": now - 3600})
+    token = _sign(priv, _claims(iat=now - 7200, exp=now - 3600))
     with pytest.raises(HTTPException) as ei:
         await get_current_user(f"Bearer {token}")
     assert ei.value.status_code == 401
@@ -191,18 +217,15 @@ async def test_expired_jwt_raises_401(
 
 
 @pytest.mark.asyncio
-async def test_jwt_missing_sub_raises_401(
-    monkeypatch: pytest.MonkeyPatch, rsa_key, patched_jwks
+async def test_jwt_missing_oid_raises_401(
+    entra_env, rsa_key, patched_jwks
 ) -> None:
     from api.auth import get_current_user
 
-    monkeypatch.delenv("ALLOW_MOCK_AUTH", raising=False)
-    monkeypatch.delenv("CHEMCLAW2_SERVICE_SECRET", raising=False)
-    monkeypatch.delenv("CLERK_ISSUER", raising=False)
-
     priv, _ = rsa_key
-    now = int(time.time())
-    token = _sign(priv, {"iat": now, "exp": now + 3600})
+    claims = _claims()
+    del claims["oid"]
+    token = _sign(priv, claims)
     with pytest.raises(HTTPException) as ei:
         await get_current_user(f"Bearer {token}")
     assert ei.value.status_code == 401
@@ -210,27 +233,87 @@ async def test_jwt_missing_sub_raises_401(
 
 @pytest.mark.asyncio
 async def test_jwt_wrong_issuer_raises_401(
-    monkeypatch: pytest.MonkeyPatch, rsa_key, patched_jwks
+    entra_env, rsa_key, patched_jwks
 ) -> None:
-    """When CLERK_ISSUER is set, jwt.decode validates the `iss` claim and
-    rejects tokens with a mismatching issuer."""
+    """jwt.decode validates the `iss` claim against the tenant's v2.0 issuer."""
     from api.auth import get_current_user
 
-    monkeypatch.delenv("ALLOW_MOCK_AUTH", raising=False)
-    monkeypatch.delenv("CHEMCLAW2_SERVICE_SECRET", raising=False)
-    monkeypatch.setenv("CLERK_ISSUER", "https://expected.clerk.example.com")
-
     priv, _ = rsa_key
-    now = int(time.time())
-    token = _sign(priv, {
-        "sub": "user-abc",
-        "iat": now,
-        "exp": now + 3600,
-        "iss": "https://attacker.example.com",
-    })
+    token = _sign(priv, _claims(iss="https://login.microsoftonline.com/attacker/v2.0"))
     with pytest.raises(HTTPException) as ei:
         await get_current_user(f"Bearer {token}")
     assert ei.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_jwt_wrong_audience_raises_401(
+    entra_env, rsa_key, patched_jwks
+) -> None:
+    """A token minted for a different API (wrong aud) is rejected."""
+    from api.auth import get_current_user
+
+    priv, _ = rsa_key
+    token = _sign(priv, _claims(aud="some-other-api"))
+    with pytest.raises(HTTPException) as ei:
+        await get_current_user(f"Bearer {token}")
+    assert ei.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_jwt_app_id_uri_audience_accepted(
+    entra_env, rsa_key, patched_jwks
+) -> None:
+    """The App ID URI form (api://<client-id>) is also a valid audience."""
+    from api.auth import get_current_user
+
+    priv, _ = rsa_key
+    token = _sign(priv, _claims(aud=f"api://{_AUD}"))
+    assert await get_current_user(f"Bearer {token}") == "oid-abc"
+
+
+# ── App-role gate (AD-group restriction) ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_required_role_present_allows(
+    entra_env, monkeypatch: pytest.MonkeyPatch, rsa_key, patched_jwks
+) -> None:
+    from api.auth import get_current_user
+
+    monkeypatch.setenv("AZURE_REQUIRED_ROLE", _ROLE)
+    priv, _ = rsa_key
+    token = _sign(priv, _claims(oid="member", roles=[_ROLE]))
+    assert await get_current_user(f"Bearer {token}") == "member"
+
+
+@pytest.mark.asyncio
+async def test_required_role_missing_raises_403(
+    entra_env, monkeypatch: pytest.MonkeyPatch, rsa_key, patched_jwks
+) -> None:
+    """A valid token without the required app role is forbidden (group gate)."""
+    from api.auth import get_current_user
+
+    monkeypatch.setenv("AZURE_REQUIRED_ROLE", _ROLE)
+    priv, _ = rsa_key
+    token = _sign(priv, _claims(oid="outsider", roles=["some.other.role"]))
+    with pytest.raises(HTTPException) as ei:
+        await get_current_user(f"Bearer {token}")
+    assert ei.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_required_role_absent_claim_raises_403(
+    entra_env, monkeypatch: pytest.MonkeyPatch, rsa_key, patched_jwks
+) -> None:
+    """No roles claim at all (not assigned to the app) → forbidden."""
+    from api.auth import get_current_user
+
+    monkeypatch.setenv("AZURE_REQUIRED_ROLE", _ROLE)
+    priv, _ = rsa_key
+    token = _sign(priv, _claims(oid="unassigned"))
+    with pytest.raises(HTTPException) as ei:
+        await get_current_user(f"Bearer {token}")
+    assert ei.value.status_code == 403
 
 
 # ── Svc tokens ───────────────────────────────────────────────────────────────

@@ -1,0 +1,6 @@
+# chemclaw2 Streamlit frontend — Entra/MSAL login + backend client.
+# Kept separate from the backend's pyproject.toml: the frontend is its own
+# deployable service and is not collected by the backend test suite.
+streamlit>=1.42
+msal>=1.31
+httpx>=0.28

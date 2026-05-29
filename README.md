@@ -12,7 +12,7 @@ README is the operator's guide: setup, deploy, run, observe.
 ```bash
 git clone https://github.com/8fqycwdt8v-oss/chemclaw2
 cd chemclaw2
-cp .env.example .env       # fill ANTHROPIC_API_KEY, OPENAI_API_KEY, CLERK_DOMAIN
+cp .env.example .env       # fill ANTHROPIC_API_KEY, OPENAI_API_KEY, AZURE_TENANT_ID
 docker compose up          # Postgres+pgvector, migrations, app, worker
 curl localhost:8080/api/readiness
 ```
@@ -122,7 +122,9 @@ naming conventions.
 
 See `.env.example` — every key documented inline. Required for any
 deploy: `DATABASE_URL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-`CLERK_DOMAIN`, `CLERK_ISSUER`, `CLERK_JWKS_URL`, `ENV`, `ADMIN_USER_IDS`.
+`AZURE_TENANT_ID`, `AZURE_BACKEND_CLIENT_ID`, `AZURE_REQUIRED_ROLE`, `ENV`,
+`ADMIN_USER_IDS`. The Streamlit frontend (Entra/MSAL login) lives in
+`frontend/` — see `frontend/README.md`.
 
 ## Migrations
 

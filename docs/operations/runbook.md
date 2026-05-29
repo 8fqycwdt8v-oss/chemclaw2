@@ -64,14 +64,19 @@ LIMIT 20;
 
 **Symptom**: `jwks_client_error` in logs; all auth returning 401.
 
-**Confirm**: Clerk dashboard → JWKS endpoint status.
+**Confirm**: Entra tenant reachable —
+`https://login.microsoftonline.com/<AZURE_TENANT_ID>/discovery/v2.0/keys`.
 
 **Fix**:
 - Network blip — wait. JWKS cache TTL is 1 h; cache is in-process so a
   restart re-fetches.
-- Clerk rotated keys — chemclaw2 should pick up automatically on TTL
+- Entra rotated keys — chemclaw2 should pick up automatically on TTL
   expiry. If urgent: `fly machines restart --process-group web`.
-- Wrong `CLERK_JWKS_URL` env var: confirm against Clerk dashboard.
+- Wrong `AZURE_TENANT_ID`: confirm the tenant GUID; the JWKS URL and issuer
+  derive from it.
+- All users 401 right after deploy: check the backend app registration's
+  manifest has `accessTokenAcceptedVersion=2` (v1 tokens use a different
+  issuer and are rejected).
 
 ## MCP subprocess hang
 
@@ -107,7 +112,7 @@ abuse — revoke admin perms / block at the edge.
 **Symptom**: `scheduled_substance_attempt` log lines climbing.
 
 **Action**: each is one chat-turn block. Look at the `prompt_len` field
-to gauge volume. Cross-reference Clerk user ids; coordinate with policy
+to gauge volume. Cross-reference Entra user oids; coordinate with policy
 team.
 
 ## CORS misconfig at deploy

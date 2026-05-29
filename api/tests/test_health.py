@@ -6,7 +6,6 @@ import pytest
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/chemclaw2_test")
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-placeholder")
 os.environ.setdefault("OPENAI_API_KEY", "sk-placeholder")
-os.environ.setdefault("CLERK_SECRET_KEY", "sk_test_placeholder")
 
 
 @pytest.fixture(scope="module")

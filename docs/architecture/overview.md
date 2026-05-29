@@ -84,7 +84,7 @@ Bayesian optimisation, a code sandbox, a tabular-data tool).
 | Request ID     | `api/observability/middleware.py` + contextvars |
 | Structured log | `api/observability/logging.py` (LOG_FORMAT)     |
 | Rate limiting  | `api/db/queries/rate_limit.py` factory          |
-| Auth           | `api/auth.py` (Clerk JWT + optional service tokens) |
+| Auth           | `api/auth.py` (Entra ID JWT + optional service tokens) |
 | Substance gate | `api/agent/hooks.py` (chat path only)           |
 | Secret scrub   | `api/agent/hooks.py` `_SECRET_PATTERNS`         |
 | SSRF guard     | `api/agent/tool_helpers.py` `_fetch_validated`  |

@@ -281,7 +281,6 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chemclaw2_test
           ANTHROPIC_API_KEY: sk-ant-placeholder
           OPENAI_API_KEY: sk-placeholder
-          CLERK_SECRET_KEY: sk_test_placeholder
 
       - name: Upload coverage report
         if: matrix.lane == 'cheap' && always()

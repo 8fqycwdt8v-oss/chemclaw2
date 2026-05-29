@@ -64,7 +64,7 @@ def _escape_byte(m: re.Match[str]) -> str:
 def make_key(bucket: str, identifier: str | None) -> str:
     """Compose a rate-limit bucket name.
 
-    The ':' character is reserved as the bucket/identifier separator. Clerk
+    The ':' character is reserved as the bucket/identifier separator. Entra
     user ids and other external identifiers are not guaranteed colon-free,
     and lossy sanitization (replace unsafe chars with '_') would create
     cross-user bucket collisions. Hex-escape the identifier instead.

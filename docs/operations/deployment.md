@@ -13,10 +13,10 @@ fly secrets set \
     ANTHROPIC_API_KEY=sk-ant-… \
     OPENAI_API_KEY=sk-… \
     DATABASE_URL=postgres://… \
-    CLERK_DOMAIN=clerk.example.com \
-    CLERK_ISSUER=https://clerk.example.com \
-    CLERK_JWKS_URL=https://clerk.example.com/.well-known/jwks.json \
-    ADMIN_USER_IDS=user_xxx \
+    AZURE_TENANT_ID=00000000-0000-0000-0000-000000000000 \
+    AZURE_BACKEND_CLIENT_ID=00000000-0000-0000-0000-000000000000 \
+    AZURE_REQUIRED_ROLE=chemclaw.user \
+    ADMIN_USER_IDS=<entra-oid> \
     CORS_ALLOWED_ORIGINS=https://app.example.com \
     ENV=prod \
     LOG_FORMAT=json

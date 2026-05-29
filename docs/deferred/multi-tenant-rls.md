@@ -8,7 +8,7 @@ Deferred. Trigger: tenants > 1.
 
 RLS was disabled across 24 tables (migrations 0034 + 0043) because the
 `USING (true)` stubs were a footgun, not enforcement. App-layer authz
-via Clerk + owner-scoped queries is the actual enforcement today.
+via Entra + owner-scoped queries is the actual enforcement today.
 
 ## Re-enable checklist
 
