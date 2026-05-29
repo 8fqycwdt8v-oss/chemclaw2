@@ -6,6 +6,7 @@ anchored to a corpus investigation. Also covers corpus get-or-create idempotency
 """
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -76,9 +77,14 @@ async def test_ingest_populates_kg(session_factory, monkeypatch, user_id) -> Non
     fact = by_content["Pd/C reduces alkenes."]
     assert fact["kind"] == "fact"
     assert fact["confidence"] == 0.9
-    # Provenance points back to the source document.
-    assert fact["payload"]["source"]["type"] == "document"
-    assert fact["payload"]["source"]["wiki_slug"] == result["wiki_slug"]
+    # Provenance points back to the source document. asyncpg returns the jsonb
+    # column as a string here (no codec registered), so parse defensively —
+    # the same pattern the agent tools use when reading entry payloads.
+    payload = fact["payload"]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    assert payload["source"]["type"] == "document"
+    assert payload["source"]["wiki_slug"] == result["wiki_slug"]
 
 
 @pytest.mark.asyncio
