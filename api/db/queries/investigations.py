@@ -147,19 +147,34 @@ async def get_or_create_corpus_investigation(
     principle create two, but the drive-sync worker holds a per-drive advisory
     lock and the upload path is low-frequency, so the benign duplicate is
     acceptable rather than adding an index. Owner-scoped on `created_by`.
+
+    The SELECT and the fallback INSERT share one `db.begin()` block: a
+    SQLAlchemy 2.0 async SELECT auto-begins a transaction, so delegating to
+    `create_investigation` (which opens its own `db.begin()`) would raise "a
+    transaction is already begun" — the read-then-begin antipattern noted in
+    BACKLOG.md. Inlining the insert keeps it to a single transaction.
     """
-    existing = await db.execute(
-        text("""
-            SELECT id::text
-            FROM investigations
-            WHERE created_by = :uid AND title = :title
-            ORDER BY created_at
-            LIMIT 1
-        """),
-        {"uid": created_by, "title": title},
-    )
-    row = existing.first()
-    if row is not None:
-        return row[0]
-    return await create_investigation(db, title, objective, created_by)
+    async with db.begin():
+        existing = await db.execute(
+            text("""
+                SELECT id::text
+                FROM investigations
+                WHERE created_by = :uid AND title = :title
+                ORDER BY created_at
+                LIMIT 1
+            """),
+            {"uid": created_by, "title": title},
+        )
+        row = existing.first()
+        if row is not None:
+            return row[0]
+        created = await db.execute(
+            text("""
+                INSERT INTO investigations (session_id, title, objective, created_by)
+                VALUES (NULL, :title, :obj, :uid)
+                RETURNING id::text
+            """),
+            {"title": title, "obj": objective, "uid": created_by},
+        )
+        return created.scalar_one()
 
