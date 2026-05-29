@@ -67,9 +67,26 @@ async def test_update_campaign_status_denies_other_user(session_factory):
 
     async with session_factory() as db:
         async with db.begin():
-            await update_campaign_status(db, cid, attacker, "running")
+            advanced = await update_campaign_status(db, cid, attacker, "running")
 
+    # A non-owner update must touch no rows AND report failure, so the caller
+    # (confirm_synthesis_plan) can fail closed instead of inserting steps.
+    assert advanced is False
     assert await _status(session_factory, cid) == "planning"
+
+
+@pytest.mark.asyncio
+async def test_update_campaign_status_owner_succeeds(session_factory):
+    """The owner's update transitions the row and returns True."""
+    owner = f"owner-{uuid.uuid4().hex[:8]}"
+    cid = await _new_campaign(session_factory, owner, status="planning")
+
+    async with session_factory() as db:
+        async with db.begin():
+            advanced = await update_campaign_status(db, cid, owner, "running")
+
+    assert advanced is True
+    assert await _status(session_factory, cid) == "running"
 
 
 @pytest.mark.asyncio
@@ -112,8 +129,9 @@ async def test_update_campaign_status_rejects_terminal_source(session_factory):
 
     async with session_factory() as db:
         async with db.begin():
-            await update_campaign_status(db, cid, owner, "running")
+            advanced = await update_campaign_status(db, cid, owner, "running")
 
+    assert advanced is False
     assert await _status(session_factory, cid) == "complete"
 
 
@@ -125,8 +143,9 @@ async def test_system_advance_rejects_terminal_source(session_factory):
 
     async with session_factory() as db:
         async with db.begin():
-            await system_advance_campaign(db, cid, "running")
+            advanced = await system_advance_campaign(db, cid, "running")
 
+    assert advanced is False
     assert await _status(session_factory, cid) == "failed"
 
 
