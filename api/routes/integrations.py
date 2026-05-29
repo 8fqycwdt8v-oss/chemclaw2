@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth import get_current_user
 from api.db.connection import get_db
 from api.db.queries.compounds import insert_compound
+from api.db.queries.investigations import get_or_create_corpus_investigation
 from api.db.queries.knowledge import upsert_external_fact
 from api.db.queries.rate_limit import pg_rate_limit, rate_limit
 from api.integrations.extractors import (
@@ -113,10 +114,11 @@ async def upload_document(
         "basic",
         description=(
             "'basic' (default) extracts text, detects DOI, and fetches "
-            "CrossRef metadata. 'full' additionally runs an LLM entity-"
-            "extraction pass to pull compound mentions and citations out "
-            "of the body text and resolve compound names to SMILES via "
-            "PubChem. 'full' adds ~10-20 s of latency and costs LLM tokens."
+            "CrossRef metadata. 'full' additionally runs LLM passes to pull "
+            "compound mentions + citations (resolved to SMILES via PubChem) "
+            "and to extract knowledge-graph facts/evidence + hypotheses into "
+            "a per-user corpus investigation. 'full' adds latency and LLM "
+            "token cost."
         ),
     ),
     db: AsyncSession = Depends(get_db),
@@ -164,6 +166,17 @@ async def upload_document(
             status_code=415, detail="File does not appear to be a valid Office document"
         )
 
+    # In full mode, anchor extracted knowledge to a per-user "uploads" corpus
+    # investigation so the facts/hypotheses are queryable as one thread.
+    investigation_id: str | None = None
+    if extract == "full":
+        investigation_id = await get_or_create_corpus_investigation(
+            db,
+            title="Document uploads",
+            objective="Knowledge extracted from documents uploaded via the API.",
+            created_by=user_id,
+        )
+
     try:
         return await ingest_document(
             db,
@@ -172,6 +185,8 @@ async def upload_document(
             content_type=content_type,
             user_id=user_id,
             extract=extract,
+            extract_kg=(extract == "full"),
+            investigation_id=investigation_id,
         )
     except UnsupportedContentType:
         raise HTTPException(status_code=415, detail=f"Unsupported file type '{content_type}'") from None
