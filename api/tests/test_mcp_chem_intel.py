@@ -67,6 +67,7 @@ def test_classify_esterification() -> None:
     # Acetic acid + methanol -> methyl acetate.
     res = classify_reaction("CC(=O)O.CO>>CC(=O)OC")
     assert res["reaction_class"] == CLASS_ESTERIFICATION
+    assert res["matched"] is True
 
 
 def test_classify_unmatched_returns_other() -> None:
@@ -77,10 +78,28 @@ def test_classify_unmatched_returns_other() -> None:
 
 def test_classify_bare_reactants_without_product() -> None:
     # No '>' separator — treated as reactants only; the no-product-gate
-    # hydrolysis-style rules can still fire, but amide formation needs the
-    # product gate so this should fall through to 'other' here.
+    # rules can still fire, but the SMILES below matches nothing.
     res = classify_reaction("CCCC")
     assert res["reaction_class"] == CLASS_OTHER
+
+
+def test_classify_product_gated_rule_unconfirmed_without_product() -> None:
+    # Acid chloride + amine *could* form an amide, but with no product
+    # supplied the tool must NOT assert matched=True — it returns the class
+    # as an unconfirmed candidate (matched=False + note). Over-claiming here
+    # would mislead an agent that trusts `matched`.
+    res = classify_reaction("CC(=O)Cl.NCC")
+    assert res["reaction_class"] == CLASS_AMIDE_FORMATION
+    assert res["matched"] is False
+    assert "note" in res
+
+
+def test_classify_wrong_product_is_not_amide() -> None:
+    # Supplying a product that doesn't contain an amide must fall through to
+    # 'other' — consistent with (never weaker than) the no-product case.
+    res = classify_reaction("CC(=O)Cl.NCC>>CCCCCCCC")
+    assert res["reaction_class"] == CLASS_OTHER
+    assert res["matched"] is False
 
 
 def test_classify_empty_raises() -> None:
