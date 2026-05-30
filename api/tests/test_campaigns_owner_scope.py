@@ -25,25 +25,7 @@ from api.db.queries.campaigns import (
     system_advance_campaign,
     update_campaign_status,
 )
-
-
-async def _new_campaign(session_factory, user_id: str, status: str = "planning") -> str:
-    async with session_factory() as db:
-        async with db.begin():
-            result = await db.execute(
-                text("""
-                    INSERT INTO synthesis_campaigns (created_by, session_id, target_smiles, status)
-                    VALUES (:uid, :sid, :target, :status)
-                    RETURNING id::text
-                """),
-                {
-                    "uid": user_id,
-                    "sid": f"sess-{uuid.uuid4().hex[:12]}",
-                    "target": "CCO",
-                    "status": status,
-                },
-            )
-            return result.scalar_one()
+from api.tests._factories import new_campaign as _new_campaign
 
 
 async def _status(session_factory, campaign_id: str) -> str:

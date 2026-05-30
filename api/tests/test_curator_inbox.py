@@ -28,21 +28,6 @@ async def _noop_embed(texts: list[str]) -> list[list[float]]:
     return [[0.0] * EMBED_DIM for _ in texts]
 
 
-async def _new_campaign(session_factory, user_id: str) -> str:
-    async with session_factory() as db:
-        async with db.begin():
-            result = await db.execute(
-                text("""
-                    INSERT INTO synthesis_campaigns
-                        (created_by, session_id, target_smiles, status)
-                    VALUES (:uid, :sid, 'CCO', 'running')
-                    RETURNING id::text
-                """),
-                {"uid": user_id, "sid": f"sess-{uuid.uuid4().hex[:12]}"},
-            )
-            return result.scalar_one()
-
-
 # ── query-level tests (async, no TestClient) ─────────────────────────────────
 
 
