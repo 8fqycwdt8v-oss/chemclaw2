@@ -50,7 +50,6 @@ import asyncio
 import base64
 import functools
 import logging
-import os
 import resource
 import shutil
 import signal
@@ -383,28 +382,30 @@ async def run_python(
                 try:
                     proc.terminate()
                 except ProcessLookupError:
-                    pass
-                except Exception:
-                    pass
+                    pass  # already exited — normal race, nothing to log
+                except Exception as e:
+                    logger.debug("sandbox terminate failed: %s", e)
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=2.0)
                 except (TimeoutError, ProcessLookupError):
                     try:
                         proc.kill()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("sandbox kill failed: %s", e)
                     try:
                         await proc.wait()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("sandbox post-kill reap failed: %s", e)
                 # The pipes may have unread bytes; try one final non-blocking read.
                 try:
                     stdout_b = await proc.stdout.read() if proc.stdout else b""
-                except Exception:
+                except Exception as e:
+                    logger.debug("sandbox final stdout read failed: %s", e)
                     stdout_b = b""
                 try:
                     stderr_b = await proc.stderr.read() if proc.stderr else b""
-                except Exception:
+                except Exception as e:
+                    logger.debug("sandbox final stderr read failed: %s", e)
                     stderr_b = b""
                 duration_ms = int((time.monotonic() - start) * 1000)
                 return SandboxResult(
@@ -498,9 +499,3 @@ __all__ = [
     "run_python",
     "summary",
 ]
-
-
-# Silence the unused-import warning for `os` — kept for documentation
-# of the os.setrlimit dependency tree even though `resource` does the
-# actual work.
-_ = os
