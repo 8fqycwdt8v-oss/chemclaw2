@@ -362,7 +362,14 @@ def test_propose_via_bofire_gp_path_with_full_history(
 
     Only runs on the heavy CI lane — the [opt] extras (~2 GB) are not
     in the cheap lane's install. The test skips automatically there
-    via `importorskip("bofire")` + `importorskip("torch")`.
+    via `importorskip` on bofire / torch / botorch.
+
+    `botorch` is the canonical GP dependency — `_bofire_optimization_available`
+    probes exactly `import botorch`, and the stage-2 path falls back to LHS
+    (`bofire-lhs-fallback-no-botorch`) when it can't import. Gate the test on
+    it too: a heavy env where botorch installs but fails to import (a
+    botorch/torch version skew) would otherwise assert the GP path and fail,
+    when the correct behaviour is to skip — same contract as torch above.
 
     Verifies the stage-2 contract: `strategy` reports `bofire-sobo-qlei`,
     `n_experiments_fitted` matches the input count, and each proposal
@@ -372,6 +379,7 @@ def test_propose_via_bofire_gp_path_with_full_history(
     """
     pytest.importorskip("bofire")
     pytest.importorskip("torch")
+    pytest.importorskip("botorch")
     from api.db.queries.optimization import propose_via_bofire
 
     # Lower the GP-min threshold to keep the test runtime modest — fitting
