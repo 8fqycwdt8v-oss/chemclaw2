@@ -16,6 +16,10 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 
 ## Open
 
+### CI heavy lane red on main (2026-05-30)
+
+- The `ci (heavy)` lane (installs `[opt,retrosynth]` = bofire/torch/aizynthfinder + runs `heavy`-marked tests) is **failing on `main` independent of any one PR** — PR #167's merge commit shows both heavy lanes red with cheap green, and it was merged anyway. PR #168 (mcp_chem_intel) reproduces the identical pattern: cheap green (runs the new tests + ruff + mypy), heavy red. The new MCP package adds no new root/heavy dependency and no `heavy`-marked test, so it is not the cause. Action: pull the heavy-lane pytest log, identify the failing `heavy` test (bofire/torch/aizynthfinder), and xfail or fix it so the lane is a real gate again.
+
 ### External meta-model MCP servers (2026-05-30 — merge of forward/retro/eln repos)
 
 Merged the three sibling repos (`chemclaw2_forward`, `chemclaw2_retrosynthesis`, `eln_structurer`) by **extracting their always-on, dependency-light primitives** into a single new stdio MCP server `mcp_chem_intel` (`score_synthesizability` from retro's SAscore, `classify_reaction` from forward's SMARTS classifier, `expand_abbreviation` from eln's solvent/abbreviation tables). Deliberately did NOT vendor the heavy / agentic parts — they duplicate no existing tool but can't run in-process without GPUs/checkpoints, and replicating their orchestration loops would violate the anti-features list. Deferred, to be consumed as separate HTTP MCP services (the upstream repos already mount `fastapi-mcp` at `/mcp`) and orchestrated by the chemclaw agent itself:
