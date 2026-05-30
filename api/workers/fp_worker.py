@@ -137,8 +137,8 @@ async def compute_compound_fingerprints(db: AsyncSession) -> int:
             logger.warning("fp_compute_failed compound=%s: %s", compound_id, e)
             try:
                 await db.rollback()
-            except Exception:
-                pass
+            except Exception as rb_err:
+                logger.warning("fp_rollback_failed compound=%s: %s", compound_id, rb_err)
         finally:
             try:
                 await release_fp_lock(db, lock_key)
@@ -167,8 +167,8 @@ async def compute_reaction_fingerprints(db: AsyncSession) -> int:
             logger.warning("drfp_compute_failed reaction=%s: %s", reaction_id, e)
             try:
                 await db.rollback()
-            except Exception:
-                pass
+            except Exception as rb_err:
+                logger.warning("drfp_rollback_failed reaction=%s: %s", reaction_id, rb_err)
         finally:
             try:
                 await release_fp_lock(db, lock_key)

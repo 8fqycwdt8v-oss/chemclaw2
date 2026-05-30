@@ -29,6 +29,13 @@ from api.agent.tool_validation import is_fingerprint
 
 logger = logging.getLogger(__name__)
 
+# Wall-cap for the BOFIRE GP fit. A fit on the small experiment counts this
+# tool sees is seconds; the cap exists so a pathological parameter_spec can't
+# hang the request indefinitely. The abandoned thread runs to completion (a
+# thread can't be cancelled) — same accepted limitation as the AiZynthFinder
+# deep-retrosynth path; see BACKLOG §H.
+_BOFIRE_FIT_TIMEOUT_SEC = 120.0
+
 
 def build_campaign_tools(
     user_id: str,
@@ -304,11 +311,28 @@ def build_campaign_tools(
             try:
                 # GP fit can take multiple seconds — offload to a thread so
                 # the event loop stays responsive for other coroutines
-                # (concurrent paper_qa, agent streams, etc).
-                result = await asyncio.to_thread(
-                    propose_via_bofire, spec, experiments, n_proposals,
+                # (concurrent paper_qa, agent streams, etc), and wall-cap it
+                # so a pathological spec can't hang the request forever.
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        propose_via_bofire, spec, experiments, n_proposals,
+                    ),
+                    timeout=_BOFIRE_FIT_TIMEOUT_SEC,
                 )
                 return {"campaign_id": campaign_id, **result}
+            except TimeoutError:
+                logger.warning(
+                    "campaign=%s bofire GP fit exceeded %.0fs — falling back to heuristic",
+                    campaign_id, _BOFIRE_FIT_TIMEOUT_SEC,
+                )
+                heuristic = await _heuristic_propose(
+                    session_factory, campaign_id, n_proposals,
+                )
+                heuristic["strategy"] = (
+                    "heuristic-v1-bofire-timeout "
+                    f"(GP fit exceeded {_BOFIRE_FIT_TIMEOUT_SEC:.0f}s)"
+                )
+                return heuristic
             except ImportError:
                 logger.info(
                     "campaign=%s falling back to heuristic — bofire not installed; "
