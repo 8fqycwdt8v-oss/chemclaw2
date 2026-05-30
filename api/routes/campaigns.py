@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime
 from typing import Literal
 
@@ -21,12 +20,11 @@ from api.db.queries.campaigns import (
     reject_step,
 )
 from api.db.queries.rate_limit import rate_limit
+from api.routes._validation import is_uuid, parse_keyset_cursor
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 
 
 class CampaignPatchBody(BaseModel):
@@ -42,16 +40,7 @@ async def list_campaigns(
     cursor_updated_at: datetime | None = None
     cursor_id: str | None = None
     if cursor:
-        sep = cursor.rfind('_')
-        if sep == -1:
-            raise HTTPException(status_code=400, detail="Invalid cursor")
-        try:
-            cursor_updated_at = datetime.fromisoformat(cursor[:sep])
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid cursor") from None
-        cursor_id = cursor[sep + 1:]
-        if not _UUID_RE.match(cursor_id):
-            raise HTTPException(status_code=400, detail="Invalid cursor")
+        cursor_updated_at, cursor_id = parse_keyset_cursor(cursor)
 
     campaigns = await list_user_campaigns(db, user_id, 50, cursor_updated_at, cursor_id)
 
@@ -125,7 +114,7 @@ async def approve_campaign_step(
     user_id: str = Depends(get_current_user),
 ):
     """Promote a step from 'pending_approval' to 'pending'. Owner-scoped."""
-    if not _UUID_RE.match(campaign_id):
+    if not is_uuid(campaign_id):
         raise HTTPException(status_code=400, detail="Invalid campaign id")
     if step_idx < 0:
         raise HTTPException(status_code=400, detail="step_idx must be non-negative")
@@ -149,7 +138,7 @@ async def reject_campaign_step(
     user_id: str = Depends(get_current_user),
 ):
     """Mark a step as 'failed' (no retries). Owner-scoped."""
-    if not _UUID_RE.match(campaign_id):
+    if not is_uuid(campaign_id):
         raise HTTPException(status_code=400, detail="Invalid campaign id")
     if step_idx < 0:
         raise HTTPException(status_code=400, detail="step_idx must be non-negative")

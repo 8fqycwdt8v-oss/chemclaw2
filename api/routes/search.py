@@ -1,7 +1,6 @@
 """Search routes — GET /api/search (FTS/hybrid), POST /api/search (fingerprint)."""
 from __future__ import annotations
 
-import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,13 +13,16 @@ from api.db.queries.wiki_read import hybrid_search_wiki, search_wiki_by_fts
 
 router = APIRouter()
 
-_FP_RE = re.compile(r'^[01]{2048}$')
 _RL_SEARCH = Depends(rate_limit("search", 30, optional_user=True))
+
+# A folded fingerprint is exactly 2048 binary characters; reject anything
+# else at the Pydantic boundary (422) rather than hand-rolling the check.
+_FP_PATTERN = r'^[01]{2048}$'
 
 
 class FingerprintSearchRequest(BaseModel):
-    fingerprint_bits: str | None = None
-    rxn_fingerprint_bits: str | None = None
+    fingerprint_bits: str | None = Field(default=None, pattern=_FP_PATTERN)
+    rxn_fingerprint_bits: str | None = Field(default=None, pattern=_FP_PATTERN)
     limit: int = Field(default=20, ge=1, le=200)
     min_score: float = Field(default=0.4, ge=0.0, le=1.0)
 
@@ -56,8 +58,6 @@ async def search_post(
     db: AsyncSession = Depends(get_db),
 ):
     if body.fingerprint_bits:
-        if not _FP_RE.match(body.fingerprint_bits):
-            raise HTTPException(status_code=400, detail="fingerprint_bits must be exactly 2048 binary characters")
         from api.db.queries.compounds import find_similar_compounds
         results = await find_similar_compounds(
             db, body.fingerprint_bits, body.limit, body.min_score
@@ -65,8 +65,6 @@ async def search_post(
         return {"type": "compound_similarity", "results": results}
 
     if body.rxn_fingerprint_bits:
-        if not _FP_RE.match(body.rxn_fingerprint_bits):
-            raise HTTPException(status_code=400, detail="rxn_fingerprint_bits must be exactly 2048 binary characters")
         from api.db.queries.reactions import find_similar_reactions
         results = await find_similar_reactions(
             db, body.rxn_fingerprint_bits, body.limit, body.min_score
