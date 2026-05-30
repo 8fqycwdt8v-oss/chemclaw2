@@ -55,7 +55,12 @@ chem = [
 # the ~2 GB cost. Stage 1 (LHS/random) also requires this extras set
 # because bofire's data_models + RandomStrategy live in the same wheel.
 opt = [
-  "bofire[optimization]>=0.0.13",
+  # Pinned to the 0.3.x line: bofire >=0.3 renamed the q-Log Expected
+  # Improvement acquisition function to `qLogEI` (optimization.py tracks the
+  # new name). The GP-path test is verified green against 0.3.1 + its
+  # resolved torch/botorch/gpytorch; the <0.4 cap guards against the next
+  # API rename landing in CI unverified.
+  "bofire[optimization]>=0.3.1,<0.4",
   # bofire's molfeatures data-model imports `mordred` eagerly at module
   # load. The classic `mordred` package is broken on Python ≥3.10, so the
   # heavy CI lane (and any [opt] deploy) failed with ModuleNotFoundError on

@@ -264,9 +264,9 @@ def propose_via_bofire(
 
     if use_gp:
         try:
-            from bofire.data_models.acquisition_functions.api import (
-                qLogExpectedImprovement,
-            )
+            # bofire >=0.3 renamed the q-Log Expected Improvement acquisition
+            # function `qLogExpectedImprovement` -> `qLogEI`.
+            from bofire.data_models.acquisition_functions.api import qLogEI
             from bofire.data_models.strategies.api import (
                 SoboStrategy as SoboStrategyDataModel,
             )
@@ -278,7 +278,7 @@ def propose_via_bofire(
     if use_gp:
         data_model = SoboStrategyDataModel(
             domain=domain,
-            acquisition_function=qLogExpectedImprovement(),
+            acquisition_function=qLogEI(),
         )
         strategy = SoboStrategy(data_model=data_model)
         df = pd.DataFrame(experiments)
