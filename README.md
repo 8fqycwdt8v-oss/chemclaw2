@@ -2,7 +2,7 @@
 
 Knowledge-intelligence agent for pharma R&D. Three surfaces: conversational
 agent, living wiki, chemistry-native search. FastAPI + SQLAlchemy 2.0 async +
-Postgres/pgvector + Claude Agent SDK + six MCP servers.
+Postgres/pgvector + Claude Agent SDK + seven MCP servers.
 
 `CLAUDE.md` is the internal spec — read it before changing code. This
 README is the operator's guide: setup, deploy, run, observe.
@@ -31,7 +31,8 @@ pip install packages/mcp-servers/mcp_molfp \
             packages/mcp-servers/mcp_retrosynth \
             packages/mcp-servers/mcp_rxn_conditions \
             packages/mcp-servers/mcp_codesandbox \
-            packages/mcp-servers/mcp_tabular
+            packages/mcp-servers/mcp_tabular \
+            packages/mcp-servers/mcp_chem_intel
 # Bring up your own Postgres on :5432 then:
 for f in migrations/*.sql; do psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f "$f"; done
 uvicorn api.main:app --reload --port 8080
