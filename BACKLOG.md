@@ -16,8 +16,57 @@ Tiers A–E from the original roadmap were implemented in one batched session:
 
 ## Open
 
+### Deep-review / refactor / simplification sweep (2026-05-30)
+
+Five-agent fan-out review of the whole backend (agent layer, db/queries, routes,
+workers/integrations, MCP servers + tests), then shipped as stacked PRs off
+`main`. Landed this session:
+
+- **PR #170** — extracted `_cache_is_fresh` / `_parse_cached_payload` into
+  `tool_helpers`; the CACTUS / ICH / AiZynth / citation tools no longer
+  hand-roll the `external_facts` cache freshness + payload-parse dance (two of
+  the three sites previously swallowed the JSON decode error with no log).
+- **PR #171** — centralised keyset-cursor + UUID validation into
+  `api/routes/_validation.py` (was copy-pasted across wiki + campaigns); moved
+  the search fingerprint check to a Pydantic `Field(pattern=…)` (now 422); fixed
+  `PATCH /api/wiki/{slug}/seen` leaking the page's internal version in its 400.
+- **PR #172** — wall-capped the BOFIRE GP fit in `propose_next_conditions`
+  (mirrors the retrosynth `wait_for`); logged `fp_worker`'s two silent rollback
+  failures.
+- **PR #173** — logged `mcp_codesandbox`'s five silent kill-cleanup excepts;
+  removed the dead `import os` / `_ = os` block.
+- **PR #174** — added `mordredcommunity` to `[opt]` to repair the heavy lane
+  (see the CI item below).
+
+**Deferred — needs a live Postgres to verify (don't ship blind):** the test-suite
+hygiene items surfaced by the review are all DB-backed, and this execution
+environment has no Postgres daemon + limited CI-log access, so they were
+captured rather than shipped unverified:
+- **Consolidate duplicated test factories.** `_new_campaign` is defined three
+  times (`test_campaigns_owner_scope.py`, `test_curator_inbox.py`,
+  `test_optimization.py`) and `_insert_reaction` / `_insert_compound` twice each.
+  The three `_new_campaign` copies are NOT identical — owner-scope takes a
+  `status` param (default `planning`, sid `hex[:12]`); curator hardcodes
+  `running`; optimization hardcodes `planning` with sid `hex[:8]`. A shared
+  `api/tests/_factories.py::new_campaign(sf, uid, status="planning")` works only
+  if every curator call site is updated to pass `status="running"` explicitly —
+  do that under a live DB and run `test_curator_inbox` to confirm the inbox
+  assertions don't depend on the campaign status.
+- **Parametrise the ~20 near-identical `*_requires_auth` / `*_invalid_body`
+  route tests** across `test_routes_*` into shared parametrized cases.
+- **Missing HTTP-layer test files** for `routes/audit.py`, `routes/curator.py`,
+  `routes/feedback.py` — no route-level coverage today. Net-new DB tests; write
+  with Postgres available so the `--cov-fail-under` gate stays honest.
+
 ### CI heavy lane red on main (2026-05-30)
 
+- **RESOLVED by PR #174 (pending merge):** root cause was `bofire`'s
+  `data_models/molfeatures/names.py` importing `mordred` eagerly; classic
+  `mordred` is broken on Python ≥3.10, so the three `test_propose_via_bofire_*`
+  tests raised `ModuleNotFoundError` every heavy run. PR #174 adds
+  `mordredcommunity` (the maintained 3.11 fork, same `mordred` import name) to
+  `[opt]`. Once the heavy lane logs 5 consecutive green runs on `main`, flip
+  `continue-on-error` → gating in `.github/workflows/ci.yml`.
 - The `ci (heavy)` lane (installs `[opt,retrosynth]` = bofire/torch/aizynthfinder + runs `heavy`-marked tests) is **failing on `main` independent of any one PR** — PR #167's merge commit shows both heavy lanes red with cheap green, and it was merged anyway. PR #168 (mcp_chem_intel) reproduces the identical pattern: cheap green (runs the new tests + ruff + mypy), heavy red. The new MCP package adds no new root/heavy dependency and no `heavy`-marked test, so it is not the cause. Action: pull the heavy-lane pytest log, identify the failing `heavy` test (bofire/torch/aizynthfinder), and xfail or fix it so the lane is a real gate again.
 
 ### External meta-model MCP servers (2026-05-30 — merge of forward/retro/eln repos)
