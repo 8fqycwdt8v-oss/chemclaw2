@@ -381,9 +381,7 @@ def test_propose_via_bofire_gp_path_with_full_history(
     pytest.importorskip("bofire")
     pytest.importorskip("torch")
     try:
-        from bofire.data_models.acquisition_functions.api import (  # noqa: F401
-            qLogExpectedImprovement,
-        )
+        from bofire.data_models.acquisition_functions.api import qLogEI  # noqa: F401
         from bofire.data_models.strategies.api import (  # noqa: F401
             SoboStrategy as _SoboDataModel,
         )
