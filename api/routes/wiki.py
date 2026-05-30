@@ -41,12 +41,12 @@ from api.db.queries.wiki_write import (
     upsert_wiki_page,
 )
 from api.embeddings import embed_texts
+from api.routes._validation import parse_keyset_cursor
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9-]*[a-z0-9]$')
-_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 
 # Reusable rate-limit dependencies. Reads are 60/min/user, writes 20/min/user.
 # The "optional_user" variant keys anonymous callers under a shared "anon"
@@ -136,16 +136,7 @@ async def list_wiki(
     cursor_updated_at: datetime | None = None
     cursor_id: str | None = None
     if cursor:
-        sep = cursor.rfind('_')
-        if sep == -1:
-            raise HTTPException(status_code=400, detail="Invalid cursor")
-        try:
-            cursor_updated_at = datetime.fromisoformat(cursor[:sep])
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid cursor") from None
-        cursor_id = cursor[sep + 1:]
-        if not _UUID_RE.match(cursor_id):
-            raise HTTPException(status_code=400, detail="Invalid cursor")
+        cursor_updated_at, cursor_id = parse_keyset_cursor(cursor)
 
     pages = await list_wiki_pages(
         db, 50, cursor_updated_at, cursor_id, project, include_archived
@@ -326,10 +317,13 @@ async def mark_wiki_seen(
     if not page:
         raise HTTPException(status_code=404, detail=f"Wiki page '{slug}' not found")
     if body.version > page["version"]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"version {body.version} exceeds current page version {page['version']}",
+        # Don't echo the page's internal version back to the caller (OWASP
+        # A05); the server-side log carries the detail for debugging.
+        logger.info(
+            "mark_seen_version_too_high slug=%s requested=%d current=%d",
+            slug, body.version, page["version"],
         )
+        raise HTTPException(status_code=400, detail="Invalid version")
     await mark_seen(db, user_id, page["id"], body.version)
     return {"ok": True}
 
