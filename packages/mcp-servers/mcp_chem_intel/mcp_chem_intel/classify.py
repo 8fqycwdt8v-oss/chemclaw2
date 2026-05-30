@@ -138,24 +138,29 @@ def _any_mol_matches(mols: list, smarts: str) -> bool:
     return any(m.HasSubstructMatch(patt) for m in mols)
 
 
-def _rule_matches(rule: _Rule, reactant_mols: list, product_mols: list) -> bool:
-    for smarts in rule.reactant_smarts:
-        if not _any_mol_matches(reactant_mols, smarts):
-            return False
-    if rule.product_smarts and product_mols:
-        for smarts in rule.product_smarts:
-            if not _any_mol_matches(product_mols, smarts):
-                return False
-    return True
+def _reactants_match(rule: _Rule, reactant_mols: list) -> bool:
+    return all(_any_mol_matches(reactant_mols, s) for s in rule.reactant_smarts)
+
+
+def _products_match(rule: _Rule, product_mols: list) -> bool:
+    return all(_any_mol_matches(product_mols, s) for s in rule.product_smarts)
 
 
 def classify_reaction(reaction_smiles: str) -> dict:
     """Return the best-matching reaction class for a reaction SMILES.
 
-    ``reaction_smiles`` may be ``reactants>>products`` (preferred — enables
-    the product-side gate), ``reactants>agents>products``, or a bare
-    reactant set ``a.b``. Returns ``{"reaction_class": ..., "matched": bool}``
-    where ``matched`` is False when no rule fired (class ``"other"``).
+    ``reaction_smiles`` may be ``reactants>>products`` (preferred), a
+    ``reactants>agents>products`` form, or a bare reactant set ``a.b``.
+
+    Returns ``{"reaction_class": ..., "matched": bool}``. ``matched`` is True
+    only when a rule *fully* fired — for a named class whose rule has a
+    product pattern (amide_formation, esterification, Suzuki, …) that means a
+    product was supplied and confirmed it. When only reactants are given, a
+    product-gated rule can at best *suggest* a class: it is returned with
+    ``matched: False`` and a ``note``, never asserted as confirmed. This
+    keeps the tool from over-claiming a transformation it cannot see the
+    product of — supplying a wrong product already yields ``other``, so a
+    missing product must not be treated as more certain than a wrong one.
     """
     if not reaction_smiles or not reaction_smiles.strip():
         raise ValueError("reaction_smiles is required and cannot be empty")
@@ -166,9 +171,31 @@ def classify_reaction(reaction_smiles: str) -> dict:
         raise ValueError(f"No parseable reactants in: {reaction_smiles!r}")
     product_mols = _smiles_to_mols(product)
 
+    # A product-gated rule whose reactants matched but which we can't confirm
+    # because no product was supplied. Held as a fallback suggestion; the first
+    # such rule (in priority order) wins if nothing fully fires.
+    candidate: str | None = None
     for rule in _RULES:
-        if _rule_matches(rule, reactant_mols, product_mols):
+        if not _reactants_match(rule, reactant_mols):
+            continue
+        if not rule.product_smarts:
+            # Reactant-only rule — fully determined without a product.
             return {"reaction_class": rule.label, "matched": True}
+        if product_mols:
+            if _products_match(rule, product_mols):
+                return {"reaction_class": rule.label, "matched": True}
+        elif candidate is None:
+            candidate = rule.label
+
+    if candidate is not None:
+        return {
+            "reaction_class": candidate,
+            "matched": False,
+            "note": (
+                "candidate inferred from reactants only; supply the product "
+                "(reactants>>products) to confirm"
+            ),
+        }
     return {"reaction_class": CLASS_OTHER, "matched": False}
 
 

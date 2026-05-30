@@ -89,8 +89,11 @@ def classify_reaction(reaction_smiles: str) -> dict:
 
     Accepts 'reactants>>products' (preferred), 'reactants>agents>products',
     or a bare reactant set 'a.b'. Returns reaction_class (e.g. amide_formation,
-    suzuki_coupling, esterification) and matched (False -> class 'other').
-    Complements mcp-rxnfp's opaque DRFP fingerprint with a human-readable name.
+    suzuki_coupling, esterification) and matched. matched is True only when a
+    rule fully fired; named classes that need the product to confirm come back
+    matched=False plus a 'note' (a suggestion, not a confirmation) when only
+    reactants are given. Complements mcp-rxnfp's opaque DRFP fingerprint with a
+    human-readable name.
     """
     if len(reaction_smiles) > MAX_SMILES_LEN:
         raise ValueError(f"reaction_smiles exceeds {MAX_SMILES_LEN} chars")
