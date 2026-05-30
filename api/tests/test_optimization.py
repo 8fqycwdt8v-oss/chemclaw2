@@ -29,6 +29,7 @@ from api.db.queries.optimization import (
     propose_via_bofire,
     set_campaign_parameter_spec,
 )
+from api.tests._factories import new_campaign as _new_campaign
 
 
 def _spec() -> ParameterSpec:
@@ -40,22 +41,6 @@ def _spec() -> ParameterSpec:
         ],
         "outputs": [{"key": "yield_pct", "direction": "maximize"}],
     })
-
-
-async def _new_campaign(session_factory, user_id: str) -> str:
-    """Insert a minimal synthesis_campaigns row. Returns the id."""
-    async with session_factory() as db:
-        async with db.begin():
-            result = await db.execute(
-                text("""
-                    INSERT INTO synthesis_campaigns
-                        (created_by, session_id, target_smiles, status)
-                    VALUES (:uid, :sid, 'CCO', 'planning')
-                    RETURNING id::text
-                """),
-                {"uid": user_id, "sid": f"sess-{uuid.uuid4().hex[:8]}"},
-            )
-            return result.scalar_one()
 
 
 async def test_set_and_get_parameter_spec_round_trip(
