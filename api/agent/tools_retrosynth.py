@@ -17,7 +17,6 @@ read/write.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from datetime import UTC
 from typing import Any
@@ -26,6 +25,7 @@ from claude_agent_sdk import SdkMcpTool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.agent.tool_adapter import wrap_tool
+from api.agent.tool_helpers import _cache_is_fresh, _parse_cached_payload
 
 logger = logging.getLogger(__name__)
 
@@ -126,24 +126,10 @@ def build_retrosynth_tools(
         cutoff = _dt.now(tz=UTC) - timedelta(days=30)
         async with session_factory() as db:
             cached = await get_external_fact_by_source_id(db, cache_key)
-        if cached:
-            last_seen = cached.get("last_seen")
-            if last_seen is not None and last_seen.tzinfo is None:
-                last_seen = last_seen.replace(tzinfo=UTC)
-            if last_seen and last_seen >= cutoff:
-                payload = cached.get("payload") or {}
-                if isinstance(payload, str):
-                    try:
-                        payload = json.loads(payload)
-                    except json.JSONDecodeError:
-                        logger.warning(
-                            "external_facts(source_id=%s).payload not "
-                            "JSON-parseable; re-running aizynth search",
-                            cache_key,
-                        )
-                        payload = {}
-                if isinstance(payload, dict) and "routes" in payload:
-                    return {**payload, "cached": True}
+        if cached and _cache_is_fresh(cached.get("last_seen"), cutoff):
+            payload = _parse_cached_payload(cached.get("payload"), cache_key=cache_key)
+            if "routes" in payload:
+                return {**payload, "cached": True}
 
         try:
             from api.agent.retrosynth_deep import run_deep_retrosynthesis

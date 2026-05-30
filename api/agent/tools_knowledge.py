@@ -15,7 +15,6 @@ upsert in `lookup_regulatory_guidance`) need `user_id` for `created_by`
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 from datetime import UTC
@@ -26,9 +25,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.agent.tool_adapter import wrap_tool
 from api.agent.tool_helpers import (
+    _cache_is_fresh,
     _fetch_validated,
     _html_to_text,
     _ingest_paper_chunks,
+    _parse_cached_payload,
     _redact_ssrf_error,
     _SSRFError,
 )
@@ -294,12 +295,7 @@ def build_knowledge_tools(
             return {"found": False, "source_type": None, "last_seen": None, "stale": None}
         cutoff = _dt.now(tz=UTC) - timedelta(days=30)
         last_seen = row["last_seen"]
-        if last_seen is None:
-            is_stale = True
-        elif last_seen.tzinfo is None:
-            is_stale = last_seen.replace(tzinfo=UTC) < cutoff
-        else:
-            is_stale = last_seen < cutoff
+        is_stale = not _cache_is_fresh(last_seen, cutoff)
         return {
             "found": True,
             "source_type": row["source_type"],
@@ -359,29 +355,19 @@ def build_knowledge_tools(
             # Look up by source_id (not FTS) so we always get the right guideline's cache entry.
             entry = await get_external_fact_by_source_id(db, cache_source_id)
 
-        if entry:
-            last_seen = entry.get("last_seen")
-            if last_seen is not None:
-                if last_seen.tzinfo is None:
-                    last_seen = last_seen.replace(tzinfo=UTC)
-            if last_seen and last_seen >= freshness_cutoff:
-                text_body = entry.get("content_text", "")
-                if topic:
-                    idx = text_body.lower().find(topic.lower())
-                    if idx >= 0:
-                        text_body = text_body[max(0, idx - 100): idx + 2000]
-                payload = entry.get("payload") or {}
-                if isinstance(payload, str):
-                    try:
-                        payload = json.loads(payload)
-                    except Exception:
-                        payload = {}
-                return {
-                    "guideline": guideline_key,
-                    "summary": text_body[:3000],
-                    "url": payload.get("url", ""),
-                    "cached": True,
-                }
+        if entry and _cache_is_fresh(entry.get("last_seen"), freshness_cutoff):
+            text_body = entry.get("content_text", "")
+            if topic:
+                idx = text_body.lower().find(topic.lower())
+                if idx >= 0:
+                    text_body = text_body[max(0, idx - 100): idx + 2000]
+            payload = _parse_cached_payload(entry.get("payload"), cache_key=cache_source_id)
+            return {
+                "guideline": guideline_key,
+                "summary": text_body[:3000],
+                "url": payload.get("url", ""),
+                "cached": True,
+            }
 
         # Fetch from ich.org via the shared SSRF-pinned helper.
         url = _ICH_URLS.get(guideline_key, "https://www.ich.org/page/quality-guidelines")
