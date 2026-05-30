@@ -361,8 +361,16 @@ def test_propose_via_bofire_gp_path_with_full_history(
     must select the SoboStrategy + qLogEI (stage-2 GP) path.
 
     Only runs on the heavy CI lane — the [opt] extras (~2 GB) are not
-    in the cheap lane's install. The test skips automatically there
-    via `importorskip("bofire")` + `importorskip("torch")`.
+    in the cheap lane's install, so it skips there via `importorskip`.
+
+    The GP path additionally needs bofire's SoboStrategy + qLogEI stack,
+    whose import can fail even when `import botorch` succeeds (a
+    bofire/torch/botorch version skew in the heavy env). When that happens
+    `propose_via_bofire` correctly catches the ImportError and falls back to
+    LHS (`bofire-lhs-fallback-no-botorch`), so the GP-path assertion does not
+    apply and the test must SKIP, not fail. Probe the exact imports the
+    production `use_gp` block guards on so the skip tracks the code's real
+    requirement.
 
     Verifies the stage-2 contract: `strategy` reports `bofire-sobo-qlei`,
     `n_experiments_fitted` matches the input count, and each proposal
@@ -372,6 +380,16 @@ def test_propose_via_bofire_gp_path_with_full_history(
     """
     pytest.importorskip("bofire")
     pytest.importorskip("torch")
+    try:
+        from bofire.data_models.acquisition_functions.api import (  # noqa: F401
+            qLogExpectedImprovement,
+        )
+        from bofire.data_models.strategies.api import (  # noqa: F401
+            SoboStrategy as _SoboDataModel,
+        )
+        from bofire.strategies.api import SoboStrategy as _Sobo  # noqa: F401
+    except ImportError as e:
+        pytest.skip(f"bofire GP stack (SoboStrategy/qLogEI) not importable: {e}")
     from api.db.queries.optimization import propose_via_bofire
 
     # Lower the GP-min threshold to keep the test runtime modest — fitting
