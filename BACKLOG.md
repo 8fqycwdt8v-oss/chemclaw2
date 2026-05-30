@@ -58,16 +58,26 @@ captured rather than shipped unverified:
   `routes/feedback.py` — no route-level coverage today. Net-new DB tests; write
   with Postgres available so the `--cov-fail-under` gate stays honest.
 
-### CI heavy lane red on main (2026-05-30)
+### CI heavy lane — GREEN on main (2026-05-30, resolved)
 
-- **RESOLVED by PR #174 (pending merge):** root cause was `bofire`'s
-  `data_models/molfeatures/names.py` importing `mordred` eagerly; classic
-  `mordred` is broken on Python ≥3.10, so the three `test_propose_via_bofire_*`
-  tests raised `ModuleNotFoundError` every heavy run. PR #174 adds
-  `mordredcommunity` (the maintained 3.11 fork, same `mordred` import name) to
-  `[opt]`. Once the heavy lane logs 5 consecutive green runs on `main`, flip
-  `continue-on-error` → gating in `.github/workflows/ci.yml`.
-- The `ci (heavy)` lane (installs `[opt,retrosynth]` = bofire/torch/aizynthfinder + runs `heavy`-marked tests) is **failing on `main` independent of any one PR** — PR #167's merge commit shows both heavy lanes red with cheap green, and it was merged anyway. PR #168 (mcp_chem_intel) reproduces the identical pattern: cheap green (runs the new tests + ruff + mypy), heavy red. The new MCP package adds no new root/heavy dependency and no `heavy`-marked test, so it is not the cause. Action: pull the heavy-lane pytest log, identify the failing `heavy` test (bofire/torch/aizynthfinder), and xfail or fix it so the lane is a real gate again.
+- ~~The `ci (heavy)` lane was failing on `main` for ages with cheap green.~~
+  **RESOLVED — heavy lane is green on `main` as of PR #176.** Two layered
+  causes, fixed in order:
+  1. **PR #174** — `bofire`'s `molfeatures` imported `mordred` eagerly; classic
+     `mordred` is broken on Python ≥3.10 so the three `test_propose_via_bofire_*`
+     tests raised `ModuleNotFoundError` every run. Added `mordredcommunity` (the
+     maintained 3.11 fork, same import name) to `[opt]`.
+  2. **PR #176** — that uncovered a stale API reference: `bofire >=0.3` renamed
+     the acquisition function `qLogExpectedImprovement` → `qLogEI`, so the GP
+     path fell back to LHS and the GP-path test failed. Updated `optimization.py`
+     + the test guard to `qLogEI` and pinned `bofire[optimization]>=0.3.1,<0.4`.
+     The GP-path test now *runs* (real SoboStrategy + torch fit), verified
+     locally against the full heavy stack.
+- **Remaining (only sub-item):** the heavy lane is still `continue-on-error:
+  true`. Once it logs 5 consecutive green runs on `main`, flip it to gating in
+  `.github/workflows/ci.yml`. (The `@pytest.mark.heavy` marker is still TODO —
+  the lane currently runs the full suite; cheap skips gated bits via
+  `importorskip`.)
 
 ### External meta-model MCP servers (2026-05-30 — merge of forward/retro/eln repos)
 
@@ -188,7 +198,7 @@ Merged the three sibling repos (`chemclaw2_forward`, `chemclaw2_retrosynthesis`,
 - **§M SVG / PDF / HTML artefact types** — PNG only in V1. Add when an agent workflow asks for vector graphics.
 - **§M matplotlib magic-byte validation** — `_scan_artifacts` trusts `.png` extension; sniff `\x89PNG\r\n\x1a\n` before encoding to reject non-PNG content saved under a `.png` filename.
 - **Heavy-path CI lane** — partially shipped in PR 2 of the refactor sequence (May 2026). Matrix `lane: [cheap, heavy]` in `.github/workflows/ci.yml`; heavy installs `.[dev,opt,retrosynth]` + matplotlib. Currently `continue-on-error: true` so a flaky install doesn't gate; once it sees 5 consecutive green runs on main, flip to gating. `@pytest.mark.heavy` marker still TODO — heavy lane currently runs the full pytest suite (cheap tests skip their gated bits via `importorskip`).
-- **Heavy lane never reaches the 5-green-runs bar: `mordred` import failure** — the three `test_propose_via_bofire_*` tests in `api/tests/test_optimization.py` fail every heavy run with `ModuleNotFoundError: No module named 'mordred'`, raised eagerly from `bofire/data_models/molfeatures/names.py`. `bofire[optimization]>=0.0.13` (unpinned in the `opt` extra) resolves to a version that imports `mordred` at module load, but `mordred` isn't a dependency we install — and the classic `mordred` package is broken on Python ≥3.10 anyway. Because the lane is `continue-on-error`, this stays green at the workflow level (the merge gate is the cheap lane) but the heavy regression net is effectively dead. Fix path before flipping to gating: add `mordredcommunity` (the maintained 3.11-compatible fork) to the `opt` extra, OR pin `bofire` below the version that imports mordred, OR guard the three tests with `importorskip("mordred")`. Surfaced 2026-05-29 while consolidating open branches (affected #154, #155, and main equally — not branch-specific).
+- ~~**Heavy lane never reaches the 5-green-runs bar: `mordred` import failure**~~ — RESOLVED (PR #174 + #176, 2026-05-30). `mordredcommunity` added to `[opt]` and the stale `qLogExpectedImprovement`→`qLogEI` bofire API reference fixed + pinned `bofire[optimization]>=0.3.1,<0.4`. Heavy lane is green on `main`; the GP-path test runs the real torch fit. See the "CI heavy lane — GREEN on main" entry above. Only the `continue-on-error`→gating flip (after 5 green runs) remains.
 
 ### mcp_tabular follow-ups (May 2026)
 
