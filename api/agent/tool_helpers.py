@@ -23,10 +23,12 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import logging
 import os
 import re
 import socket
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -211,6 +213,45 @@ async def _fetch_validated(
             # against the real authority.
             current = str(httpx.URL(f"{parsed.scheme}://{hostname}").join(location))
         raise _SSRFError("Too many redirects")
+
+
+# ── external_facts cache helpers ──────────────────────────────────────────────
+
+def _cache_is_fresh(last_seen: Any, cutoff: datetime) -> bool:
+    """True if `last_seen` is at or after `cutoff`.
+
+    `external_facts.last_seen` comes back tz-naive on some asyncpg paths;
+    treat a naive timestamp as UTC before comparing, and treat a missing
+    timestamp as never-fresh. Shared by every tool that reads an
+    `external_facts` cache entry (CACTUS, ICH guidance, AiZynth, citation
+    verification) so the tz-normalisation lives in exactly one place.
+    """
+    if last_seen is None:
+        return False
+    if last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=UTC)
+    return last_seen >= cutoff
+
+
+def _parse_cached_payload(payload: Any, *, cache_key: str) -> dict[str, Any]:
+    """Coerce an `external_facts.payload` value to a dict.
+
+    The column is JSONB but some rows store a JSON *string*; decode those.
+    Malformed JSON (or a non-dict payload) logs at WARNING and yields `{}`
+    so the caller falls through to a fresh fetch rather than silently
+    serving a corrupt cache entry — previously two of the three call sites
+    swallowed the decode error with no log.
+    """
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            logger.warning(
+                "external_facts(source_id=%s).payload not JSON-parseable; ignoring cache",
+                cache_key,
+            )
+            return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 # ── HTML → text ───────────────────────────────────────────────────────────────
