@@ -38,25 +38,30 @@ workers/integrations, MCP servers + tests), then shipped as stacked PRs off
 - **PR #174** — added `mordredcommunity` to `[opt]` to repair the heavy lane
   (see the CI item below).
 
-**Deferred — needs a live Postgres to verify (don't ship blind):** the test-suite
-hygiene items surfaced by the review are all DB-backed, and this execution
-environment has no Postgres daemon + limited CI-log access, so they were
-captured rather than shipped unverified:
-- **Consolidate duplicated test factories.** `_new_campaign` is defined three
-  times (`test_campaigns_owner_scope.py`, `test_curator_inbox.py`,
-  `test_optimization.py`) and `_insert_reaction` / `_insert_compound` twice each.
-  The three `_new_campaign` copies are NOT identical — owner-scope takes a
-  `status` param (default `planning`, sid `hex[:12]`); curator hardcodes
-  `running`; optimization hardcodes `planning` with sid `hex[:8]`. A shared
-  `api/tests/_factories.py::new_campaign(sf, uid, status="planning")` works only
-  if every curator call site is updated to pass `status="running"` explicitly —
-  do that under a live DB and run `test_curator_inbox` to confirm the inbox
-  assertions don't depend on the campaign status.
-- **Parametrise the ~20 near-identical `*_requires_auth` / `*_invalid_body`
-  route tests** across `test_routes_*` into shared parametrized cases.
-- **Missing HTTP-layer test files** for `routes/audit.py`, `routes/curator.py`,
-  `routes/feedback.py` — no route-level coverage today. Net-new DB tests; write
-  with Postgres available so the `--cov-fail-under` gate stays honest.
+**Follow-ups (shipped with a live Postgres after the initial sweep):**
+- ~~Pin a compatible bofire so the GP path runs in CI~~ — **PR #176.** Root cause
+  was a stale API name (`qLogExpectedImprovement` → `qLogEI` in bofire ≥0.3), not
+  a version skew; fixed + pinned `bofire[optimization]>=0.3.1,<0.4`. GP-path test
+  now runs the real torch fit.
+- ~~Consolidate duplicated test factories~~ — **PR #177.** `new_campaign` now lives
+  in `api/tests/_factories.py` (status kwarg unifies the three copies); curator's
+  never-called copy deleted.
+- ~~Missing HTTP-layer tests for `routes/audit.py` / `curator.py` / `feedback.py`~~
+  — **PR #177**, 15 new tests.
+- **Still open — parametrise the ~20 near-identical `*_requires_auth` /
+  `*_invalid_body` route tests** across `test_routes_*` into shared parametrized
+  cases. Low value; left as-is.
+
+**Detailed review (2026-05-30):** re-reviewed all 9 merged PRs (3 independent
+agents + full re-verification on a live Postgres) — no correctness bugs or
+regressions; ruff + mypy clean; suite 577 passed / 7 skipped on a fresh DB.
+One incidental (pre-existing, not from this work):
+`test_reaction_outcomes.py::test_find_similar_reactions_includes_outcomes` is
+not isolated against accumulated `reactions` rows — it passes on a fresh DB but
+fails when the local test DB is reused across runs (similarity result set grows).
+CI is unaffected (fresh DB per run). This is the state-leakage signal that
+re-opens the deferred conftest fixture-isolation (TRUNCATE-teardown) rework;
+fix that test (or add per-test cleanup) if a CI flake ever surfaces.
 
 ### CI heavy lane — GREEN on main (2026-05-30, resolved)
 
