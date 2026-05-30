@@ -56,6 +56,12 @@ chem = [
 # because bofire's data_models + RandomStrategy live in the same wheel.
 opt = [
   "bofire[optimization]>=0.0.13",
+  # bofire's molfeatures data-model imports `mordred` eagerly at module
+  # load. The classic `mordred` package is broken on Python ≥3.10, so the
+  # heavy CI lane (and any [opt] deploy) failed with ModuleNotFoundError on
+  # the three propose_via_bofire tests. `mordredcommunity` is the maintained
+  # 3.11-compatible fork that installs under the same `mordred` import name.
+  "mordredcommunity",
 ]
 # Deep retrosynthesis via AiZynthFinder (Tier 3 §H). Opt-in like [opt]
 # above — only workers that need full multi-step route search install
