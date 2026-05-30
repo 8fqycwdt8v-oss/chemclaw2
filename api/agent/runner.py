@@ -208,11 +208,13 @@ Procedure:
    pull recorded properties.
 3. Call compute_descriptors for the input SMILES to surface logP, MW,
    TPSA, Lipinski flags.
-4. Optionally call patent_coverage for IP context.
+4. Call score_synthesizability (mcp-chem-intel) for the input SMILES to
+   gauge synthetic accessibility (SAscore 1=easy … 10=hard).
+5. Optionally call patent_coverage for IP context.
 
 Return: 3-5 sections — Identity (SMILES, CAS if known), Computed
-descriptors, Registered properties, Closest neighbors (Tanimoto +
-properties), Notes. Inline [N] citation markers; never fabricate CAS or
+descriptors (incl. synthesizability), Registered properties, Closest
+neighbors (Tanimoto + properties), Notes. Inline [N] citation markers; never fabricate CAS or
 yields. End with <confidence>high|med|low</confidence>."""
 
 
@@ -223,9 +225,11 @@ about analogous reactions (conditions, outcomes, neighbors).
 
 Procedure:
 1. Compute the DRFP fingerprint via mcp-rxnfp.
-2. Call reaction_similarity_search with include_outcomes=True.
-3. Call suggest_conditions_from_neighbors for grouped condition stats.
-4. If the user gave a registry id, also call list_reaction_outcomes for
+2. Call classify_reaction (mcp-chem-intel) to name the transformation
+   (e.g. amide_formation, suzuki_coupling) for grouping and context.
+3. Call reaction_similarity_search with include_outcomes=True.
+4. Call suggest_conditions_from_neighbors for grouped condition stats.
+5. If the user gave a registry id, also call list_reaction_outcomes for
    it directly.
 
 Return a 3-section markdown brief: Closest analogs, Suggested
@@ -340,6 +344,9 @@ async def run_agent_streaming(
             "mcp-tabular": McpStdioServerConfig(
                 type="stdio", command="python", args=["-m", "mcp_tabular.server"],
             ),
+            "mcp-chem-intel": McpStdioServerConfig(
+                type="stdio", command="python", args=["-m", "mcp_chem_intel.server"],
+            ),
         },
         hooks=build_hooks(user_id, project_key, session_factory),
         agents={
@@ -379,7 +386,7 @@ async def run_agent_streaming(
                     "computed descriptors + patent coverage for a SMILES/compound id."
                 ),
                 "prompt": COMPOUND_EXPLORER_PROMPT,
-                "mcpServers": ["chemclaw2-tools", "mcp-molfp"],
+                "mcpServers": ["chemclaw2-tools", "mcp-molfp", "mcp-chem-intel"],
                 "maxTurns": 12,
             },
             "reaction-explorer": {
@@ -388,7 +395,7 @@ async def run_agent_streaming(
                     "condition suggestions for a reaction SMILES/id."
                 ),
                 "prompt": REACTION_EXPLORER_PROMPT,
-                "mcpServers": ["chemclaw2-tools", "mcp-rxnfp", "mcp-rxn-conditions"],
+                "mcpServers": ["chemclaw2-tools", "mcp-rxnfp", "mcp-rxn-conditions", "mcp-chem-intel"],
                 "maxTurns": 12,
             },
             "literature-explorer": {
