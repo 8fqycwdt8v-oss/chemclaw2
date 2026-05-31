@@ -67,6 +67,11 @@ Use severity 'none' with an empty issues list when the figure is clean. Use \
 interpreted."""
 
 
+# Valid novelty labels: the three the judge emits plus 'unknown', the
+# fail-open label check_hypothesis_novelty returns when judging is unavailable.
+_NOVELTY_LABELS = frozenset({"novel", "incremental", "known", "unknown"})
+
+
 class NoveltyAssessment(BaseModel):
     """Structured prior-art verdict for a candidate hypothesis."""
 
@@ -202,6 +207,11 @@ def build_investigation_tools(
             inv = await get_investigation(db, investigation_id, user_id)
             if inv is None:
                 return {"error": "investigation not found or not owned by user"}
+            # Close the read tx auto-begun by the SELECT above so
+            # add_world_model_entry's `async with db.begin()` doesn't collide
+            # (same vetted pattern as wiki_write.upsert_wiki_page).
+            if db.in_transaction():
+                await db.rollback()
             try:
                 eid = await add_world_model_entry(
                     db, investigation_id, user_id, kind, c,
@@ -298,12 +308,20 @@ def build_investigation_tools(
             return {"error": "statement must be 1-4000 chars"}
         if rationale is not None and len(rationale) > 4000:
             return {"error": "rationale must be ≤4000 chars"}
-        if novelty is not None and not isinstance(novelty, dict):
-            return {"error": "novelty must be an object (from check_hypothesis_novelty)"}
+        if novelty is not None:
+            if not isinstance(novelty, dict):
+                return {"error": "novelty must be an object (from check_hypothesis_novelty)"}
+            if novelty.get("label") not in _NOVELTY_LABELS:
+                return {"error": f"novelty.label must be one of {sorted(_NOVELTY_LABELS)}"}
         async with session_factory() as db:
             inv = await get_investigation(db, investigation_id, user_id)
             if inv is None:
                 return {"error": "investigation not found or not owned by user"}
+            # get_investigation's SELECT auto-begins a read tx; close it so
+            # create_hypothesis's `async with db.begin()` doesn't collide
+            # (same vetted pattern as wiki_write.upsert_wiki_page).
+            if db.in_transaction():
+                await db.rollback()
             try:
                 hid = await create_hypothesis(
                     db, investigation_id, user_id, s,
@@ -617,32 +635,28 @@ def build_investigation_tools(
                 "cached": True,
             }
 
+        # Quality gate, not security — fail open with severity='unknown', but
+        # always log first (obs-rule 5). Failures aren't cached, so a retry
+        # can succeed.
+        def _failed_open(reason: str) -> dict[str, Any]:
+            logger.error(
+                "critique_figure_failed_open execution=%s file=%s err=%s",
+                execution_id, filename, reason,
+            )
+            return {"ok": True, "severity": "unknown", "issues": [],
+                    "cached": False, "critique_error": reason}
+
         from api.agent.llm_judge import judge_json, resolve_judge_model
         provider, model = resolve_judge_model("vision")
         parsed, err = await judge_json(
             _FIGURE_CRITIQUE_PROMPT, provider=provider, model=model, images=[b64],
         )
         if parsed is None:
-            # Quality gate, not security — fail open, but log (obs-rule 5).
-            logger.error(
-                "critique_figure_failed_open execution=%s file=%s err=%s",
-                execution_id, filename, err,
-            )
-            return {
-                "ok": True, "severity": "unknown", "issues": [],
-                "cached": False, "critique_error": err,
-            }
+            return _failed_open(err or "no response")
         try:
             critique = FigureCritique.model_validate(parsed)
-        except ValidationError as e:
-            logger.error(
-                "critique_figure_bad_shape execution=%s file=%s err=%s",
-                execution_id, filename, e,
-            )
-            return {
-                "ok": True, "severity": "unknown", "issues": [],
-                "cached": False, "critique_error": "critique response malformed",
-            }
+        except ValidationError:
+            return _failed_open("critique response malformed")
         payload = critique.model_dump()
         async with session_factory() as db:
             await attach_artifact_critique(

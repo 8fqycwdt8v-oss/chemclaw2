@@ -153,6 +153,27 @@ async def test_hypothesis_novelty_roundtrips(session_factory, user_id: str) -> N
     assert listed[0]["novelty"]["closest_prior"] == "Smith 2020"
 
 
+async def test_propose_hypothesis_rejects_bad_novelty_label(
+    session_factory, user_id: str,
+) -> None:
+    iid = await _new_investigation(session_factory, user_id)
+    from api.agent.tools_investigation import build_investigation_tools
+    tools = {t.name: t for t in build_investigation_tools(user_id, "s", session_factory)}
+    # A novelty blob with a nonsense label is rejected before persistence.
+    r = _decode(await tools["propose_hypothesis"].handler({
+        "investigation_id": iid, "statement": "X improves Y",
+        "novelty": {"label": "totally-made-up"},
+    }))
+    assert "error" in r
+    assert "label" in r["error"]
+    # A valid label is accepted and the hypothesis is created.
+    ok = _decode(await tools["propose_hypothesis"].handler({
+        "investigation_id": iid, "statement": "X improves Y",
+        "novelty": {"label": "known", "closest_prior": "Smith", "rationale": "r"},
+    }))
+    assert "id" in ok
+
+
 async def test_check_hypothesis_novelty_no_prior(
     session_factory, user_id: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -219,21 +240,71 @@ async def test_check_hypothesis_novelty_judges_against_prior(
 # ── Feature 3: citation guard ────────────────────────────────────────────────
 
 async def test_check_citations_unresolved_source(
-    session_factory, user_id: str, monkeypatch: pytest.MonkeyPatch,
+    session_factory, user_id: str,
 ) -> None:
-    import api.db.queries.knowledge as kn
-
-    async def no_fact(db, source_id):
-        return None
-
-    monkeypatch.setattr(kn, "get_external_fact_by_source_id", no_fact)
+    # A citation_id that isn't in external_facts → batched fact lookup
+    # returns it absent → unresolved (no embedding/judge needed).
     from api.agent.tools_knowledge import build_knowledge_tools
     tools = {t.name: t for t in build_knowledge_tools(user_id, session_factory)}
     r = _decode(await tools["check_citations"].handler(
-        {"claims": [{"claim": "Y is true", "citation_id": "ext:gone"}]}))
+        {"claims": [{"claim": "Y is true", "citation_id": f"ext:gone-{uuid.uuid4().hex}"}]}))
     res = r["results"][0]
     assert res["source_status"] == "unresolved"
     assert res["verdict"] == "unresolved"
+
+
+async def test_check_citations_batches_embedding(
+    session_factory, user_id: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multiple claims → exactly one embed_texts call, results stay aligned
+    with input order (and invalid entries are interleaved correctly)."""
+    import api.agent.llm_judge as judge
+    import api.db.queries.paper_chunks as pc
+    import api.embeddings as emb
+
+    embed_calls = {"n": 0}
+
+    async def fake_embed(texts):
+        embed_calls["n"] += 1
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    async def chunks(db, q, embedding, limit=10, paper_id=None):
+        return [{"text": "supporting excerpt"}]
+
+    async def fake_judge(prompt, *, provider, model, images=None, max_tokens=800):
+        return {"supports": "yes", "confidence": 9, "rationale": "supports"}, None
+
+    monkeypatch.setattr(emb, "embed_texts", fake_embed)
+    monkeypatch.setattr(pc, "hybrid_search_paper_chunks", chunks)
+    monkeypatch.setattr(judge, "judge_json", fake_judge)
+
+    from api.agent.tools_knowledge import build_knowledge_tools
+    tools = {t.name: t for t in build_knowledge_tools(user_id, session_factory)}
+    r = _decode(await tools["check_citations"].handler({"claims": [
+        {"claim": "first claim", "paper_id": str(uuid.uuid4())},
+        "not-an-object",  # invalid; must keep its slot
+        {"claim": "third claim", "paper_id": str(uuid.uuid4())},
+    ]}))
+    assert embed_calls["n"] == 1  # one batched call, not one per claim
+    results = r["results"]
+    assert len(results) == 3
+    assert results[0]["verdict"] == "supported"
+    assert results[1]["verdict"] == "invalid"
+    assert results[2]["verdict"] == "supported"
+
+
+async def test_get_external_facts_by_ids_roundtrip(session_factory, user_id: str) -> None:
+    from api.db.queries.knowledge import get_external_facts_by_ids, upsert_external_fact
+    sid = f"ext:fact-{uuid.uuid4().hex}"
+    async with session_factory() as db:
+        await upsert_external_fact(db, "doc", sid, {"k": "v"}, "body", fetched_by=user_id)
+    async with session_factory() as db:
+        facts = await get_external_facts_by_ids(db, [sid, "ext:missing"])
+    assert sid in facts
+    assert "ext:missing" not in facts
+    # Empty input short-circuits without a query.
+    async with session_factory() as db:
+        assert await get_external_facts_by_ids(db, []) == {}
 
 
 async def test_check_citations_unsupported_suggests_contradiction(
@@ -304,6 +375,58 @@ async def test_review_draft_persists_and_surfaces_in_inbox(
     async with session_factory() as db:
         pending = await list_draft_reviews_needing_attention(db, user_id, limit=50)
     assert any(p["id"] == r["review_id"] for p in pending)
+
+
+# ── Regression: read-then-begin transaction collision ───────────────────────
+# These tool happy-paths previously raised "A transaction is already begun on
+# this Session" because an ownership SELECT auto-begins a tx that the
+# subsequent write's `async with db.begin()` collided with. They were never
+# caught because existing coverage only hit the early-return (not-found) path.
+
+async def test_propose_hypothesis_happy_path(session_factory, user_id: str) -> None:
+    iid = await _new_investigation(session_factory, user_id)
+    from api.agent.tools_investigation import build_investigation_tools
+    tools = {t.name: t for t in build_investigation_tools(user_id, "s", session_factory)}
+    r = _decode(await tools["propose_hypothesis"].handler(
+        {"investigation_id": iid, "statement": "X improves Y"}))
+    assert "error" not in r
+    assert r["id"]
+    assert r["elo_rating"] == 1000.0
+
+
+async def test_world_model_add_happy_path(session_factory, user_id: str) -> None:
+    iid = await _new_investigation(session_factory, user_id)
+    from api.agent.tools_investigation import build_investigation_tools
+    tools = {t.name: t for t in build_investigation_tools(user_id, "s", session_factory)}
+    r = _decode(await tools["world_model_add"].handler(
+        {"investigation_id": iid, "kind": "fact", "content": "Pd catalysis works here"}))
+    assert "error" not in r
+    assert r["id"]
+    assert r["kind"] == "fact"
+
+
+async def test_record_contradiction_happy_path(session_factory, user_id: str) -> None:
+    from api.db.queries.wiki_write import upsert_wiki_page
+    from api.embeddings import EMBED_DIM
+
+    async def _noop_embed(texts: list[str]) -> list[list[float]]:
+        return [[0.0] * EMBED_DIM for _ in texts]
+
+    slug = f"page-{uuid.uuid4().hex[:8]}"
+    async with session_factory() as db:
+        await upsert_wiki_page(
+            db, slug=slug, title="P", content={"type": "doc", "content": []},
+            content_text="Long enough body to chunk past fifty characters easily here.",
+            created_by=user_id, citations=[], embed_fn=_noop_embed,
+        )
+    from api.agent.tools_knowledge import build_knowledge_tools
+    tools = {t.name: t for t in build_knowledge_tools(user_id, session_factory)}
+    r = _decode(await tools["record_contradiction"].handler({
+        "page_slug": slug, "citation_a": "ext:a", "citation_b": "ext:b",
+        "proposed_winner": "a", "reason": "a is fresher",
+    }))
+    assert "error" not in r
+    assert r["id"]
 
 
 async def test_review_draft_accept_not_in_inbox(

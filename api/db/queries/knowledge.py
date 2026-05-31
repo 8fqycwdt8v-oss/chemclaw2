@@ -228,6 +228,27 @@ async def get_external_fact_by_source_id(
     return row_to_dict(row)
 
 
+async def get_external_facts_by_ids(
+    db: AsyncSession,
+    source_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Batch-fetch external_facts by source_id. Returns a {source_id: row}
+    map (missing ids are simply absent), so callers checking many citations
+    in one pass avoid a session + round-trip per id."""
+    if not source_ids:
+        return {}
+    result = await db.execute(
+        text("""
+            SELECT id::text, source_type, source_id, payload, content_text,
+                   first_seen, last_seen
+            FROM external_facts
+            WHERE source_id = ANY(:sids)
+        """),
+        {"sids": list(set(source_ids))},
+    )
+    return {r._mapping["source_id"]: dict(r._mapping) for r in result}
+
+
 async def insert_compound_property(
     db: AsyncSession,
     compound_id: str,
