@@ -11,6 +11,16 @@ dependencies = [
   "rdkit>=2024.3",
 ]
 
+[project.optional-dependencies]
+# ORD-validation rule pack (validate_ord_reaction / _compound) wraps
+# ord-schema's own recursive validator — the off-the-shelf ruleset, not a
+# hand-rolled one. Behind an extra because ord-schema pulls protobuf / pandas /
+# pyarrow; the base server stays light and the tools degrade to a clear error
+# envelope when it's absent (see ord_validate._NOT_INSTALLED).
+ord = [
+  "ord-schema>=0.3",
+]
+
 [project.scripts]
 mcp-chem-intel = "mcp_chem_intel.server:main"
 
