@@ -7,13 +7,10 @@ a uniform MCP surface alongside molfp / rxnfp / retrosynth / rxn_conditions.
 """
 from __future__ import annotations
 
-import json
-import logging
 import os
-import sys
-from datetime import UTC, datetime
 
 from mcp.server.fastmcp import FastMCP
+from mcp_chemclaw_shared import configure_logging
 
 from mcp_codesandbox.sandbox import (
     CPU_SECONDS_DEFAULT,
@@ -23,39 +20,7 @@ from mcp_codesandbox.sandbox import (
     summary,
 )
 
-
-class JsonFormatter(logging.Formatter):
-    """Single-line JSON to stderr; stdout is JSON-RPC."""
-
-    def format(self, record: logging.LogRecord) -> str:
-        payload = {
-            "time": datetime.fromtimestamp(record.created, UTC).isoformat(),
-            "level": record.levelname.lower(),
-            "component": "mcp-codesandbox",
-            "event": record.getMessage(),
-        }
-        if record.exc_info:
-            payload["exc"] = self.formatException(record.exc_info)
-        for k, v in record.__dict__.items():
-            if k in ("args", "msg", "name", "exc_info", "exc_text", "stack_info",
-                     "lineno", "funcName", "created", "msecs", "relativeCreated",
-                     "thread", "threadName", "processName", "process", "filename",
-                     "module", "pathname", "levelname", "levelno"):
-                continue
-            payload[k] = v
-        return json.dumps(payload)
-
-
-def _configure_logging() -> logging.Logger:
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(JsonFormatter())
-    root = logging.getLogger()
-    root.handlers = [handler]
-    root.setLevel(os.environ.get("MCP_LOG_LEVEL", "INFO"))
-    return logging.getLogger("mcp_codesandbox")
-
-
-log = _configure_logging()
+log = configure_logging("mcp-codesandbox")
 mcp = FastMCP("mcp-codesandbox")
 
 

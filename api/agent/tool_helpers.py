@@ -233,6 +233,28 @@ def _cache_is_fresh(last_seen: Any, cutoff: datetime) -> bool:
     return last_seen >= cutoff
 
 
+def _staleness_warning(first_seen: Any, now: datetime, *, max_age_days: int = 30) -> str | None:
+    """Advisory string when a cached fact was first stored over `max_age_days`
+    ago, else None.
+
+    Distinct from `_cache_is_fresh` (a 24h refresh gate): this measures how
+    long we've been *tracking* a slow-moving source (e.g. an ICH guideline
+    whose landing-page URL is stable across revisions) so the caller can warn
+    that the content may describe a superseded version.
+    """
+    if first_seen is None:
+        return None
+    if first_seen.tzinfo is None:
+        first_seen = first_seen.replace(tzinfo=UTC)
+    age_days = (now - first_seen).days
+    if age_days < max_age_days:
+        return None
+    return (
+        f"Cached {age_days} days ago; the source may have been revised since. "
+        "Re-verify against the current published version if exact wording matters."
+    )
+
+
 def _parse_cached_payload(payload: Any, *, cache_key: str) -> dict[str, Any]:
     """Coerce an `external_facts.payload` value to a dict.
 
@@ -252,6 +274,27 @@ def _parse_cached_payload(payload: Any, *, cache_key: str) -> dict[str, Any]:
             )
             return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _canonical_smiles(smiles: str) -> str:
+    """Return RDKit's canonical SMILES, or the stripped input on any failure.
+
+    Used to build stable `external_facts` cache keys: `aizynth:CCO` and
+    `aizynth:OCC` denote the same molecule and must hit the same entry.
+    Falls back to the raw stripped string when RDKit isn't installed (it
+    rides in via the `[retrosynth]`/`chem` extras, not the base install) or
+    when the SMILES doesn't parse — the downstream tool surfaces the real
+    parse error, so we don't raise here.
+    """
+    s = smiles.strip()
+    try:
+        from rdkit import Chem
+    except ImportError:
+        return s
+    mol = Chem.MolFromSmiles(s)
+    if mol is None:
+        return s
+    return Chem.MolToSmiles(mol)
 
 
 # ── HTML → text ───────────────────────────────────────────────────────────────

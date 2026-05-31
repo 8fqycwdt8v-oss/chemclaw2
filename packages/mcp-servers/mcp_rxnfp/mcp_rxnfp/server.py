@@ -1,42 +1,10 @@
-import json
 import logging
 import os
-import sys
 import time
-from datetime import UTC, datetime
 
 from drfp import DrfpEncoder
 from mcp.server.fastmcp import FastMCP
-
-
-class JsonFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        payload = {
-            "time": datetime.fromtimestamp(record.created, UTC).isoformat(),
-            "level": record.levelname.lower(),
-            "component": "mcp-rxnfp",
-            "event": record.getMessage(),
-        }
-        if record.exc_info:
-            payload["exc"] = self.formatException(record.exc_info)
-        for k, v in record.__dict__.items():
-            if k in ("args", "msg", "name", "exc_info", "exc_text", "stack_info",
-                     "lineno", "funcName", "created", "msecs", "relativeCreated",
-                     "thread", "threadName", "processName", "process", "filename",
-                     "module", "pathname", "levelname", "levelno"):
-                continue
-            payload[k] = v
-        return json.dumps(payload)
-
-
-def _configure_logging() -> logging.Logger:
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(JsonFormatter())
-    root = logging.getLogger()
-    root.handlers = [handler]
-    root.setLevel(os.environ.get("MCP_LOG_LEVEL", "INFO"))
-    return logging.getLogger("mcp_rxnfp")
-
+from mcp_chemclaw_shared import configure_logging
 
 log: logging.Logger = logging.getLogger("mcp_rxnfp")
 mcp = FastMCP("mcp-rxnfp")
@@ -98,7 +66,7 @@ def compute_drfp(reaction_smiles: str) -> dict:
 
 def main():
     global log
-    log = _configure_logging()
+    log = configure_logging("mcp-rxnfp")
     log.info("mcp_server_starting", extra={"name": mcp.name, "pid": os.getpid()})
     try:
         mcp.run(transport="stdio")

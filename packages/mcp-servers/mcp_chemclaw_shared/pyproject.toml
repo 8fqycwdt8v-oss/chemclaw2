@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-chemclaw-shared"
+version = "0.1.0"
+description = "Shared structured-logging setup for the chemclaw2 MCP stdio servers."
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcp_chemclaw_shared"]

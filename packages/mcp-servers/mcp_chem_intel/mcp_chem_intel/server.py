@@ -12,49 +12,17 @@ single- and multi-step retrosynthesis) need GPUs + model checkpoints and are
 meant to run as separate HTTP MCP services — see BACKLOG for that wiring.
 """
 
-import json
 import logging
 import os
-import sys
 import time
-from datetime import UTC, datetime
 
 from mcp.server.fastmcp import FastMCP
+from mcp_chemclaw_shared import configure_logging
 
 from mcp_chem_intel.abbreviations import expand_abbreviation as _expand_abbreviation
 from mcp_chem_intel.classify import classify_reaction as _classify_reaction
 from mcp_chem_intel.classify import supported_classes
 from mcp_chem_intel.synth import synthetic_accessibility
-
-
-class JsonFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        payload = {
-            "time": datetime.fromtimestamp(record.created, UTC).isoformat(),
-            "level": record.levelname.lower(),
-            "component": "mcp-chem-intel",
-            "event": record.getMessage(),
-        }
-        if record.exc_info:
-            payload["exc"] = self.formatException(record.exc_info)
-        for k, v in record.__dict__.items():
-            if k in ("args", "msg", "name", "exc_info", "exc_text", "stack_info",
-                     "lineno", "funcName", "created", "msecs", "relativeCreated",
-                     "thread", "threadName", "processName", "process", "filename",
-                     "module", "pathname", "levelname", "levelno"):
-                continue
-            payload[k] = v
-        return json.dumps(payload)
-
-
-def _configure_logging() -> logging.Logger:
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(JsonFormatter())
-    root = logging.getLogger()
-    root.handlers = [handler]
-    root.setLevel(os.environ.get("MCP_LOG_LEVEL", "INFO"))
-    return logging.getLogger("mcp_chem_intel")
-
 
 log: logging.Logger = logging.getLogger("mcp_chem_intel")
 mcp = FastMCP("mcp-chem-intel")
@@ -131,7 +99,7 @@ def expand_abbreviation(token: str) -> dict:
 
 def main():
     global log
-    log = _configure_logging()
+    log = configure_logging("mcp-chem-intel")
     log.info("mcp_server_starting", extra={"name": mcp.name, "pid": os.getpid()})
     try:
         mcp.run(transport="stdio")

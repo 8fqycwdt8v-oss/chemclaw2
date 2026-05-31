@@ -51,24 +51,29 @@ Append-only ledger of deferred work for chemclaw2 (Python / FastAPI).
 - **Tests** — route-layer integration tests (`test_routes_{admin,chat,wiki,campaigns}.py`) + tool-layer smoke harness (`test_tool_handlers_e2e.py`).
 - **MCP wheel layout** — all seven servers now use the proper `<name>/<name>/server.py` packaging.
 
+### P1/P2 cleanup pass (2026-05-31)
+
+- **Shared MCP logging** — new `mcp_chemclaw_shared` package exports `configure_logging(component)` + `JsonFormatter(component)`; the seven servers import it instead of hand-rolling the ~30-line formatter each. Pattern-A servers (molfp/codesandbox/tabular/retrosynth) configure at module import; pattern-B (rxnfp/chem-intel/rxn-conditions) keep the lazy `configure_logging` call in `main()`. Installed ahead of the servers in the Dockerfile + CI install lists.
+- **AiZynth cache-key canonicalisation** — `_canonical_smiles` (RDKit, falls back to the stripped input without RDKit / on parse failure) now keys the `aizynth:` `external_facts` entry, so `CCO` and `OCC` share a cache hit.
+- **`@pytest.mark.heavy` marker wired** — the three bofire/torch GP tests in `test_optimization.py` are tagged; the cheap CI lane runs `-m "not heavy"` (importorskip kept as a belt-and-suspenders). Heavy lane still runs the full suite. (Gating flip remains — see P1.)
+- **ICH cache staleness advisory** — `get_external_fact_by_source_id` now also selects `first_seen`; `lookup_regulatory_guidance` adds a `stale_warning` to a cached response once the entry has been tracked >30 days (advisory only, not a cache bust), via the reusable `_staleness_warning` helper.
+- **`isolate_reactions` fixture** — opt-in conftest fixture TRUNCATEs the reactions tables (CASCADE reaches only `reaction_outcomes` + `reaction_condition_predictions`) before `test_find_similar_reactions_includes_outcomes`, de-flaking it on a reused local DB.
+
 ## Open
 
 Ranked by readiness-to-implement. P1 = actionable now, trigger met, low risk. P2 = deferred until a stated trigger or demand. P3 = long-horizon / blocked on externals.
 
 ### P1 — actionable now
 
-- **Extract shared `JsonFormatter` / `_configure_logging` into `mcp_chemclaw_shared`.** Trigger ("a fourth server") is long past — the copy now lives in **seven** MCP servers (`mcp_molfp`, `mcp_rxnfp`, `mcp_chem_intel`, `mcp_codesandbox`, `mcp_rxn_conditions`, `mcp_tabular`, `mcp_retrosynth`). Highest-value cleanup left: one small package, deletes ~6 copies, low risk.
-- **SMILES canonicalisation for the AiZynth cache key.** `aizynth:CCO` vs `aizynth:OCC` miss each other in `external_facts`. One-liner: `Chem.MolToSmiles(Chem.MolFromSmiles(s))` before building the key. (Phase D §H.)
-- **Flip the heavy CI lane to gating.** It is green on `main` but still `continue-on-error: true`. Once it logs 5 consecutive green runs, drop the flag in `.github/workflows/ci.yml`. Add the `@pytest.mark.heavy` marker so the lane runs only the heavy-tagged subset instead of the full suite (currently gated ad hoc via `importorskip`).
-- **ICH cache staleness warning.** `lookup_regulatory_guidance` caches in `external_facts` for 24 h with no signal when ICH publishes an update. Add a TTL warning in the response when the cache entry is older than 30 days. (Cheap; pairs with the D2 deep-link item.)
+- **Flip the heavy CI lane to gating.** It is green on `main` but still `continue-on-error: true`. Once it logs 5 consecutive green runs, drop the flag in `.github/workflows/ci.yml`. (The `@pytest.mark.heavy` marker + cheap-lane `-m "not heavy"` deselect shipped — see Shipped below; only the continue-on-error flip remains, and it is gated on the 5-green-run observation.)
 
 ### P2 — deferred until trigger / demand
 
 - **`papers` / `properties` extraction pipeline.** Tables exist (migrations 0026/0027) but nothing writes to them since the entity-extractor sub-agent was removed. Right shape is a post-`wiki_upsert` pg-boss job. Trigger: demand.
-- **conftest fixture-isolation (TRUNCATE-teardown) rework.** No per-test isolation today; `test_reaction_outcomes.py::test_find_similar_reactions_includes_outcomes` passes on a fresh DB but fails when the local test DB is reused (similarity result set grows). CI is unaffected (fresh DB per run). Trigger: a CI flake from accumulated state.
+- **conftest fixture-isolation — broader TRUNCATE-teardown.** A targeted opt-in `isolate_reactions` fixture now de-flakes the one known case (see Shipped). A general autouse TRUNCATE-teardown across all tables stays deferred (broad blast radius, slows the suite); add it only if a second cross-test state-leak flake surfaces.
 - **LLM extraction of `reactions.conditions` free-text → JSON at registration.** Would let `find_neighbor_conditions` return structured payloads directly instead of free-text. Defer until measured.
 - **ORD export for reactions** — admin-only `/api/admin/reactions/export-ord`. Trigger: an external partner asks for ORD interchange.
-- **Parametrise the ~20 near-identical `*_requires_auth` / `*_invalid_body` route tests** into shared parametrized cases. Low value; explicitly left as-is.
+- **Parametrise the ~20 near-identical `*_requires_auth` / `*_invalid_body` route tests** into shared parametrized cases. Low value; explicitly left as-is (≈12-file churn for near-zero benefit — re-evaluated 2026-05-31, still deferred).
 - **Phase D optimisation candidates** (post Tier 1–3, BOFIRE surface):
   - **§A multi-objective BO** — add `MoboStrategy` + `qLogExpectedHypervolumeImprovement` when a customer asks for Pareto fronts (dispatcher currently rejects multi-output specs with a clear error).
   - **§A mixture variables + `LinearInequalityConstraint`** — widen `ParameterSpec` + tool-layer validation (current spec is box-only).
@@ -105,4 +110,4 @@ Ranked by readiness-to-implement. P1 = actionable now, trigger met, low risk. P2
 ## CI quality — partial adoption (May 2026)
 
 - **mypy strict adoption** — CI runs mypy non-strict (`check_untyped_defs = true`, `no_implicit_optional = true`). `api.agent.tools` / `.runner` / `.hooks` are excluded via per-module overrides because the `claude_agent_sdk` TypedDicts don't match the SDK's own example usage (~30 errors not ours to fix). Re-enable strict per module as each is cleaned. Goal: full strict in 4–6 PRs.
-- **Ruff rule expansion** — CI runs `ruff check --select=E,F,W` at `line-length=120`. Next rule families in order of value: `I` (imports), `UP` (pyupgrade), `B` (bugbear), `SIM`, `RUF`.
+- **Ruff rule expansion** — CI runs `ruff check api/ packages/` with `select = ["E", "F", "W", "I", "UP", "B"]` at `line-length=120` (the earlier "E,F,W only" note is stale; `I`/`UP`/`B` have since landed). Next rule families in order of value: `SIM` (simplification), `RUF` (Ruff-specific lints).

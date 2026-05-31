@@ -114,6 +114,28 @@ async def db(session_factory) -> AsyncIterator[AsyncSession]:
         yield session
 
 
+# ── Isolation helpers ──────────────────────────────────────────────────────────
+
+@pytest_asyncio.fixture
+async def isolate_reactions(session_factory) -> AsyncIterator[None]:
+    """TRUNCATE the reactions tables before a test so similarity-search
+    assertions over a bounded `limit` aren't perturbed by rows accumulated
+    from earlier runs on a reused local DB.
+
+    CI runs against a fresh DB per job, so this is a no-op there; it makes
+    tests deterministic when the local test DB is reused across runs. CASCADE
+    only reaches `reaction_outcomes` and `reaction_condition_predictions`
+    (the two tables with an FK to `reactions`) — both reaction-derived test
+    data, nothing else.
+    """
+    from sqlalchemy import text
+
+    async with session_factory() as db:
+        async with db.begin():
+            await db.execute(text("TRUNCATE reactions CASCADE"))
+    yield
+
+
 # ── Factories ────────────────────────────────────────────────────────────────
 
 @pytest_asyncio.fixture
