@@ -60,6 +60,10 @@ Append-only ledger of deferred work for chemclaw2 (Python / FastAPI).
 - **ICH cache staleness advisory** — `get_external_fact_by_source_id` now also selects `first_seen`; `lookup_regulatory_guidance` adds a `stale_warning` to a cached response once the entry has been tracked >30 days (advisory only, not a cache bust), via the reusable `_staleness_warning` helper.
 - **`isolate_reactions` fixture** — opt-in conftest fixture TRUNCATEs the reactions tables (CASCADE reaches only `reaction_outcomes` + `reaction_condition_predictions`) before `test_find_similar_reactions_includes_outcomes`, de-flaking it on a reused local DB.
 
+### P3 — ELN ORD-validation rule pack (2026-05-31)
+
+- **ORD-validation tools** — `validate_ord_reaction` / `validate_ord_compound` added to `mcp_chem_intel` (new `ord_validate.py`). Wrap ord-schema's own recursive validator (`validate_message`) rather than hand-rolling CMP/STR/STO/ORD rules — one Reaction validation covers compounds, identifiers/SMILES, and amounts/stoichiometry. Return `{valid, errors, warnings, …}`; malformed JSON comes back as `valid=False` with the parse error (never raises) so the ELN self-repair loop can iterate. `ord-schema` is behind a new `[ord]` extra (it pulls protobuf/pandas/pyarrow) — base server stays light, tools degrade to a clear "not installed" envelope when absent. Installed in the Docker image (`mcp_chem_intel[ord]`) and the heavy CI lane; tests (`test_mcp_ord_validate.py`) are `@pytest.mark.heavy`. Agent runner already routes `mcp_chem_intel`, so the tools are auto-exposed. (The free-text→ORD *skill* that consumes them is still open — see P3.)
+
 ## Open
 
 Ranked by readiness-to-implement. P1 = actionable now, trigger met, low risk. P2 = deferred until a stated trigger or demand. P3 = long-horizon / blocked on externals.
@@ -89,7 +93,7 @@ Ranked by readiness-to-implement. P1 = actionable now, trigger met, low risk. P2
   - **`predict_forward_reaction`** — Borda ensemble of Molecular Transformer / T5Chem / ReactionT5 / MEGAN / Chemformer / GraphRXN; wire `chemclaw2_forward` via `FORWARD_MCP_URL`.
   - **`predict_reaction_conditions`** — Parrot/ASKCOS/two-stage-DNN; route to the remote service when configured, keep `mcp_rxn_conditions.predict_conditions` as the always-on default.
   - **`retrosynthesis_single_step` / `_multi_step`** — ~40 docker/GPU backends; consume via `RETRO_MCP_URL`, keep `mcp_retrosynth.disconnect` as the offline fallback.
-  - **ELN protocol → ORD structuring** — rebuild as a chemclaw *skill* driving the existing agent loop with the extracted deterministic tools + an ORD-validation rule pack (CMP/STR/STO/ORD validators) exposed as plain MCP tools. Do NOT vendor a second nested agent runtime. The eln rule pack is the next piece worth porting.
+  - **ELN protocol → ORD structuring** — the ORD-validation rule pack shipped (see Shipped: `validate_ord_reaction` / `validate_ord_compound` in `mcp_chem_intel`). **Still open:** the chemclaw *skill* that drives the existing agent loop (free-text procedure → structured ORD `Reaction` → validate → self-repair) using those validators + `classify_reaction` / `expand_abbreviation` / `validate_smiles` / `compute_descriptors`. Do NOT vendor a second nested agent runtime — it's a skill over the existing loop.
 - **Multi-tenant RLS.** RLS is OFF on every table (migrations 0034/0043 disabled the `USING(true)` stubs across all 24). Re-enable with real per-tenant `USING (org_id = current_setting('app.org_id')::uuid)` bodies + wire `SET LOCAL app.org_id` on every transaction (the `withUserContext` helper from 0021 was exported but never invoked). Trigger: tenants > 1.
 - **RLS on `notifications`** — per-user predicate. Trigger: tenants > 1.
 - **Skills catalog in DB** — promote filesystem skill packs to a table with scope (personal/project/org) + maturity tier. Trigger: skill count grows.

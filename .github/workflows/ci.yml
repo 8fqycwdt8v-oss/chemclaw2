@@ -65,10 +65,11 @@ jobs:
       - name: Install Python dependencies (heavy)
         # Heavy lane installs the [opt] (bofire+torch) and [retrosynth]
         # (aizynthfinder) extras plus matplotlib so figure-capture lands
-        # a real PNG. Skipped on the cheap lane to keep its install
-        # under 60s; ~2 GB extra wheels on the heavy lane.
+        # a real PNG, and ord-schema so the mcp_chem_intel [ord] validators
+        # (test_mcp_ord_validate.py) run here. Skipped on the cheap lane to
+        # keep its install under 60s; ~2 GB extra wheels on the heavy lane.
         if: matrix.lane == 'heavy'
-        run: pip install -e ".[dev,opt,retrosynth]" matplotlib
+        run: pip install -e ".[dev,opt,retrosynth]" matplotlib ord-schema
 
       - name: Install MCP servers
         run: |
