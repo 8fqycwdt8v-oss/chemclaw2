@@ -104,7 +104,7 @@ async def test_list_wiki_needs_review_excludes_clean_pages(session_factory, user
 
 
 def test_curator_inbox_endpoint_shape(client, auth_header):
-    """The endpoint returns the three labelled buckets + total_pending,
+    """The endpoint returns the four labelled buckets + total_pending,
     regardless of whether the user has any items in any bucket.
 
     Content-bearing assertions live in the query-level tests above so
@@ -113,15 +113,17 @@ def test_curator_inbox_endpoint_shape(client, auth_header):
     resp = client.get("/api/curator/inbox", headers=auth_header)
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    # All three buckets must be present, each a list (possibly empty).
+    # All four buckets must be present, each a list (possibly empty).
     assert isinstance(body.get("wiki_needs_review"), list)
     assert isinstance(body.get("step_approvals"), list)
     assert isinstance(body.get("contradictions"), list)
-    # total_pending equals the sum of the three bucket sizes.
+    assert isinstance(body.get("draft_reviews"), list)
+    # total_pending equals the sum of the four bucket sizes.
     assert body["total_pending"] == (
         len(body["wiki_needs_review"])
         + len(body["step_approvals"])
         + len(body["contradictions"])
+        + len(body["draft_reviews"])
     )
 
 

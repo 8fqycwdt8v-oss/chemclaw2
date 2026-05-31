@@ -74,6 +74,31 @@ class CitationSupport(BaseModel):
     rationale: str = ""
 
 
+def _citation_result(
+    *,
+    claim: str | None = None,
+    citation_id: Any = None,
+    source_status: str | None = None,
+    supports: str | None = None,
+    confidence: int | None = None,
+    verdict: str,
+    detail: str | None = None,
+    suggest_record_contradiction: bool = False,
+) -> dict[str, Any]:
+    """Build one `check_citations` per-claim result with a uniform shape, so
+    the several fail-open / verdict branches can't drift apart."""
+    return {
+        "claim": claim[:200] if claim else None,
+        "citation_id": citation_id,
+        "source_status": source_status,
+        "supports": supports,
+        "confidence": confidence,
+        "verdict": verdict,
+        "detail": detail,
+        "suggest_record_contradiction": suggest_record_contradiction,
+    }
+
+
 _CITATION_SUPPORT_PROMPT = """You are checking whether a cited source actually \
 supports a factual claim, to catch hallucinated or mis-attributed citations.
 
@@ -358,10 +383,15 @@ def build_knowledge_tools(
             page = await get_wiki_page(db, page_slug)
             if not page:
                 return {"error": f"Wiki page '{page_slug}' not found"}
-            async with db.begin():
-                contradiction_id = await create_contradiction(
-                    db, page["id"], citation_a, citation_b, proposed_winner, reason
-                )
+            # get_wiki_page's SELECT auto-begins a read tx; close it before
+            # create_contradiction (which manages its own `async with
+            # db.begin()`) so the two don't collide. Same vetted pattern as
+            # wiki_write.upsert_wiki_page.
+            if db.in_transaction():
+                await db.rollback()
+            contradiction_id = await create_contradiction(
+                db, page["id"], citation_a, citation_b, proposed_winner, reason
+            )
         return {"id": contradiction_id}
 
     async def check_citations(
@@ -396,111 +426,117 @@ def build_knowledge_tools(
         from datetime import timedelta
 
         from api.agent.llm_judge import judge_json, resolve_judge_model
-        from api.db.queries.knowledge import get_external_fact_by_source_id
+        from api.db.queries.knowledge import get_external_facts_by_ids
         from api.db.queries.paper_chunks import hybrid_search_paper_chunks
         from api.embeddings import embed_texts
 
-        provider, model = resolve_judge_model("text")
-        cutoff = _dt.now(tz=UTC) - timedelta(days=30)
-        results: list[dict[str, Any]] = []
-        for item in claims:
+        # Partition into invalid entries (resolved immediately, in place) and
+        # a work list we batch the I/O for. `results[i]` stays aligned with
+        # `claims[i]`.
+        results: list[dict[str, Any] | None] = [None] * len(claims)
+        work: list[dict[str, Any]] = []
+        for i, item in enumerate(claims):
             if not isinstance(item, dict):
-                results.append({"verdict": "invalid", "detail": "claim must be an object"})
+                results[i] = _citation_result(verdict="invalid", detail="claim must be an object")
                 continue
             claim = (item.get("claim") or "").strip()
-            citation_id = item.get("citation_id")
-            paper_id = item.get("paper_id")
             if not claim:
-                results.append({
-                    "citation_id": citation_id, "verdict": "invalid",
-                    "detail": "missing claim text",
-                })
+                results[i] = _citation_result(
+                    citation_id=item.get("citation_id"), verdict="invalid",
+                    detail="missing claim text",
+                )
                 continue
+            work.append({"idx": i, "claim": claim,
+                         "citation_id": item.get("citation_id"),
+                         "paper_id": item.get("paper_id")})
 
-            source_status: str | None = None
-            if citation_id:
-                async with session_factory() as db:
-                    fact = await get_external_fact_by_source_id(db, citation_id)
-                if fact is None:
-                    source_status = "unresolved"
-                else:
-                    source_status = (
-                        "current" if _cache_is_fresh(fact.get("last_seen"), cutoff)
-                        else "stale"
-                    )
-
-            if source_status == "unresolved":
-                results.append({
-                    "claim": claim[:200], "citation_id": citation_id,
-                    "source_status": source_status, "supports": "no",
-                    "confidence": None, "verdict": "unresolved",
-                    "detail": "cited source no longer resolves in external_facts",
-                    "suggest_record_contradiction": False,
-                })
-                continue
-
+        # One embedding call for every claim, one session for every lookup.
+        embeddings: list[list[float]] | None = None
+        if work:
             try:
-                embeddings = await embed_texts([claim[:500]])
+                embeddings = await embed_texts([w["claim"][:500] for w in work])
             except Exception:
                 logger.exception("check_citations_embedding_failed")
-                results.append({
-                    "claim": claim[:200], "citation_id": citation_id,
-                    "source_status": source_status, "supports": None,
-                    "confidence": None, "verdict": "unverified",
-                    "detail": "embedding service unavailable",
-                    "suggest_record_contradiction": False,
-                })
-                continue
-            async with session_factory() as db:
-                chunks = await hybrid_search_paper_chunks(
-                    db, claim[:500], embeddings[0], limit=4, paper_id=paper_id,
-                )
-            if not chunks:
-                results.append({
-                    "claim": claim[:200], "citation_id": citation_id,
-                    "source_status": source_status, "supports": None,
-                    "confidence": None, "verdict": "unverified",
-                    "detail": "no indexed source excerpts found for this claim",
-                    "suggest_record_contradiction": False,
-                })
-                continue
+                embeddings = None
 
-            excerpts = "\n---\n".join((c.get("text") or "")[:600] for c in chunks)
+        cutoff = _dt.now(tz=UTC) - timedelta(days=30)
+        # Retrieve facts + chunks inside one session, then close it before the
+        # (slow) judge calls so we don't hold a connection across LLM latency.
+        to_judge: list[dict[str, Any]] = []
+        async with session_factory() as db:
+            citation_ids = [w["citation_id"] for w in work if w["citation_id"]]
+            facts = await get_external_facts_by_ids(db, citation_ids)
+            for n, w in enumerate(work):
+                i, claim, cid, pid = w["idx"], w["claim"], w["citation_id"], w["paper_id"]
+                source_status: str | None = None
+                if cid:
+                    fact = facts.get(cid)
+                    source_status = (
+                        "unresolved" if fact is None
+                        else "current" if _cache_is_fresh(fact.get("last_seen"), cutoff)
+                        else "stale"
+                    )
+                if source_status == "unresolved":
+                    results[i] = _citation_result(
+                        claim=claim, citation_id=cid, source_status=source_status,
+                        supports="no", verdict="unresolved",
+                        detail="cited source no longer resolves in external_facts",
+                    )
+                    continue
+                if embeddings is None:
+                    results[i] = _citation_result(
+                        claim=claim, citation_id=cid, source_status=source_status,
+                        verdict="unverified", detail="embedding service unavailable",
+                    )
+                    continue
+                chunks = await hybrid_search_paper_chunks(
+                    db, claim[:500], embeddings[n], limit=4, paper_id=pid,
+                )
+                if not chunks:
+                    results[i] = _citation_result(
+                        claim=claim, citation_id=cid, source_status=source_status,
+                        verdict="unverified",
+                        detail="no indexed source excerpts found for this claim",
+                    )
+                    continue
+                to_judge.append({
+                    "idx": i, "claim": claim, "citation_id": cid,
+                    "source_status": source_status, "chunks": chunks,
+                })
+
+        provider, model = resolve_judge_model("text")
+        for j in to_judge:
+            i, claim, cid, source_status = j["idx"], j["claim"], j["citation_id"], j["source_status"]
+            excerpts = "\n---\n".join((c.get("text") or "")[:600] for c in j["chunks"])
             parsed, err = await judge_json(
                 _CITATION_SUPPORT_PROMPT.format(claim=claim, excerpts=excerpts[:6000]),
                 provider=provider, model=model,
             )
             if parsed is None:
-                logger.error("check_citations_failed_open citation=%s err=%s", citation_id, err)
-                results.append({
-                    "claim": claim[:200], "citation_id": citation_id,
-                    "source_status": source_status, "supports": None,
-                    "confidence": None, "verdict": "unverified",
-                    "detail": err, "suggest_record_contradiction": False,
-                })
+                logger.error("check_citations_failed_open citation=%s err=%s", cid, err)
+                results[i] = _citation_result(
+                    claim=claim, citation_id=cid, source_status=source_status,
+                    verdict="unverified", detail=err,
+                )
                 continue
             try:
                 support = CitationSupport.model_validate(parsed)
             except ValidationError as e:
-                logger.error("check_citations_bad_shape citation=%s err=%s", citation_id, e)
-                results.append({
-                    "claim": claim[:200], "citation_id": citation_id,
-                    "source_status": source_status, "supports": None,
-                    "confidence": None, "verdict": "unverified",
-                    "detail": "support response malformed",
-                    "suggest_record_contradiction": False,
-                })
+                logger.error("check_citations_bad_shape citation=%s err=%s", cid, e)
+                results[i] = _citation_result(
+                    claim=claim, citation_id=cid, source_status=source_status,
+                    verdict="unverified", detail="support response malformed",
+                )
                 continue
             verdict = {"yes": "supported", "partial": "weak", "no": "unsupported"}.get(
                 support.supports, "unverified",
             )
-            results.append({
-                "claim": claim[:200], "citation_id": citation_id,
-                "source_status": source_status, "supports": support.supports,
-                "confidence": support.confidence, "verdict": verdict,
-                "detail": support.rationale,
-                "suggest_record_contradiction": support.supports == "no",
-            })
+            results[i] = _citation_result(
+                claim=claim, citation_id=cid, source_status=source_status,
+                supports=support.supports, confidence=support.confidence,
+                verdict=verdict, detail=support.rationale,
+                suggest_record_contradiction=support.supports == "no",
+            )
         return {"results": results}
 
     async def review_draft(
