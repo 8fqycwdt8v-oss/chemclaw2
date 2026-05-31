@@ -9,6 +9,7 @@ Elo math (`elo_update`) is pure and unit-tested separately.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -74,6 +75,7 @@ async def create_hypothesis(
     statement: str,
     rationale: str | None = None,
     parent_id: str | None = None,
+    novelty: dict[str, Any] | None = None,
 ) -> str:
     """Insert a new hypothesis. Returns the new id.
 
@@ -82,6 +84,10 @@ async def create_hypothesis(
     `created_by = :uid` predicate inside the EXISTS subquery so passing a
     stranger's hypothesis id silently fails — same fail-closed pattern as
     other cross-row references).
+
+    `novelty`, when set, is a JSONB annotation from a prior-art check
+    (`{label, closest_prior, rationale, ...}`) so the tournament view can
+    flag hypotheses that closely resemble existing work.
     """
     async with db.begin():
         if parent_id is not None:
@@ -106,10 +112,11 @@ async def create_hypothesis(
         result = await db.execute(
             text("""
                 INSERT INTO hypotheses
-                    (investigation_id, parent_id, statement, rationale, created_by)
+                    (investigation_id, parent_id, statement, rationale,
+                     novelty, created_by)
                 VALUES (CAST(:iid AS uuid),
                         CAST(:pid AS uuid),
-                        :stmt, :rationale, :uid)
+                        :stmt, :rationale, CAST(:novelty AS jsonb), :uid)
                 RETURNING id::text
             """),
             {
@@ -117,6 +124,7 @@ async def create_hypothesis(
                 "pid": parent_id,
                 "stmt": statement,
                 "rationale": rationale,
+                "novelty": json.dumps(novelty) if novelty is not None else None,
                 "uid": user_id,
             },
         )
@@ -144,7 +152,7 @@ async def list_hypotheses(
     result = await db.execute(
         text(f"""
             SELECT id::text, parent_id::text, statement, rationale, status,
-                   elo_rating, created_at, updated_at
+                   elo_rating, novelty, created_at, updated_at
             FROM hypotheses
             WHERE investigation_id = CAST(:iid AS uuid)
               AND created_by = :uid
@@ -166,7 +174,7 @@ async def get_hypothesis(
     result = await db.execute(
         text("""
             SELECT id::text, investigation_id::text, parent_id::text,
-                   statement, rationale, status, elo_rating,
+                   statement, rationale, status, elo_rating, novelty,
                    created_at, updated_at
             FROM hypotheses
             WHERE id = CAST(:hid AS uuid)

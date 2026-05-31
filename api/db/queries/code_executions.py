@@ -167,6 +167,69 @@ async def list_executions(
     return rows
 
 
+async def attach_artifact_critique(
+    db: AsyncSession,
+    execution_id: str,
+    user_id: str,
+    *,
+    filename: str,
+    art_hash: str,
+    critique: dict[str, Any],
+) -> bool:
+    """Attach a VLM critique to one artifact in a run, owner-scoped.
+
+    Read-modify-write of the `artifacts` JSONB inside a single
+    transaction: the matching artifact dict gains a `critique` key
+    `{**critique, "hash": art_hash}` so a later re-critique of the same
+    unchanged figure (same byte hash) can return the cached result for
+    free. Returns False when the execution isn't owned by the caller or
+    no artifact matches `filename`.
+    """
+    async with db.begin():
+        result = await db.execute(
+            text("""
+                SELECT artifacts FROM code_executions
+                 WHERE id = CAST(:eid AS uuid)
+                   AND created_by = :uid
+                 FOR UPDATE
+            """),
+            {"eid": execution_id, "uid": user_id},
+        )
+        row = result.one_or_none()
+        if row is None:
+            return False
+        artifacts = row._mapping["artifacts"]
+        if isinstance(artifacts, str):
+            try:
+                artifacts = json.loads(artifacts)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "code_executions(id=%s).artifacts not JSON-parseable on "
+                    "critique attach", execution_id,
+                )
+                return False
+        if not isinstance(artifacts, list):
+            return False
+        matched = False
+        for a in artifacts:
+            if isinstance(a, dict) and a.get("filename") == filename:
+                a["critique"] = {**critique, "hash": art_hash}
+                matched = True
+                break
+        if not matched:
+            return False
+        await db.execute(
+            text("""
+                UPDATE code_executions
+                   SET artifacts = CAST(:artifacts AS jsonb)
+                 WHERE id = CAST(:eid AS uuid)
+                   AND created_by = :uid
+            """),
+            {"artifacts": json.dumps(artifacts), "eid": execution_id, "uid": user_id},
+        )
+        return True
+
+
 async def get_execution(
     db: AsyncSession,
     execution_id: str,
