@@ -129,8 +129,13 @@ def validate_ord_compound(compound_json: dict) -> dict:
     warnings}; malformed input returns valid=False with the parse error rather
     than raising.
     """
+    t0 = time.monotonic()
     result = _validate_compound(compound_json)
-    log.info("ord_compound_validated", extra={"valid": result["valid"], "n_errors": len(result["errors"])})
+    log.info(
+        "ord_compound_validated",
+        extra={"valid": result["valid"], "n_errors": len(result["errors"]),
+               "duration_ms": int((time.monotonic() - t0) * 1000)},
+    )
     return result
 
 

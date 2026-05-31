@@ -33,7 +33,7 @@ pip install packages/mcp-servers/mcp_chemclaw_shared \
             packages/mcp-servers/mcp_rxn_conditions \
             packages/mcp-servers/mcp_codesandbox \
             packages/mcp-servers/mcp_tabular \
-            packages/mcp-servers/mcp_chem_intel
+            "packages/mcp-servers/mcp_chem_intel[ord]"   # [ord] = ORD-validation tools
 # Bring up your own Postgres on :5432 then:
 for f in migrations/*.sql; do psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f "$f"; done
 uvicorn api.main:app --reload --port 8080

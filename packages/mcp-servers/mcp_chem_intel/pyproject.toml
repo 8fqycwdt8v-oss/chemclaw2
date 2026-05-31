@@ -18,7 +18,11 @@ dependencies = [
 # pyarrow; the base server stays light and the tools degrade to a clear error
 # envelope when it's absent (see ord_validate._NOT_INSTALLED).
 ord = [
-  "ord-schema>=0.3",
+  # Pinned to the 0.6.x line: the validate_message / ValidationOptions API the
+  # wrappers call is verified against 0.6.5. The >=0.3 floor spanned an
+  # incompatible range (0.3.x needs protobuf<3.20; 0.6.x needs protobuf<6) the
+  # resolver could backtrack into; the cap locks the API.
+  "ord-schema>=0.6,<0.7",
 ]
 
 [project.scripts]
