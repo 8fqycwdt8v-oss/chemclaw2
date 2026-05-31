@@ -64,12 +64,15 @@ jobs:
 
       - name: Install Python dependencies (heavy)
         # Heavy lane installs the [opt] (bofire+torch) and [retrosynth]
-        # (aizynthfinder) extras plus matplotlib so figure-capture lands
-        # a real PNG, and ord-schema so the mcp_chem_intel [ord] validators
-        # (test_mcp_ord_validate.py) run here. Skipped on the cheap lane to
-        # keep its install under 60s; ~2 GB extra wheels on the heavy lane.
+        # (aizynthfinder) extras plus matplotlib so figure-capture lands a real
+        # PNG, and ord-schema so the ORD validators (test_mcp_ord_validate.py)
+        # run here. ord-schema is installed directly + version-pinned to match
+        # mcp_chem_intel's [ord] extra — NOT via the path-package extra, which
+        # co-resolved with the torch/bofire/aizynth graph hits ResolutionImpossible.
+        # The Docker build exercises the [ord] extra itself. Skipped on the cheap
+        # lane to keep its install under 60s.
         if: matrix.lane == 'heavy'
-        run: pip install -e ".[dev,opt,retrosynth]" matplotlib ord-schema
+        run: pip install -e ".[dev,opt,retrosynth]" matplotlib "ord-schema>=0.6,<0.7"
 
       - name: Install MCP servers
         run: |

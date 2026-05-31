@@ -23,29 +23,50 @@ from typing import Any
 
 logger = logging.getLogger("mcp_chem_intel")
 
-# ord-schema ships behind the [ord] extra (it pulls protobuf/pandas/pyarrow);
-# the base mcp_chem_intel install stays light. The tools degrade to a clear
-# error envelope rather than crashing the agent when the extra is absent —
-# same fail-soft contract as mcp_tabular's [tabicl] gate.
-_NOT_INSTALLED = {
-    "valid": False,
-    "errors": ["ord-schema is not installed on this server (pip install 'mcp-chem-intel[ord]')"],
-    "warnings": [],
-}
 
+def _not_installed() -> dict:
+    """Fresh error envelope for when the [ord] extra (ord-schema) is absent.
 
-def _validate_message(message: Any, *, require_provenance: bool) -> dict:
-    """Run ord-schema's recursive validator and shape the output.
-
-    Never raises on ORD-content problems — they come back as the `errors`
-    list so the caller's repair loop can act on them.
+    A new dict (with its own lists) each call — never a shared module constant —
+    so a caller that appends to `errors`/`warnings` can't leak into later calls.
+    The tools return this instead of raising so the agent's repair loop survives
+    a server that wasn't installed with `[ord]`.
     """
-    from ord_schema import validations  # noqa: PLC0415
+    return {
+        "valid": False,
+        "errors": ["ord-schema is not installed on this server (pip install 'mcp-chem-intel[ord]')"],
+        "warnings": [],
+    }
+
+
+def _parse_and_validate(
+    payload: dict[str, Any], proto_name: str, *, require_provenance: bool
+) -> tuple[dict, Any | None]:
+    """Shared spine for both tools: import-guard → ParseDict → validate_message.
+
+    Returns `(result, message)`. `message` is None when the result is a
+    not-installed or parse-error envelope (so the caller skips message-derived
+    fields). All three ord-schema imports are guarded together here, so a
+    partial install can't sneak a later unguarded `ord_schema.validations`
+    import past the not-installed envelope.
+    """
+    try:
+        from google.protobuf import json_format  # noqa: PLC0415
+        from ord_schema import validations  # noqa: PLC0415
+        from ord_schema.proto import reaction_pb2  # noqa: PLC0415
+    except ImportError:
+        logger.warning("ord_schema_not_installed")
+        return _not_installed(), None
+
+    try:
+        message = json_format.ParseDict(payload, getattr(reaction_pb2, proto_name)())
+    except json_format.ParseError as exc:
+        return {"valid": False, "errors": [f"ORD parse error: {exc}"], "warnings": []}, None
 
     options = validations.ValidationOptions(require_provenance=require_provenance)
     out = validations.validate_message(message, raise_on_error=False, options=options)
     errors = list(out.errors)
-    return {"valid": not errors, "errors": errors, "warnings": list(out.warnings)}
+    return {"valid": not errors, "errors": errors, "warnings": list(out.warnings)}, message
 
 
 def validate_reaction(reaction_json: dict[str, Any], *, require_provenance: bool = False) -> dict:
@@ -62,21 +83,10 @@ def validate_reaction(reaction_json: dict[str, Any], *, require_provenance: bool
     if not isinstance(reaction_json, dict):
         raise ValueError("reaction_json must be a JSON object")
 
-    try:
-        from google.protobuf import json_format  # noqa: PLC0415
-        from ord_schema.proto import reaction_pb2  # noqa: PLC0415
-    except ImportError:
-        logger.warning("ord_schema_not_installed")
-        return dict(_NOT_INSTALLED)
-
-    try:
-        message = json_format.ParseDict(reaction_json, reaction_pb2.Reaction())
-    except json_format.ParseError as exc:
-        return {"valid": False, "errors": [f"ORD parse error: {exc}"], "warnings": []}
-
-    result = _validate_message(message, require_provenance=require_provenance)
-    result["num_inputs"] = len(message.inputs)
-    result["num_outcomes"] = len(message.outcomes)
+    result, message = _parse_and_validate(reaction_json, "Reaction", require_provenance=require_provenance)
+    if message is not None:
+        result["num_inputs"] = len(message.inputs)
+        result["num_outcomes"] = len(message.outcomes)
     return result
 
 
@@ -90,16 +100,5 @@ def validate_compound(compound_json: dict[str, Any]) -> dict:
     if not isinstance(compound_json, dict):
         raise ValueError("compound_json must be a JSON object")
 
-    try:
-        from google.protobuf import json_format  # noqa: PLC0415
-        from ord_schema.proto import reaction_pb2  # noqa: PLC0415
-    except ImportError:
-        logger.warning("ord_schema_not_installed")
-        return dict(_NOT_INSTALLED)
-
-    try:
-        message = json_format.ParseDict(compound_json, reaction_pb2.Compound())
-    except json_format.ParseError as exc:
-        return {"valid": False, "errors": [f"ORD parse error: {exc}"], "warnings": []}
-
-    return _validate_message(message, require_provenance=False)
+    result, _ = _parse_and_validate(compound_json, "Compound", require_provenance=False)
+    return result
