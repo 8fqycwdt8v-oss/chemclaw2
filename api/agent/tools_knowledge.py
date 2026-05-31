@@ -32,6 +32,7 @@ from api.agent.tool_helpers import (
     _parse_cached_payload,
     _redact_ssrf_error,
     _SSRFError,
+    _staleness_warning,
 )
 
 logger = logging.getLogger(__name__)
@@ -362,12 +363,21 @@ def build_knowledge_tools(
                 if idx >= 0:
                     text_body = text_body[max(0, idx - 100): idx + 2000]
             payload = _parse_cached_payload(entry.get("payload"), cache_key=cache_source_id)
-            return {
+            result = {
                 "guideline": guideline_key,
                 "summary": text_body[:3000],
                 "url": payload.get("url", ""),
                 "cached": True,
             }
+            # ICH revises guidelines without changing the landing-page URL, so
+            # a long-lived cache entry may describe a superseded revision even
+            # though the 24h text refresh keeps it "fresh". Surface an advisory
+            # (not a cache bust) once we've been tracking this guideline for
+            # >30 days so the agent can flag it for re-verification.
+            warning = _staleness_warning(entry.get("first_seen"), _dt.now(tz=UTC))
+            if warning:
+                result["stale_warning"] = warning
+            return result
 
         # Fetch from ich.org via the shared SSRF-pinned helper.
         url = _ICH_URLS.get(guideline_key, "https://www.ich.org/page/quality-guidelines")

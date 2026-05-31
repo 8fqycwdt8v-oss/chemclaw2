@@ -21,6 +21,7 @@ RUN python -m venv /opt/venv && \
 # nobody noticed.)
 COPY packages/mcp-servers/ ./packages/mcp-servers/
 RUN /opt/venv/bin/pip install --no-cache-dir \
+        packages/mcp-servers/mcp_chemclaw_shared \
         packages/mcp-servers/mcp_molfp \
         packages/mcp-servers/mcp_rxnfp \
         packages/mcp-servers/mcp_retrosynth \

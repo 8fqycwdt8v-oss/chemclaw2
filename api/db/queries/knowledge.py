@@ -216,7 +216,8 @@ async def get_external_fact_by_source_id(
     """Return the external_fact row matching source_id exactly, or None."""
     result = await db.execute(
         text("""
-            SELECT id::text, source_type, source_id, payload, content_text, last_seen
+            SELECT id::text, source_type, source_id, payload, content_text,
+                   first_seen, last_seen
             FROM external_facts
             WHERE source_id = :sid
             LIMIT 1

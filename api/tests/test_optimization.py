@@ -291,6 +291,7 @@ def test_min_datapoints_env_invalid_falls_back_to_default(
 # ── P2 review-finding: BOFIRE happy path (LHS) ────────────────────────────────
 
 
+@pytest.mark.heavy
 def test_propose_via_bofire_lhs_path() -> None:
     """When [opt] is installed and there are 0 completed experiments,
     the dispatcher picks BOFIRE's RandomStrategy (LHS) and returns
@@ -323,6 +324,7 @@ def test_propose_via_bofire_lhs_path() -> None:
         assert cond["solvent"] in {"THF", "DMF", "EtOH"}
 
 
+@pytest.mark.heavy
 def test_propose_via_bofire_lhs_proposals_are_diverse() -> None:
     """LHS should produce DIFFERENT proposals — otherwise it's no better
     than the V1 heuristic. Pin a sanity floor: at least 2 of 5 proposals
@@ -339,6 +341,7 @@ def test_propose_via_bofire_lhs_proposals_are_diverse() -> None:
     )
 
 
+@pytest.mark.heavy
 def test_propose_via_bofire_gp_path_with_full_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

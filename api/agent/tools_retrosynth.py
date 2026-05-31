@@ -25,7 +25,7 @@ from claude_agent_sdk import SdkMcpTool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.agent.tool_adapter import wrap_tool
-from api.agent.tool_helpers import _cache_is_fresh, _parse_cached_payload
+from api.agent.tool_helpers import _cache_is_fresh, _canonical_smiles, _parse_cached_payload
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,8 @@ def build_retrosynth_tools(
         if not (1 <= max_seconds <= 600):
             return {"error": "max_seconds must be between 1 and 600"}
 
-        cache_key = f"aizynth:{s}"
+        # Canonicalise so `aizynth:CCO` and `aizynth:OCC` share a cache entry.
+        cache_key = f"aizynth:{_canonical_smiles(s)}"
         cutoff = _dt.now(tz=UTC) - timedelta(days=30)
         async with session_factory() as db:
             cached = await get_external_fact_by_source_id(db, cache_key)

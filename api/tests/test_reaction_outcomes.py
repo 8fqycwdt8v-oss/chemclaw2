@@ -165,8 +165,15 @@ async def test_insert_outcome_rejects_bad_inputs(session_factory, user_id: str) 
 
 
 @pytest.mark.asyncio
-async def test_find_similar_reactions_includes_outcomes(session_factory, user_id: str) -> None:
-    """When include_outcomes=True the returned hits carry their outcome list."""
+async def test_find_similar_reactions_includes_outcomes(
+    isolate_reactions, session_factory, user_id: str,
+) -> None:
+    """When include_outcomes=True the returned hits carry their outcome list.
+
+    `isolate_reactions` TRUNCATEs the reactions tables first so the bounded
+    `limit=20` similarity query isn't crowded out by rows left from earlier
+    runs on a reused local DB (the state-leakage flake noted in BACKLOG).
+    """
     rid_a = await _insert_reaction(
         session_factory, user_id, rxn_smiles="CC>>CCO",
         name="rxn_a", drfp_bits=_FP_ALL_ONES,

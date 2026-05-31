@@ -9,50 +9,15 @@ deeper analysis.
 """
 from __future__ import annotations
 
-import json
-import logging
 import os
-import sys
 import time
-from datetime import UTC, datetime
 
 from mcp.server.fastmcp import FastMCP
+from mcp_chemclaw_shared import configure_logging
 
 from mcp_retrosynth.disconnect import list_transforms, propose_disconnections
 
-
-class JsonFormatter(logging.Formatter):
-    """Emit single-line JSON to stderr. Stdout is reserved for JSON-RPC."""
-
-    def format(self, record: logging.LogRecord) -> str:
-        payload = {
-            "time": datetime.fromtimestamp(record.created, UTC).isoformat(),
-            "level": record.levelname.lower(),
-            "component": "mcp-retrosynth",
-            "event": record.getMessage(),
-        }
-        if record.exc_info:
-            payload["exc"] = self.formatException(record.exc_info)
-        for k, v in record.__dict__.items():
-            if k in ("args", "msg", "name", "exc_info", "exc_text", "stack_info",
-                     "lineno", "funcName", "created", "msecs", "relativeCreated",
-                     "thread", "threadName", "processName", "process", "filename",
-                     "module", "pathname", "levelname", "levelno"):
-                continue
-            payload[k] = v
-        return json.dumps(payload)
-
-
-def _configure_logging() -> logging.Logger:
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(JsonFormatter())
-    root = logging.getLogger()
-    root.handlers = [handler]
-    root.setLevel(os.environ.get("MCP_LOG_LEVEL", "INFO"))
-    return logging.getLogger("mcp_retrosynth")
-
-
-log = _configure_logging()
+log = configure_logging("mcp-retrosynth")
 mcp = FastMCP("mcp-retrosynth")
 
 MAX_SMILES_LEN = 10_000
