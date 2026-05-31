@@ -1,14 +1,16 @@
 """Curator inbox — single endpoint aggregating things waiting for human attention.
 
-V2 created three independent sources of "review me" items:
+V2 created independent sources of "review me" items:
   - Wiki pages with `needs_review=true` (created by document uploads,
     agent-authored drafts, manual marking)
   - Campaign steps in `pending_approval` (agent flagged as high-risk)
   - Wiki contradictions in `resolved=false` state
+  - Automated draft reviews whose decision is not 'accept' (the
+    ensemble reviewer flagged a report/wiki draft for human attention)
 
-Users had to know about three endpoints to triage them. This router
-aggregates all three into `GET /api/curator/inbox` with a single
-`total_pending` count for badge UIs and three labelled buckets.
+Users had to know about several endpoints to triage them. This router
+aggregates them into `GET /api/curator/inbox` with a single
+`total_pending` count for badge UIs and labelled buckets.
 
 Buckets are owner-scoped where applicable; wiki contradictions are
 collaborative so they surface to every authenticated caller.
@@ -25,6 +27,7 @@ from api.auth import get_current_user
 from api.db.connection import get_db
 from api.db.queries.campaigns import list_steps_awaiting_approval
 from api.db.queries.contradictions import list_contradictions
+from api.db.queries.draft_reviews import list_draft_reviews_needing_attention
 from api.db.queries.rate_limit import rate_limit
 from api.db.queries.wiki_read import list_wiki_needs_review
 
@@ -46,11 +49,14 @@ async def get_curator_inbox(
     step_approvals = await list_steps_awaiting_approval(db, user_id, limit=50)
     # Contradictions are collaborative — every caller sees the same list.
     contradictions = await list_contradictions(db, resolved=False, limit=50)
+    draft_reviews = await list_draft_reviews_needing_attention(db, user_id, limit=50)
     return {
         "wiki_needs_review": wiki_pages,
         "step_approvals": step_approvals,
         "contradictions": contradictions,
+        "draft_reviews": draft_reviews,
         "total_pending": (
-            len(wiki_pages) + len(step_approvals) + len(contradictions)
+            len(wiki_pages) + len(step_approvals)
+            + len(contradictions) + len(draft_reviews)
         ),
     }

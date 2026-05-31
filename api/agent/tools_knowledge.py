@@ -21,6 +21,7 @@ from datetime import UTC
 from typing import Any
 
 from claude_agent_sdk import SdkMcpTool
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.agent.tool_adapter import wrap_tool
@@ -63,6 +64,38 @@ _ICH_URLS: dict[str, str] = {
     # Multidisciplinary
     "ICH M7": "https://www.ich.org/page/multidisciplinary-guidelines",
 }
+
+
+class CitationSupport(BaseModel):
+    """Whether a retrieved source supports the claim attached to it."""
+
+    supports: str  # 'yes' | 'partial' | 'no'
+    confidence: int  # 1-10
+    rationale: str = ""
+
+
+_CITATION_SUPPORT_PROMPT = """You are checking whether a cited source actually \
+supports a factual claim, to catch hallucinated or mis-attributed citations.
+
+Claim:
+\"\"\"
+{claim}
+\"\"\"
+
+Excerpts retrieved from the cited source:
+{excerpts}
+
+Decide whether the excerpts substantiate the claim. Reply with EXACTLY one JSON \
+object inside a ```json fenced block. No prose.
+
+```json
+{{"supports": "<yes|partial|no>", "confidence": <integer 1-10>,
+  "rationale": "<one sentence>"}}
+```
+
+Use 'yes' only when the excerpts directly substantiate the claim, 'partial' when \
+they are related but don't fully support it, and 'no' when they are off-topic or \
+contradict the claim. Judge only from the excerpts shown."""
 
 
 def build_knowledge_tools(
@@ -331,6 +364,208 @@ def build_knowledge_tools(
                 )
         return {"id": contradiction_id}
 
+    async def check_citations(
+        claims: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Verify each citation actually supports the claim attached to it.
+
+        Run this before committing a wiki page (or report) that carries
+        citations, to catch hallucinated or mis-attributed sources — a
+        known failure mode of LLM-generated text.
+
+        `claims` is a list of up to 20 objects, each:
+          {claim: str, citation_id?: str, paper_id?: str}
+        For each, the tool (1) checks the cited external fact still resolves
+        and is fresh, and (2) retrieves the cited paper's chunks (restricted
+        to `paper_id` when given) and asks a judge model whether they
+        support the claim.
+
+        Returns {results: [{claim, citation_id, source_status, supports,
+        confidence, verdict, detail, suggest_record_contradiction}]}. When
+        `supports='no'`, `suggest_record_contradiction` is true so you can
+        fix the claim or call `record_contradiction`. Fails open per claim
+        (verdict='unverified') and logs when retrieval/judging is
+        unavailable — it never blocks on its own.
+        """
+        if not isinstance(claims, list) or not claims:
+            return {"error": "claims must be a non-empty list"}
+        if len(claims) > 20:
+            return {"error": "at most 20 claims per call"}
+
+        from datetime import datetime as _dt
+        from datetime import timedelta
+
+        from api.agent.llm_judge import judge_json, resolve_judge_model
+        from api.db.queries.knowledge import get_external_fact_by_source_id
+        from api.db.queries.paper_chunks import hybrid_search_paper_chunks
+        from api.embeddings import embed_texts
+
+        provider, model = resolve_judge_model("text")
+        cutoff = _dt.now(tz=UTC) - timedelta(days=30)
+        results: list[dict[str, Any]] = []
+        for item in claims:
+            if not isinstance(item, dict):
+                results.append({"verdict": "invalid", "detail": "claim must be an object"})
+                continue
+            claim = (item.get("claim") or "").strip()
+            citation_id = item.get("citation_id")
+            paper_id = item.get("paper_id")
+            if not claim:
+                results.append({
+                    "citation_id": citation_id, "verdict": "invalid",
+                    "detail": "missing claim text",
+                })
+                continue
+
+            source_status: str | None = None
+            if citation_id:
+                async with session_factory() as db:
+                    fact = await get_external_fact_by_source_id(db, citation_id)
+                if fact is None:
+                    source_status = "unresolved"
+                else:
+                    source_status = (
+                        "current" if _cache_is_fresh(fact.get("last_seen"), cutoff)
+                        else "stale"
+                    )
+
+            if source_status == "unresolved":
+                results.append({
+                    "claim": claim[:200], "citation_id": citation_id,
+                    "source_status": source_status, "supports": "no",
+                    "confidence": None, "verdict": "unresolved",
+                    "detail": "cited source no longer resolves in external_facts",
+                    "suggest_record_contradiction": False,
+                })
+                continue
+
+            try:
+                embeddings = await embed_texts([claim[:500]])
+            except Exception:
+                logger.exception("check_citations_embedding_failed")
+                results.append({
+                    "claim": claim[:200], "citation_id": citation_id,
+                    "source_status": source_status, "supports": None,
+                    "confidence": None, "verdict": "unverified",
+                    "detail": "embedding service unavailable",
+                    "suggest_record_contradiction": False,
+                })
+                continue
+            async with session_factory() as db:
+                chunks = await hybrid_search_paper_chunks(
+                    db, claim[:500], embeddings[0], limit=4, paper_id=paper_id,
+                )
+            if not chunks:
+                results.append({
+                    "claim": claim[:200], "citation_id": citation_id,
+                    "source_status": source_status, "supports": None,
+                    "confidence": None, "verdict": "unverified",
+                    "detail": "no indexed source excerpts found for this claim",
+                    "suggest_record_contradiction": False,
+                })
+                continue
+
+            excerpts = "\n---\n".join((c.get("text") or "")[:600] for c in chunks)
+            parsed, err = await judge_json(
+                _CITATION_SUPPORT_PROMPT.format(claim=claim, excerpts=excerpts[:6000]),
+                provider=provider, model=model,
+            )
+            if parsed is None:
+                logger.error("check_citations_failed_open citation=%s err=%s", citation_id, err)
+                results.append({
+                    "claim": claim[:200], "citation_id": citation_id,
+                    "source_status": source_status, "supports": None,
+                    "confidence": None, "verdict": "unverified",
+                    "detail": err, "suggest_record_contradiction": False,
+                })
+                continue
+            try:
+                support = CitationSupport.model_validate(parsed)
+            except ValidationError as e:
+                logger.error("check_citations_bad_shape citation=%s err=%s", citation_id, e)
+                results.append({
+                    "claim": claim[:200], "citation_id": citation_id,
+                    "source_status": source_status, "supports": None,
+                    "confidence": None, "verdict": "unverified",
+                    "detail": "support response malformed",
+                    "suggest_record_contradiction": False,
+                })
+                continue
+            verdict = {"yes": "supported", "partial": "weak", "no": "unsupported"}.get(
+                support.supports, "unverified",
+            )
+            results.append({
+                "claim": claim[:200], "citation_id": citation_id,
+                "source_status": source_status, "supports": support.supports,
+                "confidence": support.confidence, "verdict": verdict,
+                "detail": support.rationale,
+                "suggest_record_contradiction": support.supports == "no",
+            })
+        return {"results": results}
+
+    async def review_draft(
+        draft_text: str,
+        kind: str = "report",
+        page_slug: str | None = None,
+        investigation_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run an automated ensemble review of a draft before committing it.
+
+        Call this before you commit a deep-research report (`kind='report'`)
+        or a needs-review wiki page (`kind='wiki'`). An ensemble of
+        independent LLM reviewers plus an area-chair meta-review (per Nature
+        s41586-026-10265-5) scores the draft for soundness, evidence
+        grounding, clarity, and value, then returns a consensus decision.
+
+        If `decision` is 'revise' or 'reject', address `top_issues` and
+        re-review before committing. The meta-review is persisted and
+        surfaces in the curator inbox when it isn't an 'accept', so a human
+        can see what the automated reviewer flagged.
+
+        Returns {overall, decision ∈ {accept,revise,reject}, summary,
+        top_issues, review_id}. This is a quality gate, not a hard block:
+        if reviewers are unavailable it returns a 'revise' decision noting
+        the reviewer couldn't run.
+        """
+        d = draft_text.strip()
+        if not d:
+            return {"error": "draft_text must be non-empty"}
+        if len(d) > 60_000:
+            return {"error": "draft_text too long (max 60000 chars)"}
+        if kind not in ("report", "wiki"):
+            return {"error": "kind must be 'report' or 'wiki'"}
+
+        from api.agent.reviewer import run_ensemble_review
+        from api.db.queries.draft_reviews import create_draft_review
+
+        meta, scores = await run_ensemble_review(d, kind=kind)
+        review_id: str | None = None
+        try:
+            async with session_factory() as db:
+                review_id = await create_draft_review(
+                    db,
+                    kind=kind,
+                    decision=meta.decision,
+                    overall=meta.overall,
+                    summary=meta.summary,
+                    top_issues=meta.top_issues,
+                    reviewer_scores=[s.model_dump() for s in scores],
+                    created_by=user_id,
+                    page_slug=page_slug,
+                    investigation_id=investigation_id,
+                )
+        except Exception:
+            # Persistence is best-effort; the review verdict is still useful
+            # to the agent even if the inbox row didn't land.
+            logger.exception("review_draft_persist_failed kind=%s", kind)
+        return {
+            "overall": meta.overall,
+            "decision": meta.decision,
+            "summary": meta.summary,
+            "top_issues": meta.top_issues,
+            "review_id": review_id,
+        }
+
     async def lookup_regulatory_guidance(
         guideline: str,
         topic: str | None = None,
@@ -421,5 +656,7 @@ def build_knowledge_tools(
         wrap_tool("record_external_fact", record_external_fact),
         wrap_tool("verify_citation", verify_citation),
         wrap_tool("record_contradiction", record_contradiction),
+        wrap_tool("check_citations", check_citations),
+        wrap_tool("review_draft", review_draft),
         wrap_tool("lookup_regulatory_guidance", lookup_regulatory_guidance),
     ]

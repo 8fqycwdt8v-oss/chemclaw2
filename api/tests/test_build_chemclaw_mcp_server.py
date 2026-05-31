@@ -44,7 +44,7 @@ def test_build_chemclaw_mcp_server_returns_sdk_shape():
 
 def test_all_expected_tools_register():
     """Every tool the agent's system prompt references must be in the
-    registered list. The current expected surface is 42 tools across the
+    registered list. The current expected surface is 46 tools across the
     5 thematic modules; this test pins down what's exposed."""
     from api.agent.tools_campaign import build_campaign_tools
     from api.agent.tools_chem import build_chem_tools
@@ -66,16 +66,17 @@ def test_all_expected_tools_register():
         "compound_similarity_search", "reaction_similarity_search",
         "suggest_conditions_from_neighbors", "list_reaction_outcomes",
         "substructure_search",
-        # knowledge (8)
+        # knowledge (10)
         "wiki_lookup", "lookup_knowledge", "register_paper", "paper_qa",
         "record_external_fact", "verify_citation", "record_contradiction",
+        "check_citations", "review_draft",
         "lookup_regulatory_guidance",
-        # investigation (13)
+        # investigation (15)
         "start_investigation", "list_investigations", "update_investigation_status",
         "world_model_add", "world_model_query", "world_model_supersede",
-        "propose_hypothesis", "list_hypotheses", "rank_hypotheses",
-        "retire_hypothesis", "run_code", "get_code_execution",
-        "list_code_executions",
+        "propose_hypothesis", "check_hypothesis_novelty", "list_hypotheses",
+        "rank_hypotheses", "retire_hypothesis", "run_code", "get_code_execution",
+        "critique_figure", "list_code_executions",
         # external (9)
         "web_search", "fetch_document", "eln_fetch_experiment",
         "ingest_eln_experiment", "record_manual_outcome", "name_to_structure",
@@ -91,7 +92,7 @@ def test_all_expected_tools_register():
     extra = all_names - expected
     assert not missing, f"expected tools missing: {missing}"
     assert not extra, f"unexpected tools present: {extra}"
-    assert len(all_names) == 42
+    assert len(all_names) == 46
 
 
 # ── wrap_tool adapter behaviour ──────────────────────────────────────────────

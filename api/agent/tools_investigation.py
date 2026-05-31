@@ -11,12 +11,94 @@ investigation_id is given.
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import json
+import logging
 from typing import Any
 
 from claude_agent_sdk import SdkMcpTool
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.agent.tool_adapter import wrap_tool
+
+logger = logging.getLogger(__name__)
+
+
+class FigureIssue(BaseModel):
+    """One problem the vision critic flagged on a figure."""
+
+    kind: str
+    detail: str
+
+
+class FigureCritique(BaseModel):
+    """Structured result of a single vision-model figure critique."""
+
+    ok: bool
+    severity: str  # 'none' | 'minor' | 'major'
+    issues: list[FigureIssue] = Field(default_factory=list)
+
+
+_FIGURE_CRITIQUE_PROMPT = """You are a meticulous data-visualization reviewer for a \
+scientific knowledge base. Examine the attached figure as if it were about to be \
+cited as evidence in a wiki page. Flag only real, visible problems that would \
+mislead a reader or make the figure unusable as evidence.
+
+Check for: missing or unreadable axis labels, missing units, absent legend when \
+multiple series are shown, truncated or non-zero-baseline axes that exaggerate \
+effects, illegible text, overlapping/clipped elements, and obvious mislabeling.
+
+Reply with EXACTLY one JSON object inside a ```json fenced block. No prose.
+
+```json
+{"ok": <true if the figure is sound enough to cite, false otherwise>,
+ "severity": "<none|minor|major>",
+ "issues": [{"kind": "<one of: missing_legend, unlabeled_axes, missing_units, \
+misleading_scale, truncated_axis, illegible, mislabeled, other>",
+             "detail": "<one concise sentence>"}]}
+```
+
+Use severity 'none' with an empty issues list when the figure is clean. Use \
+'minor' for cosmetic issues that don't undermine the evidence, and 'major' \
+(with ok=false) only when a problem would mislead or the figure can't be \
+interpreted."""
+
+
+class NoveltyAssessment(BaseModel):
+    """Structured prior-art verdict for a candidate hypothesis."""
+
+    label: str  # 'novel' | 'incremental' | 'known'
+    closest_prior: str | None = None
+    rationale: str = ""
+
+
+_NOVELTY_PROMPT = """You are assessing whether a proposed research hypothesis is \
+novel relative to prior work already known to the organization.
+
+Candidate hypothesis:
+\"\"\"
+{statement}
+\"\"\"
+
+Closest prior work retrieved from the indexed knowledge base (papers + wiki):
+{prior}
+
+Decide how much the candidate overlaps with this prior work. Reply with EXACTLY \
+one JSON object inside a ```json fenced block. No prose.
+
+```json
+{{"label": "<novel|incremental|known>",
+  "closest_prior": "<one phrase naming the most overlapping prior item, or null>",
+  "rationale": "<one or two sentences justifying the label>"}}
+```
+
+Guide: 'known' = the hypothesis restates something in the prior work; \
+'incremental' = a modest extension of existing work; 'novel' = no close prior \
+match in the retrieved set. Judge only against the retrieved items — do not rely \
+on outside knowledge."""
 
 
 def build_investigation_tools(
@@ -196,6 +278,7 @@ def build_investigation_tools(
         statement: str,
         rationale: str | None = None,
         parent_id: str | None = None,
+        novelty: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Add a hypothesis to an investigation.
 
@@ -203,6 +286,10 @@ def build_investigation_tools(
         hypothesis (Google AI Co-Scientist's Evolution agent pattern) and
         must belong to the same user. The new hypothesis starts at the
         default Elo rating (1000) until it's compared via `rank_hypotheses`.
+
+        `novelty`, if set, is the result of a prior `check_hypothesis_novelty`
+        call — pass it through so the tournament view flags hypotheses that
+        closely resemble existing work.
         """
         from api.db.queries.hypotheses import create_hypothesis
         from api.db.queries.investigations import get_investigation
@@ -211,6 +298,8 @@ def build_investigation_tools(
             return {"error": "statement must be 1-4000 chars"}
         if rationale is not None and len(rationale) > 4000:
             return {"error": "rationale must be ≤4000 chars"}
+        if novelty is not None and not isinstance(novelty, dict):
+            return {"error": "novelty must be an object (from check_hypothesis_novelty)"}
         async with session_factory() as db:
             inv = await get_investigation(db, investigation_id, user_id)
             if inv is None:
@@ -218,11 +307,100 @@ def build_investigation_tools(
             try:
                 hid = await create_hypothesis(
                     db, investigation_id, user_id, s,
-                    rationale=rationale, parent_id=parent_id,
+                    rationale=rationale, parent_id=parent_id, novelty=novelty,
                 )
             except ValueError as e:
                 return {"error": str(e)}
         return {"id": hid, "parent_id": parent_id, "elo_rating": 1000.0}
+
+    async def check_hypothesis_novelty(
+        statement: str,
+    ) -> dict[str, Any]:
+        """Check a candidate hypothesis for prior art before proposing it.
+
+        Retrieves the closest prior work from the indexed knowledge base
+        (paper chunks via hybrid FTS+semantic search, plus wiki pages) and
+        asks a judge model whether the hypothesis is novel, an incremental
+        extension, or already known. Call this *before* `propose_hypothesis`
+        and pass the returned dict as its `novelty` argument so the
+        tournament view can flag rediscoveries.
+
+        Scope note: this checks the organization's *indexed* knowledge
+        (ingested papers + wiki), not the open web. Returns {label ∈
+        {novel,incremental,known,unknown}, closest_prior, rationale,
+        related: [titles], checked_against}. Fails open (label='unknown')
+        with a `novelty_error` when the judge is unavailable.
+        """
+        s = statement.strip()
+        if not s or len(s) > 4000:
+            return {"error": "statement must be 1-4000 chars"}
+
+        from api.db.queries.paper_chunks import hybrid_search_paper_chunks
+        from api.db.queries.wiki_read import search_wiki_by_fts
+        from api.embeddings import embed_texts
+
+        q = s[:500]
+        prior: list[dict[str, Any]] = []
+        related: list[str] = []
+        try:
+            embeddings = await embed_texts([q])
+        except Exception:
+            logger.exception("novelty_embedding_failed")
+            embeddings = None
+        async with session_factory() as db:
+            if embeddings is not None:
+                chunks = await hybrid_search_paper_chunks(db, q, embeddings[0], limit=5)
+                for c in chunks:
+                    title = c.get("title") or "(untitled paper)"
+                    related.append(title)
+                    prior.append({
+                        "source": "paper", "title": title,
+                        "doi": c.get("doi"),
+                        "excerpt": (c.get("text") or "")[:500],
+                    })
+            wiki = await search_wiki_by_fts(db, q, limit=5)
+            for w in wiki:
+                title = w.get("title") or w.get("slug") or "(wiki page)"
+                related.append(title)
+                prior.append({
+                    "source": "wiki", "title": title,
+                    "excerpt": (w.get("content_text") or "")[:500],
+                })
+
+        if not prior:
+            return {
+                "label": "novel", "closest_prior": None,
+                "rationale": "No related prior work found in the indexed knowledge base.",
+                "related": [], "checked_against": "papers+wiki",
+            }
+
+        from api.agent.llm_judge import judge_json, resolve_judge_model
+        prompt = _NOVELTY_PROMPT.format(
+            statement=s, prior=json.dumps(prior)[:6000],
+        )
+        provider, model = resolve_judge_model("text")
+        parsed, err = await judge_json(prompt, provider=provider, model=model)
+        if parsed is None:
+            logger.error("novelty_check_failed_open err=%s", err)
+            return {
+                "label": "unknown", "closest_prior": None, "rationale": "",
+                "related": related, "checked_against": "papers+wiki",
+                "novelty_error": err,
+            }
+        try:
+            assessment = NoveltyAssessment.model_validate(parsed)
+        except ValidationError as e:
+            logger.error("novelty_check_bad_shape err=%s", e)
+            return {
+                "label": "unknown", "closest_prior": None, "rationale": "",
+                "related": related, "checked_against": "papers+wiki",
+                "novelty_error": "novelty response malformed",
+            }
+        return {
+            **assessment.model_dump(),
+            "related": related,
+            "checked_against": "papers+wiki",
+        }
 
     async def list_hypotheses_tool(
         investigation_id: str,
@@ -383,6 +561,96 @@ def build_investigation_tools(
             return {"error": "execution not found or not owned by user"}
         return {"execution": row}
 
+    async def critique_figure(
+        execution_id: str,
+        filename: str,
+    ) -> dict[str, Any]:
+        """Critique a captured figure with a vision model before citing it.
+
+        Call this on a PNG produced by `run_code` *before* you cite it in
+        a wiki page or report. A cheap vision model checks the figure for
+        problems that would mislead a reader — missing axis labels/units,
+        absent legends, truncated or misleading scales, illegible text —
+        so a flawed plot doesn't become cited evidence.
+
+        Owner-scoped via the execution's `created_by`. The result is
+        cached on the artifact by image byte-hash, so re-critiquing the
+        same unchanged figure is free (`cached: true`).
+
+        Returns {ok, severity ∈ {none,minor,major,unknown}, issues:
+        [{kind, detail}], cached}. This is a quality aid, not a hard gate:
+        if the vision model is unavailable it fails open with
+        severity='unknown' and a `critique_error`, so you can proceed but
+        should note the figure wasn't verified.
+        """
+        from api.db.queries.code_executions import (
+            attach_artifact_critique,
+            get_execution,
+        )
+        async with session_factory() as db:
+            row = await get_execution(db, execution_id, user_id)
+        if row is None:
+            return {"error": "execution not found or not owned by user"}
+        artifact = next(
+            (
+                a for a in row.get("artifacts", [])
+                if isinstance(a, dict) and a.get("filename") == filename
+            ),
+            None,
+        )
+        if artifact is None:
+            return {"error": f"no artifact named {filename!r} in execution"}
+        b64 = artifact.get("b64")
+        if not b64:
+            return {"error": f"artifact {filename!r} has no image payload"}
+        try:
+            art_hash = hashlib.sha256(base64.b64decode(b64)).hexdigest()
+        except (binascii.Error, ValueError):
+            return {"error": f"artifact {filename!r} is not valid base64"}
+
+        cached = artifact.get("critique")
+        if isinstance(cached, dict) and cached.get("hash") == art_hash:
+            return {
+                "ok": cached.get("ok"),
+                "severity": cached.get("severity"),
+                "issues": cached.get("issues", []),
+                "cached": True,
+            }
+
+        from api.agent.llm_judge import judge_json, resolve_judge_model
+        provider, model = resolve_judge_model("vision")
+        parsed, err = await judge_json(
+            _FIGURE_CRITIQUE_PROMPT, provider=provider, model=model, images=[b64],
+        )
+        if parsed is None:
+            # Quality gate, not security — fail open, but log (obs-rule 5).
+            logger.error(
+                "critique_figure_failed_open execution=%s file=%s err=%s",
+                execution_id, filename, err,
+            )
+            return {
+                "ok": True, "severity": "unknown", "issues": [],
+                "cached": False, "critique_error": err,
+            }
+        try:
+            critique = FigureCritique.model_validate(parsed)
+        except ValidationError as e:
+            logger.error(
+                "critique_figure_bad_shape execution=%s file=%s err=%s",
+                execution_id, filename, e,
+            )
+            return {
+                "ok": True, "severity": "unknown", "issues": [],
+                "cached": False, "critique_error": "critique response malformed",
+            }
+        payload = critique.model_dump()
+        async with session_factory() as db:
+            await attach_artifact_critique(
+                db, execution_id, user_id,
+                filename=filename, art_hash=art_hash, critique=payload,
+            )
+        return {**payload, "cached": False}
+
     async def list_code_executions(
         investigation_id: str | None = None,
         limit: int = 20,
@@ -414,10 +682,12 @@ def build_investigation_tools(
         wrap_tool("world_model_query", world_model_query),
         wrap_tool("world_model_supersede", world_model_supersede),
         wrap_tool("propose_hypothesis", propose_hypothesis),
+        wrap_tool("check_hypothesis_novelty", check_hypothesis_novelty),
         wrap_tool("list_hypotheses", list_hypotheses_tool),
         wrap_tool("rank_hypotheses", rank_hypotheses),
         wrap_tool("retire_hypothesis", retire_hypothesis_tool),
         wrap_tool("run_code", run_code),
         wrap_tool("get_code_execution", get_code_execution),
+        wrap_tool("critique_figure", critique_figure),
         wrap_tool("list_code_executions", list_code_executions),
     ]

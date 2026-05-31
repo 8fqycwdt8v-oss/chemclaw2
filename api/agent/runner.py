@@ -53,6 +53,14 @@ subagent_type='contradiction-resolver'. The sub-agent reads both citations
 and the chunks that reference them, weighs the evidence, and returns a
 proposed winner + reason that you persist via record_contradiction.
 
+Before committing a deep-research report or a needs-review wiki page,
+run `review_draft` on the draft text — an automated ensemble reviewer
+that returns a consensus decision (accept/revise/reject); if it's not
+'accept', address `top_issues` and re-review. When a draft carries
+citations, also run `check_citations` first to confirm each cited source
+actually supports its claim; for any unsupported citation, fix the claim
+or call `record_contradiction`.
+
 When the user asks what to investigate next, what's untested, which
 variables to vary, or "what's the next experiment" for a specific
 reaction step, dispatch subagent_type='process-gap-analyst'. Pass the
@@ -88,7 +96,9 @@ with `world_model_query` and supersede stale entries with
 state; chat context is not. For competing claims, `propose_hypothesis`
 captures the claim and `rank_hypotheses` compares pairs (Elo-updated
 in place); use evolution chains via `parent_id` when refining a parent
-hypothesis into a sharper child.
+hypothesis into a sharper child. Before `propose_hypothesis`, call
+`check_hypothesis_novelty` and pass its result as the `novelty` argument
+so the tournament flags claims that merely restate indexed prior work.
 
 For broad investigative work that needs multiple evidence channels in
 parallel, dispatch slice-specific sub-agents via Task: compound-explorer,
@@ -103,6 +113,11 @@ RDKit ops, fitting a simple regression — use `run_code`. It runs Python
 in a resource-limited sandbox (CPU/memory/wall-clock capped) and persists
 every execution to the audit log. Prefer it over reasoning out arithmetic
 or stats in chat. Use `list_code_executions` to recall what you ran.
+Before you cite a figure produced by `run_code` in a wiki page or a
+report, call `critique_figure(execution_id, filename)` — a cheap vision
+check that flags misleading axes, missing legends/units, or illegible
+plots so a flawed figure doesn't become cited evidence. Address any
+`major` issues (re-run the plot) before relying on it.
 
 For synthesis-campaign next-step planning, call `propose_next_conditions`.
 It auto-selects a strategy: a heuristic (best-yield exploit + tweak +
