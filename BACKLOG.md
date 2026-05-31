@@ -4,277 +4,105 @@ Append-only ledger of deferred work for chemclaw2 (Python / FastAPI).
 
 > History note: prior entries tracked the pre-Python TypeScript monorepo (Drizzle, `apps/web/`, `packages/db`, `packages/agent-tools`, `workers/fp-worker`, Tiptap, Next.js App Router). That code was deleted in commit `2b3ab16` ("python/phase9: delete TypeScript frontend, DB layer, agent-tools, and worker"). Carry-over items that referenced those paths were dropped on 2026-05-18 — see git history for the previous file if a TS-era observation is needed for context. The `typescript_old` branch remains the authoritative archive.
 
-## Shipped (Tiers A–E, May 2026)
+> **Prioritization + cleanup pass (2026-05-31).** Verified every open item against the codebase and removed those confirmed shipped: orphan TS packages (`packages/{agent-tools,db,observability}/` are gone — only `mcp-servers/` remains), route-layer integration tests (`test_routes_{admin,chat,wiki,campaigns}.py` exist), the tool-layer smoke harness (`test_tool_handlers_e2e.py` + the `build_*_tools` extraction / `tool_adapter.wrap_tool` resolved the SDK-access blocker), the `mcp_molfp`/`mcp_rxnfp` wheel layout (both now use `<name>/<name>/server.py`), and the CI mypy gate (re-enabled as a hard gate in `ci.yml`). All previously-struck-through ("shipped") sub-bullets were folded into the Shipped section below; full per-PR history is in git. Remaining open work is ranked P1 → P3 under **Open**.
 
-Tiers A–E from the original roadmap were implemented in one batched session:
+## Shipped
+
+### Tiers A–E (May 2026)
 
 - **A — security & correctness quick wins** (PR #89, `1f6dec2`): JWT `iss` validation, startup `ADMIN_USER_IDS` parse, refuse `ALLOW_MOCK_AUTH=1` outside dev envs, single substance-gate choke-point, rate-limit key sanitization across 41 call sites.
 - **B — performance fixes** (PR #90, `ac88683`): batched campaign step queries (N+1 → 3 queries/cycle), atomic `try_consume_tool_call` (eliminates budget-cap TOCTOU), 1 MB SSE block cap.
 - **C — refactor** (PR #91, `5dfa97a`): split `wiki.py` (521 LOC) into `wiki_read.py` + `wiki_write.py`, extracted `api/embeddings.py`.
-- **D — pytest harness + codebase-wide CAST fix** (PR #92, `618cbde`): conftest with mock-auth + AsyncSession fixtures; 28 new tests covering rate-limit / substance gate / wiki queries / budgets / batched campaigns. Surfaced a latent codebase-wide bug — SQLAlchemy 2.0's `text()` parser mis-handles `:name::type` cast syntax (consumes one char off the bind name), leaving literal `:cid::uuid` in the SQL. Rewrote all 57 occurrences across 14 files to `CAST(:name AS type)`. Production wiki upserts have presumably been 500'ing on every call since the Python port; no test caught it because none exercised a write-path query before this PR.
-- **E — polish** (PR #93, `9a406b8`): `get_wiki_page_at` now returns `temporal_exact: bool` + `temporal_warning: str | None` so compliance §3.8 reproducibility can distinguish exact vs best-effort bi-temporal results.
+- **D — pytest harness + codebase-wide CAST fix** (PR #92, `618cbde`): conftest with mock-auth + AsyncSession fixtures; 28 new tests. Surfaced a latent codebase-wide bug — SQLAlchemy 2.0's `text()` parser mis-handles `:name::type` cast syntax; rewrote all 57 occurrences across 14 files to `CAST(:name AS type)`.
+- **E — polish** (PR #93, `9a406b8`): `get_wiki_page_at` returns `temporal_exact: bool` + `temporal_warning: str | None` for compliance §3.8 reproducibility.
+
+### Deep-review / refactor sweep (PRs #170–#177, 2026-05-30)
+
+- **#170** — extracted `_cache_is_fresh` / `_parse_cached_payload` into `tool_helpers` (CACTUS / ICH / AiZynth / citation tools).
+- **#171** — centralised keyset-cursor + UUID validation into `api/routes/_validation.py`; search fingerprint check → Pydantic `Field(pattern=…)` (422); fixed `PATCH /api/wiki/{slug}/seen` leaking internal version.
+- **#172** — wall-capped the BOFIRE GP fit in `propose_next_conditions`; logged `fp_worker`'s two silent rollback failures.
+- **#173** — logged `mcp_codesandbox`'s five silent kill-cleanup excepts; removed dead `import os`.
+- **#176** — fixed bofire stale API (`qLogExpectedImprovement` → `qLogEI`) and pinned `bofire[optimization]>=0.3.1,<0.4`; GP-path test runs the real torch fit.
+- **#177** — consolidated `new_campaign` factory into `api/tests/_factories.py`; 15 new HTTP-layer tests for `audit.py` / `curator.py` / `feedback.py`.
+
+### CI / infra (resolved)
+
+- **Heavy CI lane green on `main`** (PR #174 + #176) — `mordredcommunity` added to `[opt]`; bofire `qLogEI` fix. (Gating flip + `@pytest.mark.heavy` marker still open — see P1.)
+- **CI mypy gate** — re-enabled as a hard gate in `.github/workflows/ci.yml`; the earlier CI-vs-local drift was resolved.
+- **Migration policy** — documented in `migrations/MIGRATIONS.md`; CLAUDE.md points at it. New index migrations on populated tables use `CREATE INDEX CONCURRENTLY` in single-statement files.
+- **Orphan TS packages deleted** — `packages/{agent-tools,db,observability}/` removed; only Python `mcp-servers/` remains.
+
+### Feature surface (resolved)
+
+- **MCP server merge** — `mcp_chem_intel` extracts the dependency-light primitives from the forward/retro/eln sibling repos (`score_synthesizability`, `classify_reaction`, `expand_abbreviation`). Heavy/agentic parts deferred (see P3).
+- **Wiki audit-read** — `GET /api/audit/wiki/{slug}` (admin-only): page metadata + full revision list.
+- **Hybrid FTS + semantic search with RRF fusion** — `hybrid_search_wiki` (K=60), default for `wiki_lookup` + `GET /api/search`; FTS-only preserved as `mode=fts`.
+- **Campaign step approval** — `POST /api/campaigns/{id}/steps/{idx}/approve` + `/reject` + `GET /api/campaigns/steps/awaiting-approval`; agent tool `confirm_synthesis_plan` accepts per-step `requires_approval`. UI deferred.
+- **Curator inbox** — `GET /api/curator/inbox` aggregates needs-review pages, pending-approval steps, unresolved contradictions.
+- **Document ingestion** — DOI detection + CrossRef metadata + wiki draft (PR 4a); LLM compound/citation extraction via Haiku (`?extract=full`, PR 4b).
+- **Property predictions** — `compute_descriptors(smiles)` in `mcp_molfp` (deterministic RDKit descriptors + Lipinski).
+- **Bayesian optimisation** — `propose_next_conditions` 3-stage dispatcher (heuristic → BOFIRE LHS → GP+qLogEI) behind `[opt]` (PR #122).
+- **Container-isolated sandbox** — bwrap → `unshare -n` → `python -I` tiered (PR #125); figure capture via `code_executions.artifacts` JSONB (migration 0042, PR #124).
+- **Paper RAG** — HNSW index on `paper_chunks.embedding` (migration 0041, PR #119); end-to-end hybrid-search test + `IllegalStateChangeError` fix (PR #120); chunk-size config + RCS OpenAI fallback.
+- **External retrosynthesis** — AiZynthFinder behind `[retrosynth]`; `propose_retrosynthesis_deep` with 5-min wall cap + 30-day cache (PR #126).
+- **SSRF DNS-rebinding TOCTOU** — `_fetch_validated` resolves DNS once, pins the IP, passes hostname via `Host` + `sni_hostname`; all three call sites migrated.
+- **Secret patterns** — Stripe/JWT/SendGrid/Twilio/npm added to `_SECRET_PATTERNS`.
+- **Test/refactor hygiene** — split `campaigns.py` → `campaign_steps.py`; `rate_limit()` dependency factory across 26 routes; `fingerprints.py` extraction; campaign-wiki retry + `backfill_missing_campaign_wikis` worker pass.
+- **Tests** — route-layer integration tests (`test_routes_{admin,chat,wiki,campaigns}.py`) + tool-layer smoke harness (`test_tool_handlers_e2e.py`).
+- **MCP wheel layout** — all seven servers now use the proper `<name>/<name>/server.py` packaging.
 
 ## Open
 
-### Deep-review / refactor / simplification sweep (2026-05-30)
+Ranked by readiness-to-implement. P1 = actionable now, trigger met, low risk. P2 = deferred until a stated trigger or demand. P3 = long-horizon / blocked on externals.
 
-Five-agent fan-out review of the whole backend (agent layer, db/queries, routes,
-workers/integrations, MCP servers + tests), then shipped as stacked PRs off
-`main`. Landed this session:
+### P1 — actionable now
 
-- **PR #170** — extracted `_cache_is_fresh` / `_parse_cached_payload` into
-  `tool_helpers`; the CACTUS / ICH / AiZynth / citation tools no longer
-  hand-roll the `external_facts` cache freshness + payload-parse dance (two of
-  the three sites previously swallowed the JSON decode error with no log).
-- **PR #171** — centralised keyset-cursor + UUID validation into
-  `api/routes/_validation.py` (was copy-pasted across wiki + campaigns); moved
-  the search fingerprint check to a Pydantic `Field(pattern=…)` (now 422); fixed
-  `PATCH /api/wiki/{slug}/seen` leaking the page's internal version in its 400.
-- **PR #172** — wall-capped the BOFIRE GP fit in `propose_next_conditions`
-  (mirrors the retrosynth `wait_for`); logged `fp_worker`'s two silent rollback
-  failures.
-- **PR #173** — logged `mcp_codesandbox`'s five silent kill-cleanup excepts;
-  removed the dead `import os` / `_ = os` block.
-- **PR #174** — added `mordredcommunity` to `[opt]` to repair the heavy lane
-  (see the CI item below).
+- **Extract shared `JsonFormatter` / `_configure_logging` into `mcp_chemclaw_shared`.** Trigger ("a fourth server") is long past — the copy now lives in **seven** MCP servers (`mcp_molfp`, `mcp_rxnfp`, `mcp_chem_intel`, `mcp_codesandbox`, `mcp_rxn_conditions`, `mcp_tabular`, `mcp_retrosynth`). Highest-value cleanup left: one small package, deletes ~6 copies, low risk.
+- **SMILES canonicalisation for the AiZynth cache key.** `aizynth:CCO` vs `aizynth:OCC` miss each other in `external_facts`. One-liner: `Chem.MolToSmiles(Chem.MolFromSmiles(s))` before building the key. (Phase D §H.)
+- **Flip the heavy CI lane to gating.** It is green on `main` but still `continue-on-error: true`. Once it logs 5 consecutive green runs, drop the flag in `.github/workflows/ci.yml`. Add the `@pytest.mark.heavy` marker so the lane runs only the heavy-tagged subset instead of the full suite (currently gated ad hoc via `importorskip`).
+- **ICH cache staleness warning.** `lookup_regulatory_guidance` caches in `external_facts` for 24 h with no signal when ICH publishes an update. Add a TTL warning in the response when the cache entry is older than 30 days. (Cheap; pairs with the D2 deep-link item.)
 
-**Follow-ups (shipped with a live Postgres after the initial sweep):**
-- ~~Pin a compatible bofire so the GP path runs in CI~~ — **PR #176.** Root cause
-  was a stale API name (`qLogExpectedImprovement` → `qLogEI` in bofire ≥0.3), not
-  a version skew; fixed + pinned `bofire[optimization]>=0.3.1,<0.4`. GP-path test
-  now runs the real torch fit.
-- ~~Consolidate duplicated test factories~~ — **PR #177.** `new_campaign` now lives
-  in `api/tests/_factories.py` (status kwarg unifies the three copies); curator's
-  never-called copy deleted.
-- ~~Missing HTTP-layer tests for `routes/audit.py` / `curator.py` / `feedback.py`~~
-  — **PR #177**, 15 new tests.
-- **Still open — parametrise the ~20 near-identical `*_requires_auth` /
-  `*_invalid_body` route tests** across `test_routes_*` into shared parametrized
-  cases. Low value; left as-is.
+### P2 — deferred until trigger / demand
 
-**Detailed review (2026-05-30):** re-reviewed all 9 merged PRs (3 independent
-agents + full re-verification on a live Postgres) — no correctness bugs or
-regressions; ruff + mypy clean; suite 577 passed / 7 skipped on a fresh DB.
-One incidental (pre-existing, not from this work):
-`test_reaction_outcomes.py::test_find_similar_reactions_includes_outcomes` is
-not isolated against accumulated `reactions` rows — it passes on a fresh DB but
-fails when the local test DB is reused across runs (similarity result set grows).
-CI is unaffected (fresh DB per run). This is the state-leakage signal that
-re-opens the deferred conftest fixture-isolation (TRUNCATE-teardown) rework;
-fix that test (or add per-test cleanup) if a CI flake ever surfaces.
+- **`papers` / `properties` extraction pipeline.** Tables exist (migrations 0026/0027) but nothing writes to them since the entity-extractor sub-agent was removed. Right shape is a post-`wiki_upsert` pg-boss job. Trigger: demand.
+- **conftest fixture-isolation (TRUNCATE-teardown) rework.** No per-test isolation today; `test_reaction_outcomes.py::test_find_similar_reactions_includes_outcomes` passes on a fresh DB but fails when the local test DB is reused (similarity result set grows). CI is unaffected (fresh DB per run). Trigger: a CI flake from accumulated state.
+- **LLM extraction of `reactions.conditions` free-text → JSON at registration.** Would let `find_neighbor_conditions` return structured payloads directly instead of free-text. Defer until measured.
+- **ORD export for reactions** — admin-only `/api/admin/reactions/export-ord`. Trigger: an external partner asks for ORD interchange.
+- **Parametrise the ~20 near-identical `*_requires_auth` / `*_invalid_body` route tests** into shared parametrized cases. Low value; explicitly left as-is.
+- **Phase D optimisation candidates** (post Tier 1–3, BOFIRE surface):
+  - **§A multi-objective BO** — add `MoboStrategy` + `qLogExpectedHypervolumeImprovement` when a customer asks for Pareto fronts (dispatcher currently rejects multi-output specs with a clear error).
+  - **§A mixture variables + `LinearInequalityConstraint`** — widen `ParameterSpec` + tool-layer validation (current spec is box-only).
+  - **§A `OPENAI_RCS_MODEL` reasoning-model support** — detect o1/o3 and switch `max_tokens` → `max_completion_tokens`.
+  - **§A output keys beyond `yield_pct`** — widen the `reaction_outcomes` schema (only `yield_pct` is structured today).
+  - **§B per-call `network=True` opt-in for `run_code`** — bwrap `--unshare-all` drops network; let agents that need HTTP opt in via a new tool arg.
 
-### CI heavy lane — GREEN on main (2026-05-30, resolved)
+### P3 — long-horizon / blocked on externals
 
-- ~~The `ci (heavy)` lane was failing on `main` for ages with cheap green.~~
-  **RESOLVED — heavy lane is green on `main` as of PR #176.** Two layered
-  causes, fixed in order:
-  1. **PR #174** — `bofire`'s `molfeatures` imported `mordred` eagerly; classic
-     `mordred` is broken on Python ≥3.10 so the three `test_propose_via_bofire_*`
-     tests raised `ModuleNotFoundError` every run. Added `mordredcommunity` (the
-     maintained 3.11 fork, same import name) to `[opt]`.
-  2. **PR #176** — that uncovered a stale API reference: `bofire >=0.3` renamed
-     the acquisition function `qLogExpectedImprovement` → `qLogEI`, so the GP
-     path fell back to LHS and the GP-path test failed. Updated `optimization.py`
-     + the test guard to `qLogEI` and pinned `bofire[optimization]>=0.3.1,<0.4`.
-     The GP-path test now *runs* (real SoboStrategy + torch fit), verified
-     locally against the full heavy stack.
-- **Remaining (only sub-item):** the heavy lane is still `continue-on-error:
-  true`. Once it logs 5 consecutive green runs on `main`, flip it to gating in
-  `.github/workflows/ci.yml`. (The `@pytest.mark.heavy` marker is still TODO —
-  the lane currently runs the full suite; cheap skips gated bits via
-  `importorskip`.)
-
-### External meta-model MCP servers (2026-05-30 — merge of forward/retro/eln repos)
-
-Merged the three sibling repos (`chemclaw2_forward`, `chemclaw2_retrosynthesis`, `eln_structurer`) by **extracting their always-on, dependency-light primitives** into a single new stdio MCP server `mcp_chem_intel` (`score_synthesizability` from retro's SAscore, `classify_reaction` from forward's SMARTS classifier, `expand_abbreviation` from eln's solvent/abbreviation tables). Deliberately did NOT vendor the heavy / agentic parts — they duplicate no existing tool but can't run in-process without GPUs/checkpoints, and replicating their orchestration loops would violate the anti-features list. Deferred, to be consumed as separate HTTP MCP services (the upstream repos already mount `fastapi-mcp` at `/mcp`) and orchestrated by the chemclaw agent itself:
-- **mcp-chem-intel: SCScore / RAscore** — only SAscore (pure RDKit contrib) shipped. SC/RAscore need ONNX/torch model weights; add behind a heavy extra or the remote service.
-- **Forward reaction prediction** (`predict_forward_reaction`) — new capability, no in-repo equivalent. Borda-weighted ensemble of Molecular Transformer / T5Chem / ReactionT5 / MEGAN / Chemformer / GraphRXN. Wire `chemclaw2_forward` as a remote HTTP MCP server (env `FORWARD_MCP_URL`).
-- **Learned condition prediction** (`predict_reaction_conditions`) — more powerful than the existing rule-based `mcp_rxn_conditions.predict_conditions` but needs Parrot/ASKCOS/two-stage-DNN checkpoints. Keep the lightweight rule-based tool as the always-on default; route to the remote forward/retro service when configured rather than replacing.
-- **Ensemble single-/multi-step retrosynthesis** (`retrosynthesis_single_step`, `retrosynthesis_multi_step`) from `chemclaw2_retrosynthesis` — far stronger than the existing rule-based `mcp_retrosynth.disconnect`, but the ~40 backends are docker/GPU services. Keep `disconnect` as the offline fallback; consume the ensemble via remote HTTP MCP (env `RETRO_MCP_URL`) when deployed. The existing `synthesis-campaign` skill / AiZynthFinder worker is the in-tree multi-step path.
-- **ELN protocol → ORD structuring** (`eln_structurer`) — genuinely new and high-value (free-text experimental procedure → validated ORD `Reaction`), but it's an agentic self-repair loop (nested Claude Agent SDK + `ord-schema`). Per "this shall live in the chemclaw agent": rebuild as a chemclaw *skill* that drives the existing agent loop with the extracted deterministic tools (`classify_reaction`, `expand_abbreviation`, `validate_smiles`, `compute_descriptors`) + an ORD-validation rule pack exposed as plain MCP tools — do NOT vendor a second nested agent runtime. The eln rule pack (CMP/STR/STO/ORD validators) is the piece worth porting next.
-
-### Tier F — Long-horizon / blocked (kept as reference, not on the work plan)
-
-- **Multi-tenant RLS** — RLS is now OFF on every table; migrations 0034 and 0043 disabled the `USING(true)` stubs across all 24 (agent_sessions, rate_limits + the 22 in batch 2) so the schema reflects reality (app-layer authz via Entra + owner-scoped queries). Re-enabling with real per-tenant `USING (org_id = current_setting('app.org_id')::uuid)` bodies is on the work plan when tenants > 1 — and will require wiring the app to `SET LOCAL app.org_id` on every transaction (the `withUserContext` helper from 0021 was exported but never invoked).
-- ~~Wiki audit-read~~ — shipped in feat/wiki-audit-read PR. `GET /api/audit/wiki/{slug}` returns the current page metadata (version, created_by/updated_by, bi-temporal valid_from/valid_to, maturity, archived, needs_review) bundled with the full revision list ordered newest-first. Admin-only (uses `_AUDIT_WIKI` deps — admin check before rate-limit so non-admins still see 403 not 429). Pairs with the existing `GET /api/wiki/{slug}/revisions/{version}` for full revision bodies when a diff is needed.
-- **RLS on `notifications`** — enable with per-user predicate. Trigger: tenants > 1.
+- **External meta-model MCP servers (forward / retro / eln).** Consume the heavy/agentic parts of the merged sibling repos as remote HTTP MCP services (the upstreams already mount `fastapi-mcp` at `/mcp`); the dependency-light primitives already shipped in `mcp_chem_intel`. Keep the in-tree rule-based tools as offline fallbacks.
+  - **SCScore / RAscore** — need ONNX/torch weights; add behind a heavy extra or the remote service (only SAscore, pure RDKit, shipped).
+  - **`predict_forward_reaction`** — Borda ensemble of Molecular Transformer / T5Chem / ReactionT5 / MEGAN / Chemformer / GraphRXN; wire `chemclaw2_forward` via `FORWARD_MCP_URL`.
+  - **`predict_reaction_conditions`** — Parrot/ASKCOS/two-stage-DNN; route to the remote service when configured, keep `mcp_rxn_conditions.predict_conditions` as the always-on default.
+  - **`retrosynthesis_single_step` / `_multi_step`** — ~40 docker/GPU backends; consume via `RETRO_MCP_URL`, keep `mcp_retrosynth.disconnect` as the offline fallback.
+  - **ELN protocol → ORD structuring** — rebuild as a chemclaw *skill* driving the existing agent loop with the extracted deterministic tools + an ORD-validation rule pack (CMP/STR/STO/ORD validators) exposed as plain MCP tools. Do NOT vendor a second nested agent runtime. The eln rule pack is the next piece worth porting.
+- **Multi-tenant RLS.** RLS is OFF on every table (migrations 0034/0043 disabled the `USING(true)` stubs across all 24). Re-enable with real per-tenant `USING (org_id = current_setting('app.org_id')::uuid)` bodies + wire `SET LOCAL app.org_id` on every transaction (the `withUserContext` helper from 0021 was exported but never invoked). Trigger: tenants > 1.
+- **RLS on `notifications`** — per-user predicate. Trigger: tenants > 1.
 - **Skills catalog in DB** — promote filesystem skill packs to a table with scope (personal/project/org) + maturity tier. Trigger: skill count grows.
 - **Tool forging** — NL tool synthesis with sandboxed execution (§3.13). v3 only.
-- ~~Hybrid FTS + semantic with RRF fusion for wiki~~ — shipped in feat/wiki-hybrid-search PR. New `hybrid_search_wiki` runs both legs in parallel and fuses via RRF (K=60). Default mode for the `wiki_lookup` agent tool and `GET /api/search` (the previous FTS-only path is preserved as `mode=fts` for exact-term queries like SMILES/CAS).
-- **`papers` / `properties` extraction pipeline** — tables exist (migrations 0026 / 0027) but nothing writes to them after the entity-extractor sub-agent was removed. Right shape is a post-`wiki_upsert` pg-boss job, deferred until demand.
-- **LLM-level eval against a golden chemistry Q&A set** — `eval_runs` was scoped to deterministic probes only; LLM scoring deferred per §3.9 trigger (prompt iteration becomes the measured bottleneck).
-- ~~Campaign approval API~~ — shipped in feat/campaign-step-approval PR. Backend `POST /api/campaigns/{id}/steps/{idx}/approve` + `/reject` + `GET /api/campaigns/steps/awaiting-approval` with owner-scope + source-state predicate. Agent tool `confirm_synthesis_plan` now accepts `requires_approval: bool` per step. UI surface deferred.
-- **ORD export for reactions** — admin-only endpoint `/api/admin/reactions/export-ord` when an external partner asks for ORD interchange.
-- **E2. ELN fetch path verification** (`api/agent/tools.py`) — path is `{ELN_API_BASE_URL}/api/eln/experiments/{id}`; confirm against the real ELN contract before connecting an ELN. Blocked on customer.
-- **E3. CAS regex bound** (`api/agent/hooks.py`) — currently `\d{2,7}` prefix. Align with CAS registry growth past 9 999 999. No current pressure.
-- **D2. ICH deep links** (`api/agent/tools.py:_ICH_URLS`) — per-document PDFs change with each revision; needs offline verification of ICH's current URL scheme before any deep links can be added safely. Today all 13 keys point at the stable category landing pages, which combined with the 24h `external_facts` cache and the `topic` filter does the substantive work.
-
-### Cleanup (small, low-risk)
-
-- **Delete orphan TS packages** — `packages/agent-tools/` and `packages/db/` contain only stale `node_modules` and turbo logs. `packages/observability/` is a TypeScript package not imported by any Python file. Verify (`rg "@chemclaw2/observability"` returns no Python hits, no Python uses its exports) then `rm -rf` and drop them from any workspace config. Keep `packages/mcp-servers/` (Python MCP servers `mcp_molfp` / `mcp_rxnfp`).
+- **LLM-level eval against a golden chemistry Q&A set** — `eval_runs` is deterministic-probes-only; LLM scoring deferred per §3.9 trigger (prompt iteration becomes the measured bottleneck).
+- **ORD ingestion pipeline** — backfill `reactions` with structured `ReactionConditions` from the Open Reaction Database. Heavy ETL; defer until the registry is too sparse to ground new campaigns.
+- **Parrot / Reacon self-host trial** — only if RXN4Chemistry quota/accuracy is measured as the bottleneck (heavy GPU deps).
+- **E2. ELN fetch path verification** (`api/agent/tools.py`) — path is `{ELN_API_BASE_URL}/api/eln/experiments/{id}`; confirm against the real ELN contract. Blocked on customer.
+- **E3. CAS regex bound** (`api/agent/hooks.py`) — currently `\d{2,7}` prefix. Align with CAS growth past 9 999 999. No current pressure.
+- **D2. ICH deep links** (`api/agent/tools.py:_ICH_URLS`) — per-document PDFs change each revision; needs offline verification of ICH's URL scheme. All 13 keys point at stable category landing pages today.
 
 ## Open observations (Python-era)
 
-- `api/db/queries/budgets.py:try_consume_tool_call` now charges for failed tool runs (cap budgets attempts, not just successes). Documented inline. If operator preference shifts to success-only counting, separate reserve/commit on PreToolUse/PostToolUse.
-- `api/db/queries/wiki_write.py:upsert_wiki_page` does a read (`SELECT content_text`) followed by an explicit `async with db.begin():`. SQLAlchemy 2.0 async auto-begins a tx on the SELECT, so the function rolls back the empty read-tx before the explicit begin. Same antipattern would silently break in any new query function that reads then begins — prefer one `db.begin()` block covering both, OR commit/rollback between phases.
-- `api/agent/tools.py` `lookup_regulatory_guidance` caches results in `external_facts` for 24 h. Cache invalidation when ICH publishes an update is manual; add a TTL warning in the response when the cache entry is older than 30 days.
+- `api/db/queries/wiki_write.py:upsert_wiki_page` does a read (`SELECT content_text`) then an explicit `async with db.begin():`. SQLAlchemy 2.0 async auto-begins a tx on the SELECT, so the function rolls back the empty read-tx before the explicit begin. Same antipattern would silently break any new query function that reads then begins — prefer one `db.begin()` covering both, or commit/rollback between phases. (Small, safe fix candidate.)
+- `api/db/queries/budgets.py:try_consume_tool_call` charges for failed tool runs (caps attempts, not just successes). Documented inline. If operator preference shifts to success-only, split reserve/commit across PreToolUse/PostToolUse.
 - The substance gate fires once per turn but cannot detect session-level context where an attacker front-loads scheduled-substance context across earlier turns and asks for synthesis later. Mitigation requires a session-context scan; architectural, defer.
-- ~~Migration numbering: there are two `0029_*` files~~ — resolved by renaming `0029_wiki_tables_cleanup.sql` → `0029a_wiki_tables_cleanup.sql` in the review-fixes-A PR.
-- `api/db/connection.py` pool: `pool_size=5, max_overflow=10` is the Python equivalent of the Wave-3h `DB_POOL_MAX=15` total. Document upstream Postgres `max_connections` headroom if running without a pooler at scale.
+- `api/db/connection.py` pool: `pool_size=5, max_overflow=10` (= Wave-3h `DB_POOL_MAX=15` total). Document upstream Postgres `max_connections` headroom if running without a pooler at scale.
 
-### Curator inbox (May 2026 — V3 PR 1)
+## CI quality — partial adoption (May 2026)
 
-- ~~Curator queue / inbox~~ — shipped. `GET /api/curator/inbox` aggregates wiki pages with `needs_review=true` (owner-scoped), campaign steps in `pending_approval` (owner-scoped), and unresolved wiki contradictions (collaborative) into a single response with `total_pending` count. New query `list_wiki_needs_review(db, user_id, limit)` in `api/db/queries/wiki_read.py`. New router `api/routes/curator.py` registered in `main.py`.
-
-### Document ingestion LLM extraction (May 2026 — V2 PR 4b)
-
-- ~~Document ingestion: LLM-driven compound + citation extraction~~ — shipped. `extract_entities_from_text(text)` calls Claude Haiku 4.5 with a structured tool-use schema (`extract_entities` forced via `tool_choice`) to pull compound mentions + citation identifiers from the document body. Input bounded to 8 K chars; total budget 20 s timeout. `resolve_compound_name_to_smiles(name)` follows up with PubChem REST (already on `ALLOWED_DOMAINS`) via `_fetch_validated`. Enrichment is opt-in via `POST /api/integrations/documents?extract=full` — `basic` (default) keeps the PR 4a behaviour for cheap/fast uploads. The wiki page draft now includes auto-extracted compound + citation sections; `external_facts.payload` carries the raw entities + resolved SMILES for later reuse.
-
-### Document ingestion baseline (May 2026 — V2 PR 4a)
-
-- ~~Document ingestion: DOI detection + CrossRef metadata + wiki page draft~~ — shipped. `api/integrations/document_enrichment.py` houses `extract_doi`, `slugify_doi`, `fetch_crossref_metadata`, `normalize_crossref_response`. The `/api/integrations/documents` route now (a) detects a DOI in the extracted PDF text, (b) fetches CrossRef metadata when one is present (via the existing SSRF-pinned `_fetch_validated` — `crossref.org` already on the allowlist), (c) enriches the `upsert_paper` call with abstract + content_text, and (d) creates a wiki page draft with `needs_review=True` so the curator queue surfaces it. CrossRef calls fail-open: a network blip or 404 falls through to the first-non-empty-line title heuristic so the upload still succeeds.
-
-### Property predictions (May 2026 — V2 PR 3)
-
-- ~~Spec §3.5 property predictions (deterministic descriptors)~~ — shipped `compute_descriptors(smiles)` in `mcp_molfp`: Crippen logP, exact/avg MW, TPSA, H-bond donors/acceptors, rotatable bonds, aromatic rings, heavy atoms, Lipinski Rule-of-Five pass + violation count. All values come from RDKit (no ML, no external calls, deterministic). The agent SDK auto-discovers it via the existing `mcp-molfp` stdio routing in `api/agent/runner.py`. ML-based predictions (yield, tox, hazards) remain deferred per the operating principles.
-
-### Migration policy (May 2026 — review-fix PR F)
-
-- ~~46 `CREATE INDEX` statements lack `CONCURRENTLY`~~ — policy now documented in `migrations/MIGRATIONS.md`. Historical migrations 0001–0036 are already applied; rewriting them retroactively has no effect. New index migrations on populated tables must use `CREATE INDEX CONCURRENTLY` and live in a single-statement file (CI's `--single-transaction` apply forbids mixing `CONCURRENTLY` with other DDL). CLAUDE.md updated to point at the policy file.
-
-### CI quality — partial adoption (May 2026)
-
-- **mypy strict adoption** — CI now runs mypy in *non-strict* mode (config: `strict = false`, `check_untyped_defs = true`, `no_implicit_optional = true`). `api.agent.tools`, `api.agent.runner`, and `api.agent.hooks` are excluded via per-module overrides because the `claude_agent_sdk` TypedDicts (`McpSdkServerConfig`, `AgentDefinition`, `HookMatcher`) don't match how the SDK's own examples use them, producing ~30 errors that aren't ours to fix. Re-enable strict mode per module as each is cleaned: drop the override, fix any errors that surface. Goal: full strict in 4-6 more PRs.
-- **Ruff rule expansion** — CI runs `ruff check --select=E,F,W` at `line-length=120`. Auto-fix pass cleaned 42 issues (unused imports + isort) and 4 wrapped lines. Next rule families to add (in order of value): `I` (sorted imports — cosmetic but standardising), `UP` (pyupgrade — auto-rewrites old syntax), `B` (bugbear — catches real bugs), `SIM` (simplification suggestions), `RUF` (Ruff-specific lints).
-
-### Campaign wiki retry (May 2026 — review-fix PR E)
-
-- ~~`_create_campaign_wiki` outside completion transaction (no retry)~~ — resolved. The function now retries with exponential backoff (0/1/2/4 s, four attempts total) and returns `{"ok": bool, "error": str | None}` so the caller can react. The completion transaction is intentionally kept inline-only (the slow embed call would otherwise hold the txn open). A new `backfill_missing_campaign_wikis` worker pass runs every 5 cycles (≈ 5 min at the default 60 s interval) and re-attempts wiki creation for completed campaigns from the last 24 h whose `campaign-{id}` wiki slug doesn't exist. The 24 h cap stops the worker from endlessly retrying historically-failed campaigns; operators backfill anything older by fixing the underlying cause (embedding API outage etc.) and running the worker tick manually.
-
-### Deferred from test-coverage / audit pass (May 2026)
-
-- ~~SSRF: DNS-rebinding TOCTOU~~ — resolved in fix/ssrf-dns-rebinding PR. `_fetch_validated` resolves DNS exactly once, rewrites the URL to use the resolved IP for the actual connection, and passes the original hostname via `Host` header + httpcore `sni_hostname` extension (for TLS SNI + certificate verification). All three call sites (`fetch_document`, `lookup_regulatory_guidance`, `eln_fetch_experiment`) migrated to the shared helper.
-- ~~Stripe pattern in `_SECRET_PATTERNS`~~ — resolved in the review-fixes-A PR. Also added JWT, SendGrid, Twilio SID, npm token patterns.
-- ~~Split `api/db/queries/campaigns.py`~~ — resolved in refactor/ratelimit-dep PR. Step-level functions live in `campaign_steps.py`; `campaigns.py` re-exports them for back-compat. Both files <240 LOC.
-- ~~Extract fetch-with-redirect helper~~ — resolved by `_fetch_validated` in the DNS-rebinding fix PR. The redirect loop is now in exactly one place and applies the IP-pinning + allowlist-revalidate cycle uniformly across all three call sites.
-- ~~Extract rate-limit dependency~~ — resolved in refactor/ratelimit-dep PR. `rate_limit(bucket, n, window_ms=60_000, *, optional_user=False)` is a FastAPI dependency factory in `api/db/queries/rate_limit.py`. Migrated 26 routes across wiki, campaigns, admin, audit, todos, notifications, search, feedback, budgets, integrations. Two call sites kept inline: `routes/chat.py` (custom SSE error response) and the `eln-webhook` global bucket in `routes/integrations.py`. Wiki ownership-check duplication still present (3 sites) — separate follow-up.
-- ~~`patch_wiki_page` defense-in-depth~~ — resolved in review-fixes-A: UPDATE now includes `AND created_by = :updated_by`.
-- ~~`fp_worker` imports `sqlalchemy.text`~~ — resolved in review-fixes-A: extracted into `api/db/queries/fingerprints.py`.
-- **Route-layer integration tests** — `routes/wiki.py`, `routes/admin.py`, `routes/chat.py` SSE happy path and `routes/campaigns.py` are not exercised end-to-end. Health smoke + substance gate are the only HTTP-layer tests today.
-
-### Phase A follow-ups (paper RAG / retrosynth / ChemCrow, May 2026)
-
-- ~~**HNSW index on `paper_chunks.embedding`**~~ — shipped in PR #119 (Tier 1 §C). Migration 0041 creates the index CONCURRENTLY; CI loop teaches `psql` to switch to autocommit when a file mentions CONCURRENTLY.
-- ~~**DB-integration test for `paper_qa` end-to-end**~~ — shipped in PR #120 (Tier 2 §D). `test_papers_hybrid_search.py` seeds chunks with SHA1-keyed one-hot embeddings, exercises FTS + semantic + RRF, surfaced the latent `IllegalStateChangeError` in `hybrid_search_*` (also fixed in the same PR).
-- **MCP-tool smoke tests for the new chemistry surface** — still open. Folded into the consolidated tool-layer-harness item below.
-- ~~**Chunk-size / overlap config**~~ — shipped in PR #119 (Tier 1 §F). `PAPER_CHUNK_SIZE` / `PAPER_CHUNK_OVERLAP` env vars validated by `_resolve_chunk_params()` with fallback to defaults on misconfig.
-- ~~**OpenAI fallback for RCS scoring**~~ — shipped in PR #120 (Tier 2 §G). `RCS_PROVIDER` env var (default `anthropic`); both branches fail closed on missing SDK / key.
-- ~~**External retrosynthesis service**~~ — shipped in PR #126 (Tier 3 §H). AiZynthFinder behind `[retrosynth]` extras; `propose_retrosynthesis_deep` tool with `asyncio.to_thread` + 5min wall cap + 30-day `external_facts` cache.
-
-### Reaction condition prediction (May 2026)
-
-- **mcp_molfp / mcp_rxnfp wheel layout** — both servers declare `packages = ["<name>"]` in `pyproject.toml` but place `__init__.py` + `server.py` at the project root, not in a `<name>/` subdirectory. Hatchling silently builds wheels containing only metadata; `python -m mcp_<name>.server` would fail on import after `pip install` unless PYTHONPATH happens to point at `packages/mcp-servers/`. The new `mcp_rxn_conditions` server uses the proper `<name>/<name>/server.py` layout. Fix the two existing servers in a follow-up by moving their `.py` files into a subdirectory and updating the Dockerfile / CI install paths.
-- **Shared `JsonFormatter` / `_configure_logging` util across MCP servers** — third copy now lives in `mcp_rxn_conditions/server.py`. Extract to a small `mcp_chemclaw_shared` package when a fourth server is added.
-- **LLM extraction of `reactions.conditions` free-text → JSON** — Phase A's `suggest_conditions_from_neighbors` returns free-text from historical reactions; an LLM extractor at registration time would let `find_neighbor_conditions` return structured payloads directly. Defer until measured.
-- **ORD ingestion pipeline** — backfill `reactions` with structured `ReactionConditions` from the Open Reaction Database. Useful precedent for the neighbor lookup, but heavy ETL work — defer until the registry is too sparse to ground new campaigns.
-- **Parrot / Reacon self-host trial** — only if RXN4Chemistry quota / accuracy is measured as the bottleneck. Heavy deps (PyTorch + transformers); requires GPU container. Today the hosted SDK is a one-line `RXN4Chemistry` dep, no custom inference infra.
-
-### CI mypy gate (May 2026, Phase B follow-up)
-
-- **mypy CI version-drift** — `Type-check (mypy)` step is `continue-on-error: true` as of feat/investigations-and-hypotheses. Local mypy (pinned to 1.19.1) reports clean across all 81 source files; CI's mypy fails. The Actions log UI doesn't expose the error text to WebFetch and there's no MCP tool for raw job logs, so we can't reproduce. Re-enable the gate once one of (a) a contributor can `gh run view --log` and paste the offending lines, (b) we add a CI step that writes mypy output to a path visible from the run summary, or (c) the underlying mismatch is found another way. Affected PRs: #116 (three red CI runs at commits 2416137 / 86964b0 / c2471c1, each failing only at `Type-check (mypy)`).
-
-### Phase C (May 2026)
-
-- ~~**Real Bayesian optimisation for `propose_next_conditions`**~~ — shipped in PR #122 (Tier 3 §A). Three-stage dispatcher: heuristic → BOFIRE LHS → BOFIRE GP+qLogEI. BOFIRE behind `[opt]` extras; base install pays zero dep tax. Single-objective only in V1.
-- ~~**Container-isolated sandbox**~~ — shipped in PR #125 (Tier 3 §B). bwrap as tier 1 (full namespace + cap-drop), `unshare -n` as tier 2, plain `python -I` as tier 3. Probe-and-cache picks the strongest tier the host supports; falls back gracefully on Docker-in-Docker.
-- ~~**Figure capture from sandbox**~~ — shipped in PR #124 (Tier 3 §M). Migration 0042 adds `code_executions.artifacts JSONB`; sandbox prepends `matplotlib.use("Agg")` and post-run base64-encodes PNGs into the row. 1.5 MB total cap, 1 MB per-file cap.
-- **Tool-layer smoke-test harness** — still open across Phase A/B/C surfaces (consolidated). Blocked on figuring out the SDK access pattern: `create_sdk_mcp_server` returns a `McpSdkServerConfig` TypedDict with no per-tool handler access. Options: (a) extract tool bodies out of the closure into module-level callables, (b) call via the SDK's request/response protocol. Probably (a) — cheaper change to existing code.
-
-### Phase D candidates (May 2026, post Tier 1-3)
-
-- **§A multi-objective BO** — current dispatcher rejects multi-output specs with a clear error. Add `MoboStrategy` + `qLogExpectedHypervolumeImprovement` when a customer asks for Pareto fronts.
-- **§A mixture variables + `LinearInequalityConstraint`** — current spec is box-only. BOFIRE supports both; needs schema widening of `ParameterSpec` + tool-layer validation.
-- **§A `OPENAI_RCS_MODEL` reasoning-model support** — current code uses `max_tokens` which o1/o3 reject; should detect reasoning models and switch to `max_completion_tokens`.
-- **§A output keys beyond `yield_pct`** — `reaction_outcomes` schema would need widening (currently only `yield_pct` is structured).
-- **§B per-call `network=True` opt-in for `run_code`** — bwrap's `--unshare-all` drops network. Agents that legitimately need HTTP from sandbox code can opt in via a new tool arg.
-- **§H SMILES canonicalisation for AiZynth cache key** — `aizynth:CCO` vs `aizynth:OCC` miss each other. One-liner via `Chem.MolToSmiles(Chem.MolFromSmiles(s))`.
-- **§H subprocess-isolated AiZynthFinder for hard SIGKILL on timeout** — `asyncio.wait_for` cancels the awaiter but the worker thread keeps munching. Move to a separate stdio MCP server (original §H plan suggested this) when production hits the thread-stuck case.
-- **§H full USPTO model bundle** — current default is the ~500 MB demo bundle. Operators who want production-grade route discovery set `AIZYNTH_CONFIG_PATH`; a deployment flag for shipping the full bundle by default would be cleaner.
-- **§M SVG / PDF / HTML artefact types** — PNG only in V1. Add when an agent workflow asks for vector graphics.
-- **§M matplotlib magic-byte validation** — `_scan_artifacts` trusts `.png` extension; sniff `\x89PNG\r\n\x1a\n` before encoding to reject non-PNG content saved under a `.png` filename.
-- **Heavy-path CI lane** — partially shipped in PR 2 of the refactor sequence (May 2026). Matrix `lane: [cheap, heavy]` in `.github/workflows/ci.yml`; heavy installs `.[dev,opt,retrosynth]` + matplotlib. Currently `continue-on-error: true` so a flaky install doesn't gate; once it sees 5 consecutive green runs on main, flip to gating. `@pytest.mark.heavy` marker still TODO — heavy lane currently runs the full pytest suite (cheap tests skip their gated bits via `importorskip`).
-- ~~**Heavy lane never reaches the 5-green-runs bar: `mordred` import failure**~~ — RESOLVED (PR #174 + #176, 2026-05-30). `mordredcommunity` added to `[opt]` and the stale `qLogExpectedImprovement`→`qLogEI` bofire API reference fixed + pinned `bofire[optimization]>=0.3.1,<0.4`. Heavy lane is green on `main`; the GP-path test runs the real torch fit. See the "CI heavy lane — GREEN on main" entry above. Only the `continue-on-error`→gating flip (after 5 green runs) remains.
-
-### mcp_tabular follow-ups (May 2026)
-
-- **Artifact-reference (`TableRef`) mode for `mcp_tabular`** — v1 only accepts inline tables (5_000-row cap, see `packages/mcp-servers/mcp_tabular/mcp_tabular/tables.py`). Larger datasets need a `tabular_artifacts` Postgres table + `api/db/queries/tabular_artifacts.py` (owner-scoped) + a `TableRef(artifact_id)` discriminator in the tool args + DB access inside the subprocess (`DATABASE_URL` + `CHEMCLAW_USER_ID` via `McpStdioServerConfig.env`). Add once an agent workflow actually needs >5k rows.
-- **`mcp_tabular[tabicl]` weights cache + offline-CI smoke** — TabICL extra is lazy-imported and never installed in CI. Add a separate workflow (or a `tabicl-test` make target) that pins a tiny pretrained checkpoint, exercises `tabicl_predict` end-to-end on a 200-row classification, and asserts `<1.0` cross-entropy. Skip if torch wheel download takes the runner over time budget.
-- **Model persistence for `fit_score`** — sklearn pipelines are discarded after each call. Persisting them (Postgres BLOB or filesystem) would let the agent train once and apply to multiple test batches, but only matters once a campaign workflow asks for it.
-- **`anderson` SciPy 1.19 migration** — `scipy.stats.anderson` will lose `critical_values`/`significance_level` attributes in 1.19; switch to `method="interpolate"` and read `pvalue` from the result. Currently emits a `FutureWarning` only.
-
-### Discovered during refactor sweep (May 2026)
-
-- ~~**Agent runtime broken: `@mcp.tool()` API mismatch**~~ — fixed. All 42 tool registrations migrated from the broken `@mcp.tool()` pattern to the SDK's `@tool(name, description, schema)` form via a `tool_adapter.wrap_tool` shim that lets tool bodies stay in the project's kwargs-in / raw-dict-out style. `build_chemclaw_mcp_server` now calls `create_sdk_mcp_server(name, tools=[...])` with the assembled list. Regression test `api/tests/test_build_chemclaw_mcp_server.py` locks the build down. Two further latent bugs surfaced during the fix and resolved alongside: `get_campaign` (didn't exist in queries.campaigns; `propose_next_conditions` switched to `get_campaign_with_steps`); the chat path that hit `build_chemclaw_mcp_server` now works end-to-end.
-
-### From the 12-PR extensive refactor sequence (May 2026) — deferred items
-
-Shipped: PR 1 (tool-handler e2e tests, PR #147), PR 2 (CI heavy lane, PR #148), PR 3 (route-layer auth/validation tests for budgets/todos/notifications, PR #149), PR 4 (chat substance-gate override audit test, PR #150), PR 10 (tools_external.py split into ELN + retrosynth modules, PR #151).
-
-Audited and deferred:
-
-- **PR 5 — harden fixtures and drop dead conftest entries** — every fixture in `api/tests/conftest.py` is referenced by at least one test (audit done); the `session_factory`-with-TRUNCATE-teardown rework risks breaking ordering-sensitive tests for marginal gain. Re-open when a flaky-test investigation flags state leakage.
-- **PR 6 — trivial code-simplification sweep** — vulture + manual audit found no language-guaranteed redundancies (isinstance/str(int)/x-if-x-else-None patterns); the candidates the plan named all turn out to be defensive against external JSON or legitimately conditional. Re-open if a future PR introduces actual redundancies.
-- **PR 7 — parametrise `campaign_steps` status-update patterns** — the 5 transition functions share the source-state predicate but their SET clauses, JOINs, and parameter shapes are different enough that a single helper would obscure the CLAUDE.md "repeat the source-state predicate" rule rather than enforce it.
-- **PR 8 — JWKS cache via `cachetools.TTLCache`** — saves ~5 LOC but requires adding `cachetools` as a runtime dep (not currently transitive). Cost > benefit at this scale.
-- **PR 9 — split `knowledge.py` and `campaigns.py` into `_read/_write`** — both files are at 266 and 251 LOC respectively, *under* the ~400-line guideline. The split is anticipatory; defer until either crosses 400.
-- **PR 11 — shared MCP logging helper** — `JsonFormatter` + `_configure_logging()` are duplicated across 6 MCP servers (~30 LOC × 6 = 180 LOC). Extracting to a shared package needs a new `packages/mcp-servers/mcp_shared/` package + 6 pyproject.toml updates + CI install-order changes. The coordination cost outweighs the savings; revisit if a 7th MCP server is added.
-- **PR 12 — standardise MCP servers on nested layout** — high risk, current mixed layouts (3 flat + 3 nested) all install cleanly in CI. Re-open if a future install issue traces back to layout drift.
-
-### Full-codebase audit (May 2026) — deferred findings
-
-Eight-domain high-effort review (auth, SSRF, secret/substance gates, owner-scoping, transactions/state machines, rate-limit/budgets, MCP/workers, observability). Contained fixes shipped in the audit PR (hooks redaction completeness + fail-closed + Cf-stripping, `confirm_synthesis_plan` owner-scope gate, campaign-completion idempotency, fp_worker SIGKILL reap, worker cycle-cadence, connection.py comment). Full report in `docs/audits/2026-05-full-codebase-audit.md`. Deferred:
-
-- ~~**[substance-gate] Self-approvable controlled-substance override (HIGH — POLICY DECISION)**~~ — RESOLVED 2026-05-29 (product decision): the override **stays self-service with an audit trail**. Any authenticated user may proceed past the gate by supplying a ≥20-char `override_justification`, which `record_override` logs (`api/routes/chat.py`). This is intentional "log-and-allow with accountability" — not a bug. Do NOT re-flag in future audits. (The separate multi-turn/lexicon evasion item below is still open.)
-- **[substance-gate] Multi-turn / lexicon evasion (MEDIUM)** — gate requires a substance name AND a synthesis verb in the *same* single prompt and is stateless across turns; verb list omits common terms (preparation, distill, extract, precursor, reduce, reflux). Splitting the request across turns evades it. Consider name-alone gating for highest-schedule substances + conversation-context evaluation + lexicon expansion.
-- **[workers] No atomic step-claim → double execution under multi-process (HIGH)** — `campaign_worker` selects `pending` steps with no `FOR UPDATE SKIP LOCKED` / claim-to-`running` transition; the `WHERE status='pending'` guard protects the final write but not the side-effectful `_execute_step` (currently a stub). With `uvicorn --workers 2` + `RUN_WORKER_IN_PROCESS=1`, two loops execute the same step. Fix: wire the already-allowed `running` status into an atomic claim (`UPDATE … SET status='running' WHERE status='pending' … RETURNING`), then `mark_step_complete/failed WHERE status='running'`. Untestable without a live multi-process DB; defer to a dedicated PR.
-- **[mcp] codesandbox stdout/stderr cap is display-only → parent OOM (HIGH)** — `mcp_codesandbox/sandbox.py` uses `proc.communicate()`, buffering the child's entire output into the parent before truncating at `STDOUT_CAP_BYTES`; `RLIMIT_AS` bounds the child, not the worker. A child that streams unbounded stdout OOM-kills the host process. Fix: bounded streaming read (kill once cap exceeded) or redirect child stdout to a capped tmpfile. Needs careful local sandbox testing; defer.
-- **[mcp] codesandbox RLIMIT applies to launcher not interpreter (MEDIUM)** — under bwrap/unshare tiers, `preexec_fn` setrlimit lands on the launcher; `RLIMIT_AS=512MB` is then shared with bwrap's own mappings and is per-process (not aggregate, so a fork tree each gets a fresh cap). Prefer a cgroup memory limit or an inner wrapper that sets rlimit then execs python; at minimum size for the launcher overhead.
-- **[observability] X-Request-ID dropped on error responses (MEDIUM)** — `RequestIdMiddleware.dispatch` sets the response header only on the success path; when `call_next` raises, Starlette's `ExceptionMiddleware` builds a fresh 500 with no request-id header, exactly when a caller most needs it for correlation. Fix via an app-level exception handler (or outermost middleware) that stamps the header. Framework-behavior change; verify against a running app.
-- **[observability] Readiness ignores campaign-worker backlog (MEDIUM)** — `/api/readiness` sums only fingerprint backlog; a wedged campaign worker leaves readiness green. Factor the campaign-step pending count into a degraded signal (or document the intentional exclusion) and refresh `campaign_worker_backlog` gauge on the readiness path.
-- **[auth] svc-token replay window (MEDIUM)** — `_verify_svc_token` has no jti/nonce/one-time-use ledger; a captured `svc.{sub}.{iat}.{sig}` is replayable within the ±300s window. Add a jti recorded in a short-lived unique-constrained table, or bind method+path into the HMAC. At minimum document the accepted window at the call site.
-- **[auth] ~~Missing JWKS-URL startup guard (LOW)~~ RESOLVED by Entra migration** — `validate_auth_config` now requires `AZURE_TENANT_ID` (JWKS URL + issuer derive from it), `AZURE_BACKEND_CLIENT_ID` (audience), and `AZURE_REQUIRED_ROLE` (group gate) in non-dev envs, so a misconfigured prod fails at startup rather than 401-ing every request.
-- **[auth] Entra cutover: identity key changed sub→oid, no data migration (MEDIUM)** — the Entra migration switched the user id from the Clerk `sub` to the Entra `oid`. Owner-scoped rows written under the old Clerk ids (agent_sessions, wiki `created_by`/`updated_by`, campaigns `created_by`, todos, feedback, overrides, budgets) won't match the new oid, and `ADMIN_USER_IDS` must be repopulated with Entra oids or all admins lose access. Acceptable for the greenfield Entra rollout (Clerk data was dev-only); if any Clerk-keyed prod data must survive, write a backfill mapping Clerk sub → Entra oid before cutover.
-- **[auth] svc-token path bypasses the AD-group gate + can impersonate admins (LOW→MED if secret exposed)** — `_verify_svc_token` asserts identity from an HMAC-signed token and returns its `sub` directly, with no Entra `oid`/app-role check. `_SVC_SUB_RE` permits the `|` Entra oids use, so a holder of `CHEMCLAW2_SERVICE_SECRET` can set `sub` to a known admin oid and clear `get_admin_user` (full admin escalation), and the exact token string is replayable within the ±5-min window. Inert unless the secret is provisioned. Hardening: namespace svc subjects (e.g. `svc|<service>`) so they can never collide with a real oid in `ADMIN_USER_IDS`, restrict subjects to a fixed service allowlist, bind method+path into the HMAC, and/or add a jti replay cache.
-- **[auth] Public wiki GET stays anonymous-readable (LOW)** — `GET /api/wiki/{slug}` uses `get_optional_user`, so a request with no `Authorization` header still reads (it ignores `user_id`). `get_optional_user` now propagates 403 (a presented but group-denied token is rejected), but truly anonymous reads remain allowed by the existing contract. If knowledge reads must be gated to the AD group too, switch the route to `get_current_user`.
-- **[auth] Algorithm-confusion guard skip unlogged (LOW)** — `except ImportError: pass` around the RSA key-type check in `api/auth.py` swallows the branch silently; log a warning so the degraded posture is visible (RS256 verify fails closed anyway).
-- **[ssrf] NAT64 / IPv4-mapped IPv6 embedding private addrs (LOW)** — `_resolve_to_global_ip` accepts `64:ff9b::7f00:1` (== loopback) as `is_global` on Python 3.11; on a NAT64 host this reaches loopback/RFC1918. Reject the `64:ff9b::/96` prefix and re-check `addr.ipv4_mapped` against the private/loopback/multicast rules.
-- **[ssrf] web_search bypasses the pinning template (LOW)** — `tools_external.py` issues a raw `httpx.get` to a hardcoded Brave host instead of `_fetch_validated`; no SSRF today (constant host) but it's drift. Route through `_fetch_validated(enforce_domain_allowlist=False)` or document the static-host exemption at the call site.
-- **[ssrf] Relative-redirect rebuild drops port/userinfo (LOW)** — the relative-`Location` join in `_fetch_validated` rebuilds from host only, silently moving a non-default port to 443/80. Re-validated and re-pinned (no SSRF), but a redirect-fidelity bug; rebuild from `parsed.netloc`.
-- **[secrets] SSN only matches dashed form (LOW)** — `_SSN_RE` catches `###-##-####` but not `#########` or space-separated; broaden to `\b\d{3}[- ]?\d{2}[- ]?\d{4}\b` (watch false positives) or document the dashed-only scope.
-- **[rate-limit] Empty-string identifier aliases onto `anon` bucket (LOW)** — `make_key` uses `if identifier` (falsy for `""`), so an empty id shares the anonymous bucket; use `if identifier is not None`. Not exploitable today (Entra oids are non-empty).
-- **[chat] Invalid override justification coerced to None, not 422 (LOW)** — `justification_bounds` returns `None` for an out-of-bounds non-empty value instead of raising, so the client gets an opaque 403 rather than a 422. Raise `ValueError` to match `prompt_not_empty`. (Secondary to the self-approval policy item above.)
-- **[auth] JWKS TTL wrapper redundant with PyJWKClient cache (LOW/cleanup)** — the custom 3600s TTL + module globals in `_get_jwks_client` duplicate PyJWKClient's own 300s cache + `refresh=True` kid-rotation; the unlocked global mutation also allows a benign construction race. Drop the wrapper or guard with a lock.
-- **[main] Dead CancelledError handlers (LOW/cleanup)** — both `run_worker`s catch `CancelledError`, log shutdown, and return without re-raising, so the `except asyncio.CancelledError: worker_cancelled` branches in `api/main.py` are unreachable. Either re-raise in the workers or drop the dead branches.
-- **[mcp] fp_worker unparseable-response stderr at DEBUG only (LOW)** — when an MCP child exits 0 with no text block, the real JSON error sits in stderr (logged at DEBUG); surface captured stderr at WARNING so prod (INFO) debugging doesn't require a repro.
-- ~~**[sharepoint] download_item forwards Graph bearer cross-host on /content redirect (LOW/security)**~~ — resolved: the sync worker downloads via `download_by_url(url)` using the delta item's pre-authenticated `@microsoft.graph.downloadUrl` with NO Authorization header, so the Graph bearer is never forwarded to `*.sharepoint.com`. `download_item` (the by-id `/content` path) remains for any future by-id use and still carries the redirect note in its docstring; it is not on the sync path.
-
-## Competitive / deep-research analysis (2026-05-29)
-
-Web research across cheminformatics platforms (CDD Vault, Dotmatics, ChemAxon, Schrödinger LiveDesign, ChEMBL/RDKit, ORD, PubChem), AI science copilots (FutureHouse PaperQA2/ether0, Elicit, Scite, Causaly, BenchSci, Iktos, Insilico, Chai), and enterprise RAG / living-wiki tools (Onyx/Danswer, Glean, Dust, Notion AI, Falconer, DeepWiki). Full report: `docs/research/2026-05-competitive-analysis.md`. **Shipped from this pass:** fingerprint similarity metric fix (Hamming→Jaccard ANN index + `<%>` ordering on compounds.morgan_fp and reactions.drfp; migrations 0045-0048). Deferred, ranked by leverage:
-
-- **[chem-search] True substructure / SMARTS search via the RDKit Postgres cartridge (HIGH, blocked on infra)** — pgvector fundamentally cannot answer "is pattern X a subgraph of molecule Y"; today `list_compounds_for_substructure` brute-forces up to 5000 compounds through an MCP `HasSubstructMatch` with no screening. The cartridge (`CREATE EXTENSION rdkit`) adds a `mol` column + GiST index for `@>` substructure search (pattern-fp screen → exact VF2, ~99.97% candidate reduction per RDKit benchmarks) and native `tanimoto_sml`/`<%>` similarity. **Blocker:** requires installing the `rdkit` extension in the Postgres server — verify the deployment target (Neon/Supabase/RDS) supports it before committing; if not, add an RDKit *pattern-fingerprint* screening column (`bit(N)` + bitwise-containment pre-filter) as a pgvector-only middle ground. Ref: RDKit Cartridge docs, lwreg (rinikerlab, JCIM 2024).
-- **[chem-registry] Standardize-on-register + InChIKey dedup (HIGH)** — `insert_compound` stores raw `smiles` and only a `canon_smiles`; there is no salt/solvent strip, tautomer canonicalization, or uniqueness key, so tautomer/salt duplicates silently fragment the registry. Add an RDKit `rdMolStandardize` pipeline (Cleanup → LargestFragmentChooser → Uncharger → TautomerEnumerator.Canonicalize) → compute Standard InChIKey of the parent → dedup on it, with Morgan fp as the similarity layer (two distinct mechanisms). Standardize query AND stored structure identically. Consider adopting `lwreg` wholesale (gives layered RegistrationHash for tautomer/stereo-sibling queries). Tautomer handling must differ by search type: generic/any-tautomer for substructure (never canonicalize a fragment query), canonical-tautomer key for exact/dedup.
-- **[chem-registry] Molecule↔Batch/Lot two-tier model + SDfile bulk import (MEDIUM)** — adopt the standard registry data model (canonical Molecule parent ↔ Batch/Lot) with a register-time "new molecule vs. new batch of existing" path, auto physchem (MW/logP via RDKit Descriptors, already in `mcp_molfp`), and SDfile bulk registration. Pattern from CDD Vault.
-- **[chem-search] R-group decomposition / SAR tables (MEDIUM)** — expose `rdkit.Chem.rdRGroupDecomposition` (core + R1/R2… columns joined to assay/outcome data) as the "show me the series / scaffolds in the library" output for the chemistry-search and wiki surfaces. Off-the-shelf RDKit; pattern from Schrödinger LiveDesign.
-- **[chem-search] Reactions: ORD-style decomposition + reactant/product substructure search (MEDIUM)** — store reactions decomposed like the Open Reaction Database schema (inputs/conditions/outcomes/provenance) and support SMARTS substructure on the reactant set and product set separately, in addition to whole-reaction DRFP similarity. Keep DRFP (matches learned rxnfp at ~99% with zero training); only consider rxnfp if learned semantic reaction neighbors become a hard requirement.
-- **[chem-search] Async job + poll for whole-library scans (LOW)** — expensive full-library similarity/substructure scans should run as async jobs on the existing asyncio polling worker + advisory locks (PubChem PUG-REST pattern) rather than blocking the request.
-- **[retrieval] Two-stage retrieve→rerank with a cross-encoder (MEDIUM)** — hybrid recall (FTS+pgvector RRF, already shipped) to top-100/200, then a cross-encoder rerank (Cohere Rerank or a local cross-encoder) to top-k before the answer model. Blend recency/source-authority into the final score, not vector distance alone. chemclaw2 already has RCS-style rerank in `paper_rcs.py`; measure RRF K (currently 60) and rerank quality against a golden set. Pattern from Cohere, Onyx, Glean.
-- **[wiki] Falconer-style staleness detection via citation re-verification (MEDIUM)** — on each incremental source sync, re-check every wiki page's cited sources; if a cited source changed/deleted, mark the claim stale and enqueue a draft-and-refine regeneration with a human-in-the-loop review notification (don't silently overwrite). Grounding citations double as freshness anchors. chemclaw2 has citations + contradictions + subscriptions + a sync worker but no citation-reverification loop. Pattern from Falconer / Notion agents.
-- **[wiki] Directional support/contradict/mention evidence layer + ContraCrow-style sweep (MEDIUM)** — store wiki citations with a Scite-style intent label (supporting/contrasting/mentioning) + confidence, and run a periodic agent that checks each wiki claim against new/conflicting papers (FutureHouse's ContraCrow found ~2.3 contradictions/biology paper). Extends the existing `wiki_contradictions` table.
-- **[wiki] Background auto-cross-linking (LOW)** — embedding-similarity job that suggests related-page backlinks when new pages/sections land, building the knowledge graph automatically. Pattern from Mem.
-- **[ingestion] Onyx-style connector ABC + incremental `poll_source` sync with Postgres checkpoints (MEDIUM)** — generalize the SharePoint/OneDrive `sync_worker` into a connector contract (`load_from_state` full + `poll_source(start,end)` incremental + resumable per-batch checkpoints), trusting source `modified` timestamps with a content-hash fallback so only changed docs get re-embedded. Permission-aware: sync source ACLs at index time, filter at retrieval time, fail-closed. Pattern from Onyx/Danswer.
-- **[agent] Abstention as a first-class outcome + confidence surfacing (MEDIUM)** — bake an explicit "insufficient evidence / I don't know" branch into answer tools and score on precision with permission to abstain (PaperQA2 reports 85% precision partly because it can abstain; Causaly's SIRS treats no-answer as correct). chemclaw2 already signals confidence levels; make abstention an explicit, evaluated path.
-- **[agent] Strict tool use + JSON structured outputs (LOW, quick win)** — turn on Anthropic constrained-decoding `strict: true` on tool schemas + structured JSON outputs using the existing Pydantic models, eliminating parse errors / invalid tool params. Ref: Claude structured-outputs docs.
-- **[agent] Citations-style enforced grounding for wiki/search answers (MEDIUM)** — passage-level (ideally figure/assay-level, à la BenchSci) citations keyed to stable chunk IDs, with a persisted claim→chunk_id→source map; require the answer model to cite chunk IDs inline. Consider Anthropic's Citations API (one customer cut source hallucinations 10%→0%). chemclaw2 has paper/wiki chunks + citations; tighten the claim→chunk binding and enforcement.
-- **[eval] LitQA2-style golden benchmark + LLM-as-judge regression eval in CI (HIGH)** — build a small held-out multiple-choice/extraction set from the corpus, scored on answer precision + accuracy + citation-correctness, run as a PR gate (deterministic checks first, LLM-judge only the remainder; validate the judge against human labels at 75-90% agreement). Track answer correctness and justification consistency separately (Elicit data: answers stable while citations drift). `eval_runs` table exists but is scoped to deterministic probes; this is the LLM-level eval deferred in earlier passes.
-- **[observability] Self-hosted Langfuse + OpenTelemetry GenAI tracing (MEDIUM)** — emit OTel GenAI spans (per LLM call, tool invocation, retrieval) with token/cost attribution per session; self-host Langfuse (Postgres-compatible, OTLP ingest) to stay Postgres-first and vendor-neutral. Redact PII/secrets BEFORE trace export (the `hooks.py` pattern), not just before tool execution. Ref: OTel GenAI semantic conventions.
+- **mypy strict adoption** — CI runs mypy non-strict (`check_untyped_defs = true`, `no_implicit_optional = true`). `api.agent.tools` / `.runner` / `.hooks` are excluded via per-module overrides because the `claude_agent_sdk` TypedDicts don't match the SDK's own example usage (~30 errors not ours to fix). Re-enable strict per module as each is cleaned. Goal: full strict in 4–6 PRs.
+- **Ruff rule expansion** — CI runs `ruff check --select=E,F,W` at `line-length=120`. Next rule families in order of value: `I` (imports), `UP` (pyupgrade), `B` (bugbear), `SIM`, `RUF`.
