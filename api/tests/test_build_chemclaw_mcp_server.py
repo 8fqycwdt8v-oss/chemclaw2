@@ -77,11 +77,11 @@ def test_all_expected_tools_register():
         "propose_hypothesis", "check_hypothesis_novelty", "list_hypotheses",
         "rank_hypotheses", "retire_hypothesis", "run_code", "get_code_execution",
         "critique_figure", "list_code_executions",
-        # external (9)
+        # external (8)
         "web_search", "fetch_document", "eln_fetch_experiment",
         "ingest_eln_experiment", "record_manual_outcome", "name_to_structure",
         "patent_coverage", "propose_retrosynthesis",
-        # campaign (7)
+        # campaign (6)
         "start_synthesis_campaign", "confirm_synthesis_plan",
         "record_feedback", "register_compound_property",
         "record_predicted_conditions",
