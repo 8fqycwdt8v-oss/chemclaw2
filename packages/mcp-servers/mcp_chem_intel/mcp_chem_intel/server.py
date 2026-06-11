@@ -13,11 +13,10 @@ meant to run as separate HTTP MCP services — see BACKLOG for that wiring.
 """
 
 import logging
-import os
 import time
 
 from mcp.server.fastmcp import FastMCP
-from mcp_chemclaw_shared import MAX_REACTION_SMILES_LEN, MAX_SMILES_LEN, configure_logging
+from mcp_chemclaw_shared import MAX_REACTION_SMILES_LEN, MAX_SMILES_LEN, run_server
 
 from mcp_chem_intel.abbreviations import expand_abbreviation as _expand_abbreviation
 from mcp_chem_intel.classify import classify_reaction as _classify_reaction
@@ -140,15 +139,8 @@ def validate_ord_compound(compound_json: dict) -> dict:
     return result
 
 
-def main():
-    global log
-    log = configure_logging("mcp-chem-intel")
-    log.info("mcp_server_starting", extra={"name": mcp.name, "pid": os.getpid()})
-    try:
-        mcp.run(transport="stdio")
-    except Exception:
-        log.exception("mcp_server_crashed")
-        raise
+def main() -> None:
+    run_server(mcp, "mcp-chem-intel")
 
 
 if __name__ == "__main__":

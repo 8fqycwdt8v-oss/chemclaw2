@@ -266,7 +266,7 @@ async def hybrid_search_paper_chunks(
             entry["sem_rank"] = rank
 
     scored: list[dict[str, Any]] = []
-    for _cid, entry in merged.items():
+    for entry in merged.values():
         s = 0.0
         if entry["fts_rank"] is not None:
             s += 1.0 / (K + entry["fts_rank"])

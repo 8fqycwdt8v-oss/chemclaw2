@@ -84,17 +84,16 @@ async def test_get_parameter_spec_malformed_returns_none_with_log(
 ) -> None:
     """If the JSON in plan is invalid against the spec schema, fail closed."""
     cid = await _new_campaign(session_factory, user_id)
-    async with session_factory() as db:
-        async with db.begin():
-            await db.execute(
-                text("""
+    async with session_factory() as db, db.begin():
+        await db.execute(
+            text("""
                     UPDATE synthesis_campaigns
                        SET plan = jsonb_build_object('parameter_spec',
                                                      '{"inputs": [], "outputs": []}'::jsonb)
                      WHERE id = CAST(:cid AS uuid)
                 """),
-                {"cid": cid},
-            )
+            {"cid": cid},
+        )
     async with session_factory() as db:
         spec = await get_campaign_parameter_spec(db, cid, user_id)
     assert spec is None
@@ -111,42 +110,41 @@ async def test_load_campaign_experiments_joins_reaction_outcomes(
         await set_campaign_parameter_spec(db, cid, user_id, spec)
 
     # Seed one completed campaign step + its reaction + outcome.
-    async with session_factory() as db:
-        async with db.begin():
-            # campaign_steps row. `conditions` is a TEXT column — pass the
-            # JSON as a string; the loader parses it back via json.loads.
-            await db.execute(
-                text("""
+    async with session_factory() as db, db.begin():
+        # campaign_steps row. `conditions` is a TEXT column — pass the
+        # JSON as a string; the loader parses it back via json.loads.
+        await db.execute(
+            text("""
                     INSERT INTO campaign_steps
                         (campaign_id, step_idx, reaction_smiles,
                          conditions, status)
                     VALUES (CAST(:cid AS uuid), 0, 'CC>>CCC',
                             :c, 'complete')
                 """),
-                {"cid": cid, "c": json.dumps({"temperature": 60.0, "solvent": "THF"})},
-            )
-            step_row = await db.execute(
-                text("""
+            {"cid": cid, "c": json.dumps({"temperature": 60.0, "solvent": "THF"})},
+        )
+        step_row = await db.execute(
+            text("""
                     SELECT id::text FROM campaign_steps
                      WHERE campaign_id = CAST(:cid AS uuid) AND step_idx = 0
                 """),
-                {"cid": cid},
-            )
-            step_id = step_row.scalar_one()
-            # reactions row (FK target for reaction_outcomes). The column
-            # is `rxn_smiles`, not `reaction_smiles`.
-            rxn_row = await db.execute(
-                text("""
+            {"cid": cid},
+        )
+        step_id = step_row.scalar_one()
+        # reactions row (FK target for reaction_outcomes). The column
+        # is `rxn_smiles`, not `reaction_smiles`.
+        rxn_row = await db.execute(
+            text("""
                     INSERT INTO reactions (rxn_smiles, created_by)
                     VALUES ('CC>>CCC', :uid)
                     RETURNING id::text
                 """),
-                {"uid": user_id},
-            )
-            rxn_id = rxn_row.scalar_one()
-            # reaction_outcomes row
-            await db.execute(
-                text("""
+            {"uid": user_id},
+        )
+        rxn_id = rxn_row.scalar_one()
+        # reaction_outcomes row
+        await db.execute(
+            text("""
                     INSERT INTO reaction_outcomes
                         (reaction_id, campaign_step_id, source, status,
                          yield_pct, conditions_actual, created_by)
@@ -154,11 +152,11 @@ async def test_load_campaign_experiments_joins_reaction_outcomes(
                             'manual', 'success', 73.5,
                             CAST(:c AS jsonb), :uid)
                 """),
-                {
-                    "rxn": rxn_id, "step": step_id, "uid": user_id,
-                    "c": json.dumps({"temperature": 62.0, "solvent": "THF"}),
-                },
-            )
+            {
+                "rxn": rxn_id, "step": step_id, "uid": user_id,
+                "c": json.dumps({"temperature": 62.0, "solvent": "THF"}),
+            },
+        )
 
     async with session_factory() as db:
         experiments = await load_campaign_experiments(db, cid, spec)

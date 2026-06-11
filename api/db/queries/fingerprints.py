@@ -60,20 +60,24 @@ async def release_fp_lock(db: AsyncSession, key: int) -> None:
 
 
 async def write_compound_fp(
-    db: AsyncSession, compound_id: str, bits: str, popcount: int
+    db: AsyncSession, compound_id: str, bits: str
 ) -> None:
-    """Idempotent write: predicate `morgan_fp IS NULL` prevents overwrite."""
+    """Idempotent write: predicate `morgan_fp IS NULL` prevents overwrite.
+
+    `morgan_fp_popcount` is GENERATED ALWAYS (migration 0026) — Postgres
+    derives it from `morgan_fp`; setting it explicitly raises
+    GeneratedAlwaysError and failed every compound fingerprint write.
+    """
     await db.execute(
         text(
             """
             UPDATE compounds
             SET morgan_fp = CAST(:bits AS bit(2048)),
-                morgan_fp_popcount = :pc,
                 fp_computed_at = now()
             WHERE id = CAST(:id AS uuid) AND morgan_fp IS NULL
             """
         ),
-        {"bits": bit_string_to_pg_bytes(bits), "pc": popcount, "id": compound_id},
+        {"bits": bit_string_to_pg_bytes(bits), "id": compound_id},
     )
 
 

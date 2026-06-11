@@ -312,10 +312,6 @@ def _cap_text_block(text: str) -> str:
     return raw[:body_budget].decode("utf-8", errors="ignore") + _TRUNC_MARKER
 
 
-def _get_env(name: str, default: str = "") -> str:
-    return os.environ.get(name, default)
-
-
 async def run_agent_streaming(
     prompt: str,
     user_id: str,
@@ -340,8 +336,8 @@ async def run_agent_streaming(
         system_prompt=BASE_SYSTEM_PROMPT,
         session_store=store,
         resume=session_id,
-        model=_get_env("ANTHROPIC_MODEL", "claude-opus-4-7-20251101"),
-        max_turns=int(_get_env("AGENT_MAX_TURNS", "60")),
+        model=os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-7-20251101"),
+        max_turns=int(os.environ.get("AGENT_MAX_TURNS", "60")),
         permission_mode="plan" if plan_mode else None,
         mcp_servers={
             "chemclaw2-tools": McpSdkServerConfig(server=mcp_server),

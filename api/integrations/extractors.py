@@ -95,11 +95,12 @@ def _extract_pptx(content: bytes) -> str:
         raise ExtractionError("PPTX support not available") from e
     _check_zip_expansion(content)
     prs = Presentation(io.BytesIO(content))
-    parts: list[str] = []
-    for slide in prs.slides:
-        for shape in slide.shapes:
-            if shape.has_text_frame and shape.text_frame.text:
-                parts.append(shape.text_frame.text)
+    parts = [
+        shape.text_frame.text
+        for slide in prs.slides
+        for shape in slide.shapes
+        if shape.has_text_frame and shape.text_frame.text
+    ]
     return "\n".join(parts)
 
 

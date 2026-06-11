@@ -6,6 +6,8 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import rows_to_dicts
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,8 +22,7 @@ async def list_todos(db: AsyncSession, session_id: str, user_id: str) -> list[di
         """),
         {"sid": session_id, "uid": user_id},
     )
-    rows = result.mappings().fetchall()
-    return [dict(r) for r in rows]
+    return rows_to_dicts(result)
 
 
 async def upsert_todos(

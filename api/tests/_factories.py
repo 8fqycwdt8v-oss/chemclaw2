@@ -20,20 +20,19 @@ async def new_campaign(
     target: str = "CCO",
 ) -> str:
     """Insert a minimal synthesis_campaigns row owned by `user_id`. Returns the id."""
-    async with session_factory() as db:
-        async with db.begin():
-            result = await db.execute(
-                text("""
+    async with session_factory() as db, db.begin():
+        result = await db.execute(
+            text("""
                     INSERT INTO synthesis_campaigns
                         (created_by, session_id, target_smiles, status)
                     VALUES (:uid, :sid, :target, :status)
                     RETURNING id::text
                 """),
-                {
-                    "uid": user_id,
-                    "sid": f"sess-{uuid.uuid4().hex[:12]}",
-                    "target": target,
-                    "status": status,
-                },
-            )
-            return result.scalar_one()
+            {
+                "uid": user_id,
+                "sid": f"sess-{uuid.uuid4().hex[:12]}",
+                "target": target,
+                "status": status,
+            },
+        )
+        return result.scalar_one()

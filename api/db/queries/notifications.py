@@ -8,6 +8,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import rows_to_dicts
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,8 +52,7 @@ async def list_notifications(
         ),
         {"uid": user_id, "lim": limit},
     )
-    rows = result.mappings().all()
-    return [dict(r) for r in rows]
+    return rows_to_dicts(result)
 
 
 async def count_unread(db: AsyncSession, user_id: str) -> int:

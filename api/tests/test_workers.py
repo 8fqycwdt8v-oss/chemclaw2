@@ -12,6 +12,7 @@ holds under concurrent triggers.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from typing import Any
 
@@ -100,10 +101,8 @@ async def test_campaign_worker_in_flight_cleared_in_finally(
     task = asyncio.create_task(campaign_worker.run_worker(_factory))  # type: ignore[arg-type]
     await asyncio.sleep(0.05)
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
 
     # The flag must be clear at the end despite the inner raise.
     assert campaign_worker._in_flight is False
@@ -136,10 +135,8 @@ async def test_fp_worker_in_flight_cleared_in_finally(
     task = asyncio.create_task(fp_worker.run_worker(_factory))  # type: ignore[arg-type]
     await asyncio.sleep(0.05)
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
 
     assert fp_worker._in_flight is False
 
@@ -165,15 +162,36 @@ def test_stable_lock_key_rejects_non_uuid() -> None:
 # ── fp_worker._call_mcp_tool (MCP response parsing) ──────────────────────────
 
 
+_INIT_REPLY = b'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05"}}\n'
+
+
 class _StubProc:
-    """Stand-in for asyncio.subprocess.Process used by _call_mcp_tool."""
+    """Stand-in for asyncio.subprocess.Process used by _call_mcp_tool.
+
+    Serves the canned initialize reply first, then the given response line(s),
+    then EOF. Doubles as its own stdin/stdout stream objects.
+    """
 
     def __init__(self, stdout: bytes, stderr: bytes = b"") -> None:
-        self._stdout = stdout
+        self._lines = [_INIT_REPLY] + [ln + b"\n" for ln in stdout.splitlines()]
         self._stderr = stderr
+        self.stdin = self
+        self.stdout = self
+
+    def write(self, data: bytes) -> None:
+        pass
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    async def readline(self) -> bytes:
+        return self._lines.pop(0) if self._lines else b""
 
     async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
-        return self._stdout, self._stderr
+        return b"", self._stderr
 
     def terminate(self) -> None:
         pass
@@ -196,7 +214,7 @@ def _patch_subprocess(monkeypatch: pytest.MonkeyPatch, proc: _StubProc) -> None:
 async def test_call_mcp_tool_parses_valid_response(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = {"fingerprint_bits": "0" * 2048}
     response = {
-        "jsonrpc": "2.0", "id": 1,
+        "jsonrpc": "2.0", "id": 2,
         "result": {"content": [{"type": "text", "text": json.dumps(payload)}]},
     }
     _patch_subprocess(monkeypatch, _StubProc(json.dumps(response).encode() + b"\n"))
@@ -209,10 +227,10 @@ async def test_call_mcp_tool_malformed_outer_json_is_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A line that starts with '{' but isn't valid JSON must not crash the
-    worker — it should be skipped and the function should fall through to
-    the unparseable RuntimeError."""
+    worker — it should be skipped; hitting EOF without a tools/call response
+    raises the closed-stdout RuntimeError."""
     _patch_subprocess(monkeypatch, _StubProc(b"{not valid json\n"))
-    with pytest.raises(RuntimeError, match="Could not parse"):
+    with pytest.raises(RuntimeError, match="closed stdout"):
         await fp_worker._call_mcp_tool("mcp_molfp.server", "compute_morgan_fp", {"smiles": "CCO"})
 
 
@@ -224,7 +242,7 @@ async def test_call_mcp_tool_invalid_inner_text_block_raises(
     as JSON, raise a RuntimeError with the server/tool tag — don't
     surface the unhandled JSONDecodeError up the worker loop."""
     response = {
-        "jsonrpc": "2.0", "id": 1,
+        "jsonrpc": "2.0", "id": 2,
         "result": {"content": [{"type": "text", "text": "not-json-at-all"}]},
     }
     _patch_subprocess(monkeypatch, _StubProc(json.dumps(response).encode() + b"\n"))
@@ -236,7 +254,7 @@ async def test_call_mcp_tool_invalid_inner_text_block_raises(
 async def test_call_mcp_tool_missing_text_block_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    response = {"jsonrpc": "2.0", "id": 1, "result": {"content": []}}
+    response = {"jsonrpc": "2.0", "id": 2, "result": {"content": []}}
     _patch_subprocess(monkeypatch, _StubProc(json.dumps(response).encode() + b"\n"))
     with pytest.raises(RuntimeError, match="No text block"):
         await fp_worker._call_mcp_tool("mcp_molfp.server", "compute_morgan_fp", {"smiles": "CCO"})

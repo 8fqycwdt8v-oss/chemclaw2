@@ -120,21 +120,20 @@ def build_eln_tools(
             return {"ok": False, "error": "ELN payload could not be normalized"}
 
         try:
-            async with session_factory() as db:
-                async with db.begin():
-                    outcome_id, already_existed = await insert_outcome(
-                        db,
-                        reaction_id=rid,
-                        source="eln",
-                        status=normalized.status,
-                        created_by=user_id,
-                        campaign_step_id=csid,
-                        eln_experiment_id=experiment_id.strip(),
-                        yield_pct=normalized.yield_pct,
-                        conditions_actual=normalized.conditions_actual,
-                        observations=normalized.observations,
-                        failure_reason=normalized.failure_reason,
-                    )
+            async with session_factory() as db, db.begin():
+                outcome_id, already_existed = await insert_outcome(
+                    db,
+                    reaction_id=rid,
+                    source="eln",
+                    status=normalized.status,
+                    created_by=user_id,
+                    campaign_step_id=csid,
+                    eln_experiment_id=experiment_id.strip(),
+                    yield_pct=normalized.yield_pct,
+                    conditions_actual=normalized.conditions_actual,
+                    observations=normalized.observations,
+                    failure_reason=normalized.failure_reason,
+                )
         except Exception:
             logger.exception(
                 "eln_ingest_persist_failed exp=%s reaction=%s",
@@ -177,20 +176,19 @@ def build_eln_tools(
                 return {"ok": False, "error": "campaign_step_id must be a UUID"}
 
         try:
-            async with session_factory() as db:
-                async with db.begin():
-                    outcome_id, _ = await insert_outcome(
-                        db,
-                        reaction_id=rid,
-                        source="manual",
-                        status=status,
-                        created_by=user_id,
-                        campaign_step_id=csid,
-                        yield_pct=yield_pct,
-                        conditions_actual=conditions_actual,
-                        observations=observations,
-                        failure_reason=failure_reason,
-                    )
+            async with session_factory() as db, db.begin():
+                outcome_id, _ = await insert_outcome(
+                    db,
+                    reaction_id=rid,
+                    source="manual",
+                    status=status,
+                    created_by=user_id,
+                    campaign_step_id=csid,
+                    yield_pct=yield_pct,
+                    conditions_actual=conditions_actual,
+                    observations=observations,
+                    failure_reason=failure_reason,
+                )
         except ValueError as e:
             # CLAUDE.md observability rule 3: log denials at info before returning.
             logger.info("manual_outcome_rejected reaction=%s reason=%s", rid, e)

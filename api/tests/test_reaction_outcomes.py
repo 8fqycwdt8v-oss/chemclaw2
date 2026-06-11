@@ -38,28 +38,27 @@ async def _insert_reaction(
     bit(2048) parameter binds even when wrapped in CAST(); the canonical
     fix is to pack the bits to bytes via ``bit_string_to_pg_bytes``.
     """
-    async with session_factory() as db:
-        async with db.begin():
-            result = await db.execute(
-                text("""
+    async with session_factory() as db, db.begin():
+        result = await db.execute(
+            text("""
                     INSERT INTO reactions (rxn_smiles, name, created_by)
                     VALUES (:smi, :name, :uid)
                     RETURNING id::text
                 """),
-                {"smi": rxn_smiles, "name": name, "uid": user_id},
-            )
-            rid = result.scalar_one()
-            if drfp_bits is not None:
-                await db.execute(
-                    text("""
+            {"smi": rxn_smiles, "name": name, "uid": user_id},
+        )
+        rid = result.scalar_one()
+        if drfp_bits is not None:
+            await db.execute(
+                text("""
                         UPDATE reactions
                         SET drfp = CAST(:bits AS bit(2048)),
                             fp_computed_at = now()
                         WHERE id = CAST(:rid AS uuid)
                     """),
-                    {"bits": bit_string_to_pg_bytes(drfp_bits), "rid": rid},
-                )
-            return rid
+                {"bits": bit_string_to_pg_bytes(drfp_bits), "rid": rid},
+            )
+        return rid
 
 
 @pytest.mark.asyncio
@@ -68,18 +67,17 @@ async def test_insert_outcome_roundtrip(session_factory, user_id: str) -> None:
         session_factory, user_id, rxn_smiles="CC>>CCO", name="test_rxn",
     )
 
-    async with session_factory() as db:
-        async with db.begin():
-            outcome_id, already = await insert_outcome(
-                db,
-                reaction_id=reaction_id,
-                source="manual",
-                status="success",
-                created_by=user_id,
-                yield_pct=72.5,
-                conditions_actual={"solvent": "toluene", "temp_c": 80},
-                observations="Clean conversion",
-            )
+    async with session_factory() as db, db.begin():
+        outcome_id, already = await insert_outcome(
+            db,
+            reaction_id=reaction_id,
+            source="manual",
+            status="success",
+            created_by=user_id,
+            yield_pct=72.5,
+            conditions_actual={"solvent": "toluene", "temp_c": 80},
+            observations="Clean conversion",
+        )
 
     assert outcome_id
     assert already is False
@@ -103,28 +101,26 @@ async def test_insert_outcome_eln_is_idempotent(session_factory, user_id: str) -
     )
 
     eln_exp_id = f"EXP-{uuid.uuid4().hex[:10]}"
-    async with session_factory() as db:
-        async with db.begin():
-            first_id, first_already = await insert_outcome(
-                db,
-                reaction_id=reaction_id,
-                source="eln",
-                status="partial",
-                created_by=user_id,
-                eln_experiment_id=eln_exp_id,
-                yield_pct=42.0,
-            )
-    async with session_factory() as db:
-        async with db.begin():
-            second_id, second_already = await insert_outcome(
-                db,
-                reaction_id=reaction_id,
-                source="eln",
-                status="partial",
-                created_by=user_id,
-                eln_experiment_id=eln_exp_id,
-                yield_pct=42.0,
-            )
+    async with session_factory() as db, db.begin():
+        first_id, first_already = await insert_outcome(
+            db,
+            reaction_id=reaction_id,
+            source="eln",
+            status="partial",
+            created_by=user_id,
+            eln_experiment_id=eln_exp_id,
+            yield_pct=42.0,
+        )
+    async with session_factory() as db, db.begin():
+        second_id, second_already = await insert_outcome(
+            db,
+            reaction_id=reaction_id,
+            source="eln",
+            status="partial",
+            created_by=user_id,
+            eln_experiment_id=eln_exp_id,
+            yield_pct=42.0,
+        )
 
     assert first_already is False
     assert second_already is True
@@ -183,21 +179,20 @@ async def test_find_similar_reactions_includes_outcomes(
         name="rxn_b", drfp_bits=_FP_MOSTLY_ONES,
     )
 
-    async with session_factory() as db:
-        async with db.begin():
-            await insert_outcome(
-                db, reaction_id=rid_a, source="manual", status="success",
-                created_by=user_id, yield_pct=85.0,
-            )
-            await insert_outcome(
-                db, reaction_id=rid_a, source="manual", status="fail",
-                created_by=user_id, failure_reason="Solvent inversion",
-            )
-            await insert_outcome(
-                db, reaction_id=rid_b, source="eln", status="partial",
-                created_by=user_id, eln_experiment_id=f"E-{uuid.uuid4().hex[:8]}",
-                yield_pct=45.0,
-            )
+    async with session_factory() as db, db.begin():
+        await insert_outcome(
+            db, reaction_id=rid_a, source="manual", status="success",
+            created_by=user_id, yield_pct=85.0,
+        )
+        await insert_outcome(
+            db, reaction_id=rid_a, source="manual", status="fail",
+            created_by=user_id, failure_reason="Solvent inversion",
+        )
+        await insert_outcome(
+            db, reaction_id=rid_b, source="eln", status="partial",
+            created_by=user_id, eln_experiment_id=f"E-{uuid.uuid4().hex[:8]}",
+            yield_pct=45.0,
+        )
 
     async with session_factory() as db:
         with_out = await find_similar_reactions(

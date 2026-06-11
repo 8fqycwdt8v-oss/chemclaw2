@@ -7,10 +7,8 @@ a uniform MCP surface alongside molfp / rxnfp / retrosynth / rxn_conditions.
 """
 from __future__ import annotations
 
-import os
-
 from mcp.server.fastmcp import FastMCP
-from mcp_chemclaw_shared import configure_logging
+from mcp_chemclaw_shared import configure_logging, run_server
 
 from mcp_codesandbox.sandbox import (
     CPU_SECONDS_DEFAULT,
@@ -59,13 +57,8 @@ async def execute(
     return summary(result)
 
 
-def main():
-    log.info("mcp_server_starting", extra={"name": mcp.name, "pid": os.getpid()})
-    try:
-        mcp.run(transport="stdio")
-    except Exception:
-        log.exception("mcp_server_crashed")
-        raise
+def main() -> None:
+    run_server(mcp, "mcp-codesandbox")
 
 
 if __name__ == "__main__":

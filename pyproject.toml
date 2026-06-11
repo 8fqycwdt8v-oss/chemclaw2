@@ -125,7 +125,9 @@ target-version = "py311"
 # B — bugbear. Catches real bugs (B904 chained raises, B905 strict-zip).
 # B008 is widened to permit FastAPI's Depends/Query/Body/Path/Header pattern
 # in default arguments (idiomatic for FastAPI routes).
-select = ["E", "F", "W", "I", "UP", "B"]
+# SIM (simplify), PIE (misc lints), PERF (perf antipatterns) — landed in the
+# June 2026 simplification pass; the codebase is clean under all three.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "PIE", "PERF"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection idiom calls these in default arguments,

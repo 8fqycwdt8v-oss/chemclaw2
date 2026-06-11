@@ -62,17 +62,16 @@ async def test_list_wiki_needs_review_owner_scoped(session_factory, user_id):
 async def test_list_wiki_needs_review_excludes_archived(session_factory, user_id):
     """Pages marked archived must not surface in the inbox even when needs_review."""
     archived_slug = f"a-{uuid.uuid4().hex[:8]}"
-    async with session_factory() as db:
-        async with db.begin():
-            await db.execute(
-                text("""
+    async with session_factory() as db, db.begin():
+        await db.execute(
+            text("""
                     INSERT INTO wiki_pages (slug, title, content, content_text,
                                             created_by, updated_by, needs_review, archived)
                     VALUES (:slug, 'Archived', CAST('{}' AS jsonb), 'x',
                             :uid, :uid, true, true)
                 """),
-                {"slug": archived_slug, "uid": user_id},
-            )
+            {"slug": archived_slug, "uid": user_id},
+        )
 
     async with session_factory() as db:
         inbox = await list_wiki_needs_review(db, user_id)
@@ -83,17 +82,16 @@ async def test_list_wiki_needs_review_excludes_archived(session_factory, user_id
 async def test_list_wiki_needs_review_excludes_clean_pages(session_factory, user_id):
     """A page with needs_review=false should not appear."""
     clean_slug = f"clean-{uuid.uuid4().hex[:8]}"
-    async with session_factory() as db:
-        async with db.begin():
-            await db.execute(
-                text("""
+    async with session_factory() as db, db.begin():
+        await db.execute(
+            text("""
                     INSERT INTO wiki_pages (slug, title, content, content_text,
                                             created_by, updated_by, needs_review)
                     VALUES (:slug, 'Clean', CAST('{}' AS jsonb), 'x',
                             :uid, :uid, false)
                 """),
-                {"slug": clean_slug, "uid": user_id},
-            )
+            {"slug": clean_slug, "uid": user_id},
+        )
 
     async with session_factory() as db:
         inbox = await list_wiki_needs_review(db, user_id)

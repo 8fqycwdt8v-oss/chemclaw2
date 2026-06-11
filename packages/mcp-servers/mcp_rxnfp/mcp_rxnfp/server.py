@@ -1,10 +1,9 @@
 import logging
-import os
 import time
 
 from drfp import DrfpEncoder
 from mcp.server.fastmcp import FastMCP
-from mcp_chemclaw_shared import MAX_REACTION_SMILES_LEN, configure_logging
+from mcp_chemclaw_shared import MAX_REACTION_SMILES_LEN, run_server
 
 log: logging.Logger = logging.getLogger("mcp_rxnfp")
 mcp = FastMCP("mcp-rxnfp")
@@ -60,15 +59,8 @@ def compute_drfp(reaction_smiles: str) -> dict:
     return {"fingerprint_bits": bit_str, "n_bits": _NBITS}
 
 
-def main():
-    global log
-    log = configure_logging("mcp-rxnfp")
-    log.info("mcp_server_starting", extra={"name": mcp.name, "pid": os.getpid()})
-    try:
-        mcp.run(transport="stdio")
-    except Exception:
-        log.exception("mcp_server_crashed")
-        raise
+def main() -> None:
+    run_server(mcp, "mcp-rxnfp")
 
 
 if __name__ == "__main__":

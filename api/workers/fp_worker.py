@@ -12,6 +12,7 @@ Or mounted as a background task in the FastAPI lifespan.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -52,13 +53,58 @@ def _stable_lock_key(row_id: str) -> int:
     return _uuid_mod.UUID(row_id).int % (2 ** 63)
 
 
+# MCP servers reject `tools/call` before the `initialize` handshake completes,
+# so every call sends the full three-message sequence on stdin. The tools/call
+# id is fixed so the response parser can pick it out from the initialize reply.
+_MCP_CALL_ID = 2
+
+
+async def _converse(proc: Any, tool_name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Drive one initialize → initialized → tools/call exchange on the pipes.
+
+    The server tears the session down at stdin EOF, so the handshake must be
+    staged (write, read the initialize reply, then send the call) rather than
+    pipelined through a single communicate().
+    """
+    def _send(msg: dict[str, Any]) -> None:
+        proc.stdin.write(json.dumps(msg).encode() + b"\n")
+
+    _send({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "chemclaw2-fp-worker", "version": "1.0"},
+        },
+    })
+    await proc.stdin.drain()
+    await proc.stdout.readline()  # initialize reply (id 1)
+    _send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    _send({
+        "jsonrpc": "2.0", "id": _MCP_CALL_ID, "method": "tools/call",
+        "params": {"name": tool_name, "arguments": tool_input},
+    })
+    await proc.stdin.drain()
+    while True:
+        line = await proc.stdout.readline()
+        if not line:
+            raise RuntimeError("server closed stdout before responding")
+        text = line.decode().strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            resp = json.loads(text)
+        except json.JSONDecodeError as e:
+            logger.warning("mcp_response_invalid_json tool=%s err=%s", tool_name, e)
+            continue
+        # Skip anything that isn't the tools/call response (server-initiated
+        # notifications, stray output).
+        if resp.get("id") == _MCP_CALL_ID:
+            return resp
+
+
 async def _call_mcp_tool(server_module: str, tool_name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
     """Call an MCP stdio server tool via subprocess. Safe: module name is a constant, not user input."""
-    request = {
-        "jsonrpc": "2.0", "id": 1,
-        "method": "tools/call",
-        "params": {"name": tool_name, "arguments": tool_input},
-    }
     # asyncio.create_subprocess_exec does NOT invoke a shell — no injection risk.
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-m", server_module,
@@ -67,54 +113,58 @@ async def _call_mcp_tool(server_module: str, tool_name: str, tool_input: dict[st
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(json.dumps(request).encode()), timeout=30.0
-        )
-        if stderr_bytes:
-            logger.debug("mcp_stderr server=%s tool=%s: %s", server_module, tool_name,
-                         stderr_bytes.decode(errors="replace")[:500])
-    except TimeoutError:
         try:
+            resp = await asyncio.wait_for(
+                _converse(proc, tool_name, tool_input), timeout=30.0
+            )
+        finally:
+            # Stdin EOF tells the server to exit; collect remaining output and
+            # reap. Guard each step — handles may already be closed.
+            with contextlib.suppress(Exception):
+                proc.stdin.close()  # type: ignore[union-attr]  # PIPE guarantees stdin
+            try:
+                _, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+                if stderr_bytes:
+                    logger.debug("mcp_stderr server=%s tool=%s: %s", server_module, tool_name,
+                                 stderr_bytes.decode(errors="replace")[:500])
+            except Exception:
+                pass
+    except TimeoutError:
+        with contextlib.suppress(Exception):
             proc.terminate()
-        except Exception:
-            pass
         try:
             await asyncio.wait_for(proc.wait(), timeout=2.0)
         except TimeoutError:
-            try:
+            with contextlib.suppress(Exception):
                 proc.kill()
-            except Exception:
-                pass
             # Reap the SIGKILL'd child: without a second wait() the exit
             # status is never collected and the stdin/stdout/stderr pipe
             # transports stay open, so repeated timeouts leak zombies + fds.
             # (This mirrors the kill-then-wait pattern in mcp_codesandbox.)
-            try:
+            with contextlib.suppress(Exception):
                 await asyncio.wait_for(proc.wait(), timeout=2.0)
-            except Exception:
-                pass
         raise RuntimeError(f"MCP call to {server_module}.{tool_name} timed out") from None
 
-    for line in reversed(stdout.decode().strip().splitlines()):
-        if line.strip().startswith('{'):
+    if "error" in resp:
+        err = resp["error"]
+        raise RuntimeError(
+            f"MCP {server_module}.{tool_name} returned error "
+            f"{err.get('code')}: {err.get('message')}"
+        )
+    result = resp.get("result", {})
+    if result.get("isError"):
+        # Tool-level failure: content is a plain-text message, not JSON.
+        texts = " ".join(b.get("text", "") for b in result.get("content", []))
+        raise RuntimeError(f"MCP {server_module}.{tool_name} tool error: {texts[:300]}")
+    for block in resp.get("result", {}).get("content", []):
+        if block.get("type") == "text":
             try:
-                resp = json.loads(line)
+                return json.loads(block["text"])
             except json.JSONDecodeError as e:
-                logger.warning("mcp_response_invalid_json server=%s tool=%s err=%s",
-                               server_module, tool_name, e)
-                continue
-            for block in resp.get("result", {}).get("content", []):
-                if block.get("type") == "text":
-                    try:
-                        return json.loads(block["text"])
-                    except json.JSONDecodeError as e:
-                        raise RuntimeError(
-                            f"MCP {server_module}.{tool_name} returned invalid JSON in text block: {e}"
-                        ) from e
-            raise RuntimeError(f"No text block in MCP response from {server_module}.{tool_name}")
-    logger.warning("mcp_response_unparseable server=%s tool=%s stdout=%r",
-                   server_module, tool_name, stdout.decode(errors="replace")[:200])
-    raise RuntimeError(f"Could not parse MCP response from {server_module}.{tool_name}")
+                raise RuntimeError(
+                    f"MCP {server_module}.{tool_name} returned invalid JSON in text block: {e}"
+                ) from e
+    raise RuntimeError(f"No text block in MCP response from {server_module}.{tool_name}")
 
 
 async def compute_compound_fingerprints(db: AsyncSession) -> int:
@@ -130,7 +180,7 @@ async def compute_compound_fingerprints(db: AsyncSession) -> int:
             if not _FP_RE.match(bits):
                 logger.error("fp_invalid_bits compound=%s", compound_id)
                 continue
-            await write_compound_fp(db, compound_id, bits, bits.count('1'))
+            await write_compound_fp(db, compound_id, bits)
             await db.commit()
             computed += 1
         except Exception as e:
@@ -155,7 +205,7 @@ async def compute_reaction_fingerprints(db: AsyncSession) -> int:
         if not await try_acquire_fp_lock(db, lock_key):
             continue
         try:
-            data = await _call_mcp_tool("mcp_rxnfp.server", "compute_drfp", {"rxn_smiles": rxn_smiles})
+            data = await _call_mcp_tool("mcp_rxnfp.server", "compute_drfp", {"reaction_smiles": rxn_smiles})
             bits = data.get("fingerprint_bits", "")
             if not _FP_RE.match(bits):
                 logger.error("drfp_invalid_bits reaction=%s", reaction_id)

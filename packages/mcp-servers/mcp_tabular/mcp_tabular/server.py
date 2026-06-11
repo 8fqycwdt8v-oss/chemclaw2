@@ -20,12 +20,11 @@ asyncio.wait_for + SIGKILL backstop covers this.
 """
 from __future__ import annotations
 
-import os
 import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
-from mcp_chemclaw_shared import configure_logging
+from mcp_chemclaw_shared import configure_logging, run_server
 
 from mcp_tabular import ml, stats, tabicl_runtime, tables
 
@@ -216,13 +215,7 @@ def tabicl_status() -> dict:
 
 
 def main() -> None:
-    # `name` collides with LogRecord.name — emit as `server_name`.
-    log.info("mcp_server_starting", extra={"server_name": mcp.name, "pid": os.getpid()})
-    try:
-        mcp.run(transport="stdio")
-    except Exception:
-        log.exception("mcp_server_crashed")
-        raise
+    run_server(mcp, "mcp-tabular")
 
 
 if __name__ == "__main__":

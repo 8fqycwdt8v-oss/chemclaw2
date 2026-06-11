@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
-from mcp_chemclaw_shared import MAX_REACTION_SMILES_LEN, configure_logging
+from mcp_chemclaw_shared import MAX_REACTION_SMILES_LEN, run_server
 
 log: logging.Logger = logging.getLogger("mcp_rxn_conditions")
 mcp = FastMCP("mcp-rxn-conditions")
@@ -151,18 +151,15 @@ def _init_wrapper() -> tuple[Any | None, str | None]:
     return wrapper, version
 
 
-def main():
-    global log, _wrapper, _model_version
-    log = configure_logging("mcp-rxn-conditions")
-    log.info("mcp_server_starting", extra={"name": mcp.name, "pid": os.getpid()})
+def _init() -> None:
+    global _wrapper, _model_version
     _wrapper, _model_version = _init_wrapper()
     if _wrapper is None:
         log.warning("predictor_disabled_starting_anyway")
-    try:
-        mcp.run(transport="stdio")
-    except Exception:
-        log.exception("mcp_server_crashed")
-        raise
+
+
+def main() -> None:
+    run_server(mcp, "mcp-rxn-conditions", init_fn=_init)
 
 
 if __name__ == "__main__":

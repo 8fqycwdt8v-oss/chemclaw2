@@ -196,10 +196,7 @@ def _extract_importances(est, numeric_cols, categorical_cols, pre) -> dict[str, 
         importances = est.feature_importances_
     elif hasattr(est, "coef_"):
         coef = est.coef_
-        if coef.ndim == 2:
-            importances = np.abs(coef).mean(axis=0)
-        else:
-            importances = np.abs(coef)
+        importances = np.abs(coef).mean(axis=0) if coef.ndim == 2 else np.abs(coef)
     else:
         return None
 
