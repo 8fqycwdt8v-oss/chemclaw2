@@ -4,8 +4,8 @@ chemclaw2 is one Postgres-backed FastAPI service that serves three
 surfaces: a conversational chat agent, a living wiki, and a chemistry-
 native search index. The agent runtime calls out to six stdio MCP
 subprocess servers for chemistry-specific computations (RDKit Morgan
-fingerprints, DRFP reaction fingerprints, RDKit retrosynthesis, BOFIRE
-Bayesian optimisation, a code sandbox, a tabular-data tool).
+fingerprints, DRFP reaction fingerprints, RDKit retrosynthesis, a code
+sandbox, a tabular-data tool, and chemistry-intelligence primitives).
 
 ```
                                                        ┌─────────────────┐
@@ -30,8 +30,8 @@ Bayesian optimisation, a code sandbox, a tabular-data tool).
    │  routes/                                       │    │  campaign_worker                    │
    │      chat (SSE)   wiki     campaigns           │    │                                    │
    │      search      todos    notifications        │    │  Postgres advisory locks +         │
-   │      audit       admin    integrations         │    │  asyncio polling. Heartbeat log    │
-   │      curator     budgets  feedback             │    │  every cycle.                      │
+   │      curator     admin    integrations         │    │  asyncio polling. Heartbeat log    │
+   │      budgets     feedback                      │    │  every cycle.                      │
    │           │                                    │    └───────────────────────────────────┘
    │  queries/  ◄─── only layer importing SQLAlchemy
    │           │                                    │
@@ -49,9 +49,9 @@ Bayesian optimisation, a code sandbox, a tabular-data tool).
    │  mcp_molfp            (RDKit Morgan / ECFP4 / property descriptors)       │
    │  mcp_rxnfp            (DRFP reaction fingerprints)                         │
    │  mcp_retrosynth       (RDKit single-step disconnection templates)         │
-   │  mcp_rxn_conditions   (reaction-condition scoring; LLM-backed)            │
    │  mcp_codesandbox      (bwrap/unshare isolation tiers)                     │
-   │  mcp_tabular          (Bofire optimisation + sklearn + TabICL inference)  │
+   │  mcp_tabular          (pandas profiling + sklearn baselines)              │
+   │  mcp_chem_intel       (SAscore, reaction classes, ORD validation)         │
    └──────────────────────────────────────────────────────────────────────────┘
 ```
 
