@@ -20,9 +20,15 @@ _client: AsyncOpenAI | None = None
 def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
+        # Explicit timeout: the SDK default is 600 s, which would let one hung
+        # embedding call stall a wiki upsert or document ingest for 10 minutes.
+        # max_retries=3 keeps the SDK's built-in exponential backoff for
+        # transient 429/5xx (default is 2).
         _client = AsyncOpenAI(
             api_key=os.environ.get("OPENAI_API_KEY", ""),
             base_url=os.environ.get("OPENAI_BASE_URL") or None,
+            timeout=30.0,
+            max_retries=3,
         )
     return _client
 

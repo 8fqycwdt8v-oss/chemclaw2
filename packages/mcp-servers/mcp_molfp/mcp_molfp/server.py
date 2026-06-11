@@ -2,17 +2,12 @@ import os
 import time
 
 from mcp.server.fastmcp import FastMCP
-from mcp_chemclaw_shared import configure_logging
+from mcp_chemclaw_shared import MAX_SMILES_LEN, configure_logging
 from rdkit import Chem
 from rdkit.Chem import AllChem, Crippen, Descriptors, Lipinski, rdMolDescriptors
 
 log = configure_logging("mcp-molfp")
 mcp = FastMCP("mcp-molfp")
-
-# Hard cap on SMILES input: RDKit happily parses arbitrarily long strings and
-# real chemistry SMILES top out well under 1k chars; anything beyond this is
-# malformed input or a DoS attempt.
-MAX_SMILES_LEN = 10_000
 
 
 def _check_smiles_len(label: str, smiles: str) -> None:

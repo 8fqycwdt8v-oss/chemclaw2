@@ -49,6 +49,14 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+# Input-size ceilings shared by the chemistry MCP servers (third-copy rule).
+# Real chemistry SMILES top out well under 1k chars; anything beyond these
+# bounds is malformed input or a DoS attempt. Reaction SMILES
+# (reactants>>products) get a wider bound than single-molecule SMILES.
+MAX_SMILES_LEN = 10_000
+MAX_REACTION_SMILES_LEN = 20_000
+
+
 def configure_logging(component: str) -> logging.Logger:
     """Route the root logger to stderr as JSON and return the server logger.
 
@@ -64,4 +72,4 @@ def configure_logging(component: str) -> logging.Logger:
     return logging.getLogger(component.replace("-", "_"))
 
 
-__all__ = ["JsonFormatter", "configure_logging"]
+__all__ = ["MAX_REACTION_SMILES_LEN", "MAX_SMILES_LEN", "JsonFormatter", "configure_logging"]

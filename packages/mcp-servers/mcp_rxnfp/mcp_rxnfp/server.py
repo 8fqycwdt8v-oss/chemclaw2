@@ -4,7 +4,7 @@ import time
 
 from drfp import DrfpEncoder
 from mcp.server.fastmcp import FastMCP
-from mcp_chemclaw_shared import configure_logging
+from mcp_chemclaw_shared import MAX_REACTION_SMILES_LEN, configure_logging
 
 log: logging.Logger = logging.getLogger("mcp_rxnfp")
 mcp = FastMCP("mcp-rxnfp")
@@ -12,10 +12,6 @@ mcp = FastMCP("mcp-rxnfp")
 # Fixed at 2048 to match the BIT(2048) column in reactions.drfp. DRFP's library
 # default is 512; we pin and don't expose the dial.
 _NBITS = 2048
-
-# Reaction SMILES are longer than single-compound SMILES (reactants>>products);
-# 20k chars is a generous ceiling for realistic chemistry.
-MAX_REACTION_SMILES_LEN = 20_000
 
 
 @mcp.tool()

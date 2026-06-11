@@ -17,7 +17,7 @@ import os
 import time
 
 from mcp.server.fastmcp import FastMCP
-from mcp_chemclaw_shared import configure_logging
+from mcp_chemclaw_shared import MAX_SMILES_LEN, configure_logging
 
 from mcp_chem_intel.abbreviations import expand_abbreviation as _expand_abbreviation
 from mcp_chem_intel.classify import classify_reaction as _classify_reaction
@@ -29,7 +29,6 @@ from mcp_chem_intel.synth import synthetic_accessibility
 log: logging.Logger = logging.getLogger("mcp_chem_intel")
 mcp = FastMCP("mcp-chem-intel")
 
-MAX_SMILES_LEN = 10_000
 MAX_TOKEN_LEN = 200
 
 

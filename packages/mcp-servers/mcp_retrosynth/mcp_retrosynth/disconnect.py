@@ -18,10 +18,13 @@ Each entry has:
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem
+
+logger = logging.getLogger(__name__)
 
 # Retrosynthesis templates intentionally introduce unmapped atoms on the
 # precursor side (Cl, Br, B(OH)2, etc.), so RDKit's "unmapped atoms in
@@ -120,17 +123,25 @@ def propose_disconnections(target_smiles: str, max_routes: int = 5) -> list[dict
         try:
             rxn = AllChem.ReactionFromSmarts(smarts)
         except Exception:
+            # Template SMARTS are static module data — a parse failure is a
+            # bad entry in _TEMPLATES, deterministic and fixable, not noise.
+            logger.warning("template_smarts_parse_failed", extra={"template": name}, exc_info=True)
             continue
         if rxn is None:
+            logger.warning("template_smarts_parse_failed", extra={"template": name})
             continue
         try:
             products = rxn.RunReactants((mol,))
         except Exception:
+            logger.warning("template_run_failed", extra={"template": name}, exc_info=True)
             continue
         for precursor_tuple in products:
             try:
                 smis = tuple(sorted(Chem.MolToSmiles(p) for p in precursor_tuple if p is not None))
             except Exception:
+                # Per-precursor canonicalisation failures are expected for
+                # chemically nonsensical matches — log at debug, not warning.
+                logger.debug("precursor_canonicalize_failed", extra={"template": name}, exc_info=True)
                 continue
             if not smis:
                 continue

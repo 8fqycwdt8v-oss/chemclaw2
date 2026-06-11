@@ -40,6 +40,12 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 # (Sites.Read.All / Files.Read.All) rather than per-resource delegated scopes.
 _GRAPH_SCOPE = ["https://graph.microsoft.com/.default"]
 
+# Infinite-loop guard for delta pagination: Graph pages are ~200 items, so
+# 10k pages ≈ 2M drive items — far beyond any drive this syncs. A nextLink
+# chain longer than this means Graph is misbehaving (e.g. returning a cyclic
+# cursor), and failing loudly beats accumulating items forever.
+_MAX_DELTA_PAGES = 10_000
+
 
 class GraphError(RuntimeError):
     """Raised when a Microsoft Graph call cannot be completed."""
@@ -131,7 +137,11 @@ async def delta(
     headers = {"Authorization": f"Bearer {token}"}
     items: list[dict[str, Any]] = []
     new_delta_link = delta_link or ""
+    pages = 0
     while url:
+        if pages >= _MAX_DELTA_PAGES:
+            logger.error("msgraph_delta_page_cap pages=%d drive=%s", pages, drive_id)
+            raise GraphError(f"Delta pagination exceeded {_MAX_DELTA_PAGES} pages")
         resp = await _fetch_validated(
             url, enforce_domain_allowlist=True, headers=headers, timeout=timeout
         )
@@ -142,6 +152,7 @@ async def delta(
         if captured:
             new_delta_link = captured
         url = body.get("@odata.nextLink") or ""
+        pages += 1
     return items, new_delta_link
 
 

@@ -120,3 +120,11 @@ Ranked by readiness-to-implement. P1 = actionable now, trigger met, low risk. P2
 
 - **mypy strict adoption** — CI runs mypy non-strict (`check_untyped_defs = true`, `no_implicit_optional = true`). `api.agent.tools` / `.runner` / `.hooks` are excluded via per-module overrides because the `claude_agent_sdk` TypedDicts don't match the SDK's own example usage (~30 errors not ours to fix). Re-enable strict per module as each is cleaned. Goal: full strict in 4–6 PRs.
 - **Ruff rule expansion** — CI runs `ruff check api/ packages/` with `select = ["E", "F", "W", "I", "UP", "B"]` at `line-length=120` (the earlier "E,F,W only" note is stale; `I`/`UP`/`B` have since landed). Next rule families in order of value: `SIM` (simplification), `RUF` (Ruff-specific lints).
+
+## Code-review follow-ups (June 2026)
+
+- **routes/pagination** — `list_subscriptions` (wiki.py), `list_todos`, `list_session_feedback`, and admin `list_tool_permissions` return unbounded result sets. Per-user/per-session in practice, so deferred until measured; add `limit` query params + LIMIT in the query layer if any table grows past a few thousand rows per scope.
+- **routes/chat** — `session_id` and `override_justification` validators coerce invalid values to `None` instead of raising 422 (intentional, pinned by `test_chat_invalid_session_id_silently_dropped`; justification fails closed). Revisit the contract if UI users report confusing "provide a justification" loops after sending a too-short justification.
+- **deploy** — pin the Docker base image to a patch version (`python:3.11.x-slim`) and add a post-deploy health smoke step to `deploy.yml` (poll `/api/health` after Fly deploy).
+- **integrations/graph** — `acquire_token` rebuilds `ConfidentialClientApplication` per call, discarding MSAL's in-process token cache. Fine at one call per sync cycle; cache the app instance if a hot path ever appears.
+- **integrations/ingest** — entity-extraction PubChem lookups run up to 20 concurrent; add an `asyncio.Semaphore` if PubChem throttling is observed.
