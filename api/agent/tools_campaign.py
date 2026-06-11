@@ -7,7 +7,6 @@ external thematic groups:
     confirm_synthesis_plan
   - record_feedback: thumbs-up/down on a chat turn
   - chem record: register_compound_property, record_predicted_conditions
-  - active learning: declare_campaign_parameter_space,
     propose_next_conditions
 
 `build_campaign_tools(user_id, session_id, session_factory)` returns
@@ -15,7 +14,6 @@ the `SdkMcpTool` list.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -28,13 +26,6 @@ from api.agent.tool_helpers import _heuristic_propose, _PredictedConditionsPaylo
 from api.agent.tool_validation import is_fingerprint
 
 logger = logging.getLogger(__name__)
-
-# Wall-cap for the BOFIRE GP fit. A fit on the small experiment counts this
-# tool sees is seconds; the cap exists so a pathological parameter_spec can't
-# hang the request indefinitely. The abandoned thread runs to completion (a
-# thread can't be cancelled) — same accepted limitation as the AiZynthFinder
-# deep-retrosynth path; see BACKLOG §H.
-_BOFIRE_FIT_TIMEOUT_SEC = 120.0
 
 
 def build_campaign_tools(
@@ -160,18 +151,16 @@ def build_campaign_tools(
     ) -> dict[str, Any]:
         """Persist a reaction condition prediction for caching and feedback.
 
-        Call this after `mcp-rxn-conditions.predict_conditions` or
-        `suggest_conditions_from_neighbors` returns, so the next turn (and
-        future campaigns over the same reaction) hit the cache instead of
-        re-paying the predictor API.
+        Call this after `suggest_conditions_from_neighbors` returns, so the
+        next turn (and future campaigns over the same reaction) hit the
+        cache instead of recomputing.
 
         `conditions` must be an object shaped like:
           {catalysts: [str], solvents: [str], reagents: [str],
            temperature_c: float|null}
         `model` should identify both backend and version, e.g.
-          'rxn4chemistry:v2025-04' or 'neighbor-aggregation:v1'.
-        `source` is the high-level origin: 'rxn4chemistry' |
-          'neighbor_aggregation' | 'manual'.
+          'neighbor-aggregation:v1'.
+        `source` is the high-level origin: 'neighbor_aggregation' | 'manual'.
         """
         try:
             payload = _PredictedConditionsPayload.model_validate(conditions)
@@ -198,99 +187,19 @@ def build_campaign_tools(
             )
         return {"id": prediction_id}
 
-    async def declare_campaign_parameter_space(
-        campaign_id: str,
-        parameter_spec: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Declare the input/output parameter space for a campaign's BO loop.
-
-        `parameter_spec` JSON schema:
-          {
-            "inputs": [
-              {"key": "temperature", "type": "continuous", "min": 20, "max": 120, "unit": "C"},
-              {"key": "solvent", "type": "categorical", "categories": ["THF","DMF","EtOH"]},
-              ...
-            ],
-            "outputs": [
-              {"key": "yield_pct", "direction": "maximize", "unit": "%"}
-            ]
-          }
-
-        V1 constraints: categorical ≤ 8 levels; ≤ 20 inputs; ≤ 4 outputs;
-        single-objective only (multiple outputs accepted by schema but
-        rejected by `propose_next_conditions` until MoboStrategy lands).
-        Output key MUST be `yield_pct` — the only outcome the V1
-        dispatcher knows how to feed from `reaction_outcomes` to BOFIRE.
-
-        Once declared, `propose_next_conditions` switches from the V1
-        heuristic to BOFIRE-driven proposals (LHS until ≥10 completed
-        steps; surrogate-driven GP+qLogEI thereafter when the [opt]
-        extras are installed).
-
-        Returns {ok: bool, campaign_id, n_inputs, n_outputs, strategy_hint}.
-        """
-        from api.agent.parameter_spec import ParameterSpec
-        from api.db.queries.optimization import set_campaign_parameter_spec
-        try:
-            spec = ParameterSpec.model_validate(parameter_spec)
-        except Exception as e:
-            return {"ok": False, "error": f"invalid parameter_spec: {e}"}
-        # V1: only yield_pct is supported as an output key by the
-        # outcomes feeder. Reject other names early with a clear message.
-        valid_outputs = {"yield_pct"}
-        for o in spec.outputs:
-            if o.key not in valid_outputs:
-                return {
-                    "ok": False,
-                    "error": (
-                        f"output key {o.key!r} not supported in V1 — "
-                        f"only {sorted(valid_outputs)} can be fed from "
-                        "reaction_outcomes today"
-                    ),
-                }
-        async with session_factory() as db:
-            ok = await set_campaign_parameter_spec(db, campaign_id, user_id, spec)
-        if not ok:
-            return {"ok": False, "error": "campaign not found or not owned by user"}
-        return {
-            "ok": True,
-            "campaign_id": campaign_id,
-            "n_inputs": len(spec.inputs),
-            "n_outputs": len(spec.outputs),
-            "strategy_hint": (
-                "BOFIRE LHS until ≥10 completed steps; GP+qLogEI thereafter "
-                "if [opt] extras are installed."
-            ),
-        }
-
     async def propose_next_conditions(
         campaign_id: str,
         n_proposals: int = 3,
     ) -> dict[str, Any]:
         """Propose conditions for the next experimental step of a campaign.
 
-        Three-stage dispatch:
+        Heuristic: ranks the campaign's completed steps by yield and
+        returns the best conditions plus a temperature tweak and a
+        solvent swap. Deterministic, dependency-free.
 
-          0  Heuristic (no parameter_spec declared): rank completed steps
-             by yield, return best + temperature tweak + solvent swap.
-          1  BOFIRE LHS (parameter_spec exists, < 10 completed outcomes
-             OR botorch not installed): structured Latin-Hypercube
-             samples from the declared input space. Better diversity
-             than the V1 heuristic; no surrogate fit.
-          2  BOFIRE GP+qLogEI (parameter_spec + ≥ 10 completed outcomes
-             + botorch installed via [opt] extras): MixedSingleTaskGP
-             surrogate + qLogExpectedImprovement acquisition.
-
-        Use `declare_campaign_parameter_space` first to unlock stages 1/2.
-
-        Returns {campaign_id, strategy, proposals, best_so_far?, n_experiments_fitted?}.
+        Returns {campaign_id, strategy, proposals, best_so_far?}.
         """
         from api.db.queries.campaigns import get_campaign_with_steps
-        from api.db.queries.optimization import (
-            get_campaign_parameter_spec,
-            load_campaign_experiments,
-            propose_via_bofire,
-        )
 
         if not (1 <= n_proposals <= 20):
             return {"error": "n_proposals must be between 1 and 20"}
@@ -299,57 +208,7 @@ def build_campaign_tools(
             campaign = await get_campaign_with_steps(db, campaign_id, user_id)
             if campaign is None:
                 return {"error": "campaign not found or not owned by user"}
-            spec = await get_campaign_parameter_spec(db, campaign_id, user_id)
 
-        # ── Stage 1/2 (BOFIRE-driven) when a parameter_spec is declared ───
-        if spec is not None:
-            async with session_factory() as db:
-                experiments = await load_campaign_experiments(db, campaign_id, spec)
-            try:
-                # GP fit can take multiple seconds — offload to a thread so
-                # the event loop stays responsive for other coroutines
-                # (concurrent paper_qa, agent streams, etc), and wall-cap it
-                # so a pathological spec can't hang the request forever.
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        propose_via_bofire, spec, experiments, n_proposals,
-                    ),
-                    timeout=_BOFIRE_FIT_TIMEOUT_SEC,
-                )
-                return {"campaign_id": campaign_id, **result}
-            except TimeoutError:
-                logger.warning(
-                    "campaign=%s bofire GP fit exceeded %.0fs — falling back to heuristic",
-                    campaign_id, _BOFIRE_FIT_TIMEOUT_SEC,
-                )
-                heuristic = await _heuristic_propose(
-                    session_factory, campaign_id, n_proposals,
-                )
-                heuristic["strategy"] = (
-                    "heuristic-v1-bofire-timeout "
-                    f"(GP fit exceeded {_BOFIRE_FIT_TIMEOUT_SEC:.0f}s)"
-                )
-                return heuristic
-            except ImportError:
-                logger.info(
-                    "campaign=%s falling back to heuristic — bofire not installed; "
-                    "pip install chemclaw2-backend[opt] to enable",
-                    campaign_id,
-                )
-                # Fall through to heuristic; preserve the same response shape
-                # the agent expects but flag the install hint in the strategy.
-                heuristic = await _heuristic_propose(
-                    session_factory, campaign_id, n_proposals,
-                )
-                heuristic["strategy"] = (
-                    "heuristic-v1-bofire-unavailable "
-                    "(install chemclaw2-backend[opt] for BO)"
-                )
-                return heuristic
-            except ValueError as e:
-                return {"error": str(e)}
-
-        # ── Stage 0 (V1 heuristic) when no parameter_spec ─────────────────
         return await _heuristic_propose(session_factory, campaign_id, n_proposals)
 
     return [
@@ -358,6 +217,5 @@ def build_campaign_tools(
         wrap_tool("record_feedback", record_feedback),
         wrap_tool("register_compound_property", register_compound_property),
         wrap_tool("record_predicted_conditions", record_predicted_conditions),
-        wrap_tool("declare_campaign_parameter_space", declare_campaign_parameter_space),
         wrap_tool("propose_next_conditions", propose_next_conditions),
     ]

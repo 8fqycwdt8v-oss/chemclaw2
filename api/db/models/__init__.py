@@ -11,7 +11,7 @@ chem.py).
 from __future__ import annotations
 
 from .base import Base
-from .campaigns import AgentTodo, CampaignStep, SynthesisCampaign
+from .campaigns import CampaignStep, SynthesisCampaign
 from .chem import (
     Compound,
     Property,
@@ -55,7 +55,6 @@ __all__ = [
     "AgentFeedback",
     "AgentOverride",
     "AgentSession",
-    "AgentTodo",
     "AuditLog",
     "Base",
     "CampaignStep",

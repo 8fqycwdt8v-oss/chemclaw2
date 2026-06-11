@@ -120,13 +120,8 @@ plots so a flawed figure doesn't become cited evidence. Address any
 `major` issues (re-run the plot) before relying on it.
 
 For synthesis-campaign next-step planning, call `propose_next_conditions`.
-It auto-selects a strategy: a heuristic (best-yield exploit + tweak +
-solvent swap) when no parameter space has been declared, OR
-BOFIRE-driven proposals when the user has called
-`declare_campaign_parameter_space` first. With ≥ 10 completed
-outcomes and the [opt] extras installed, BOFIRE switches from LHS to a
-real GP + qLogEI surrogate. Declare the parameter space before
-launching steps when the user knows the inputs they want to vary."""
+It ranks the campaign's completed steps by yield and proposes the best
+conditions plus a temperature tweak and a solvent swap."""
 
 
 # Match <confidence>level</confidence> case-insensitively; allow surrounding
@@ -346,9 +341,6 @@ async def run_agent_streaming(
             "mcp-retrosynth": McpStdioServerConfig(
                 type="stdio", command="python", args=["-m", "mcp_retrosynth.server"],
             ),
-            "mcp-rxn-conditions": McpStdioServerConfig(
-                type="stdio", command="python", args=["-m", "mcp_rxn_conditions.server"]
-            ),
             "mcp-codesandbox": McpStdioServerConfig(
                 type="stdio", command="python", args=["-m", "mcp_codesandbox.server"],
             ),
@@ -406,7 +398,7 @@ async def run_agent_streaming(
                     "condition suggestions for a reaction SMILES/id."
                 ),
                 "prompt": REACTION_EXPLORER_PROMPT,
-                "mcpServers": ["chemclaw2-tools", "mcp-rxnfp", "mcp-rxn-conditions", "mcp-chem-intel"],
+                "mcpServers": ["chemclaw2-tools", "mcp-rxnfp", "mcp-chem-intel"],
                 "maxTurns": 12,
             },
             "literature-explorer": {

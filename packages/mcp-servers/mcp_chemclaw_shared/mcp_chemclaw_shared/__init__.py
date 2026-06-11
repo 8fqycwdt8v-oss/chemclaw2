@@ -82,7 +82,7 @@ def run_server(mcp: Any, component: str, init_fn: Any = None) -> None:
     make ``logging`` raise ``KeyError`` and killed every server at startup.
 
     ``init_fn``, when given, runs after logging is configured and before the
-    stdio loop starts (e.g. mcp_rxn_conditions' env-var/SDK wrapper setup).
+    stdio loop starts (env-var reads, SDK wrapper setup).
     """
     log = configure_logging(component)
     log.info("mcp_server_starting", extra={"server": mcp.name, "pid": os.getpid()})

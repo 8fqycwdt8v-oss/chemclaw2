@@ -22,7 +22,6 @@ from api.routes.health import router as health_router
 from api.routes.integrations import router as integrations_router
 from api.routes.notifications import router as notifications_router
 from api.routes.search import router as search_router
-from api.routes.todos import router as todos_router
 from api.routes.wiki import router as wiki_router
 
 logger = logging.getLogger(__name__)
@@ -38,7 +37,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # separate process so its restart cycle doesn't affect the web server.
     fp_task: asyncio.Task | None = None
     campaign_task: asyncio.Task | None = None
-    sync_task: asyncio.Task | None = None
     if os.environ.get("RUN_WORKER_IN_PROCESS") == "1":
         from api.db.connection import async_session_factory
         from api.workers.campaign_worker import run_worker as run_campaign_worker
@@ -46,12 +44,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         if async_session_factory is not None:
             fp_task = asyncio.create_task(run_fp_worker(async_session_factory))
             campaign_task = asyncio.create_task(run_campaign_worker(async_session_factory))
-            # Drive sync only when Microsoft Graph is configured — otherwise the
-            # worker would just idle. GraphConfig.from_env() logs if unset.
-            from api.integrations.sharepoint.graph_client import GraphConfig
-            if GraphConfig.from_env() is not None:
-                from api.workers.sync_worker import run_worker as run_sync_worker
-                sync_task = asyncio.create_task(run_sync_worker(async_session_factory))
     yield
     if fp_task is not None:
         fp_task.cancel()
@@ -65,12 +57,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await campaign_task
         except asyncio.CancelledError:
             logger.info("worker_cancelled name=campaign")
-    if sync_task is not None:
-        sync_task.cancel()
-        try:
-            await sync_task
-        except asyncio.CancelledError:
-            logger.info("worker_cancelled name=sync")
     from api.db.connection import engine
     if engine is not None:
         await engine.dispose()
@@ -122,7 +108,6 @@ def create_app() -> FastAPI:
     app.include_router(search_router)
     app.include_router(wiki_router)
     app.include_router(feedback_router)
-    app.include_router(todos_router)
     app.include_router(budgets_router)
     app.include_router(admin_router)
     app.include_router(campaigns_router)

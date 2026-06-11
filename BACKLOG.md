@@ -130,3 +130,13 @@ Ranked by readiness-to-implement. P1 = actionable now, trigger met, low risk. P2
 - **integrations/ingest** — entity-extraction PubChem lookups run up to 20 concurrent; add an `asyncio.Semaphore` if PubChem throttling is observed.
 - **deps/rdkit** — `rdkit==2026.3.3` ships broken bundled type stubs (`rdkit-stubs/Chem/rdchem.pyi:347` non-default arg after default) that hard-fail mypy as a syntax blocker; excluded via `!=2026.3.3` in all four pyprojects. Drop the exclusion once an rdkit release with fixed stubs lands.
 - **deps/bofire-botorch** — heavy CI lane fails since ~June 2026: unpinned `[opt]` resolves a new botorch that dropped the top-level `fit_fully_bayesian_model_nuts` export which `bofire 0.3.x` (`surrogates/fully_bayesian.py:6`) still imports → 2 failures in `test_optimization.py` (`test_propose_via_bofire_lhs_*`). Unrelated to app code; lane is non-blocking. Fix: cap botorch to the last version with the top-level export (or bump bofire when it supports new botorch), verify in the heavy lane, then resume the 5-green-runs gating plan.
+
+## Lean pass — feature removals (June 2026)
+
+- **removed/aizynthfinder** — deep multi-step retrosynthesis (`retrosynth_deep.py`, `[retrosynth]` extra, `propose_retrosynthesis_deep` tool) removed per "defer until measured"; single-step `propose_retrosynthesis` (RDKit template library) remains. Restore from git history if a customer needs full route search.
+- **removed/bofire** — BO stages 1–2 (`optimization.py`, `parameter_spec.py`, `declare_campaign_parameter_space`, `[opt]` extra) removed; `propose_next_conditions` is heuristic-only. This also retires the bofire/botorch drift entry above. The `synthesis_campaigns.parameter_spec` column remains in the schema, unused.
+- **removed/rxn-conditions** — IBM RXN MCP server removed (key never configured anywhere); `suggest_conditions_from_neighbors` is the condition-suggestion path. The prediction cache (`reaction_condition_predictions`) stays, fed by `record_predicted_conditions`; the worker links any-model predictions now.
+- **removed/drive-sync** — SharePoint/OneDrive sync (worker, Graph client, queries, admin trigger) removed; blocked on customer Entra registration and never enabled. Plan doc deleted with it (git history has both). `drive_sync_state` table remains in the schema, unused.
+- **removed/todos** — agent_todos REST surface removed; nothing (agent, worker, frontend) ever consumed it. Table remains in schema.
+- **removed/tabicl** — TabICL runtime + `[tabicl]` extra removed; never wired to the agent.
+- **ci/single-lane** — heavy matrix lane deleted with its only consumers ([opt]/[retrosynth]); matplotlib + ord-schema now install on the single gating lane, so figure-capture and ORD tests run everywhere.

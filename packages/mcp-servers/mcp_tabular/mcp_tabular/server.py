@@ -3,16 +3,12 @@
 Eight `@mcp.tool()` endpoints, grouped:
   Stats: describe, correlate, hypothesis_test, distribution_check
   ML:    fit_score, predict_holdout
-  TabICL: tabicl_predict, tabicl_status
 
 Input is always inline (`columns: list[str]`, `rows: list[list]`); cap at
 5_000 rows per call (see tables.MAX_ROWS). For larger data, persist as
 an artifact via chemclaw2-tools first and feed in chunks.
 
-TabICL ships behind a `[tabicl]` extra and is lazy-imported on first
-call. Without the extra, tabicl_status reports {installed: False} and
-tabicl_predict raises RuntimeError with install instructions. CI never
-installs the extra, so the lazy path stays the tested path.
+
 
 Subprocess-kill note (CLAUDE.md §52): once torch loads, the process may
 ignore SIGTERM during native inference; the agent runner's 2s
@@ -26,7 +22,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp_chemclaw_shared import configure_logging, run_server
 
-from mcp_tabular import ml, stats, tabicl_runtime, tables
+from mcp_tabular import ml, stats, tables
 
 log = configure_logging("mcp-tabular")
 mcp = FastMCP("mcp-tabular")
@@ -165,50 +161,6 @@ def predict_holdout(
 # ----------------------------- TabICL tools --------------------------------
 
 
-@mcp.tool()
-def tabicl_predict(
-    train_columns: list[str],
-    train_rows: list[list[Any]],
-    test_columns: list[str],
-    test_rows: list[list[Any]],
-    target: str,
-    task: str,
-    max_train_rows: int = 10_000,
-    max_predictions: int = 10_000,
-) -> dict:
-    """Tabular foundation model (TabICL) in-context prediction.
-
-    Provide a labeled train set and an unlabeled test set with the same
-    feature columns (test set's `target` column, if present, is ignored).
-    First call lazy-imports torch + tabicl and downloads pretrained
-    weights — slow. Subsequent calls reuse the loaded classes.
-
-    Raises RuntimeError if the [tabicl] extra is not installed; check
-    `tabicl_status()` first if unsure.
-    """
-    t0 = time.monotonic()
-    train_df = tables.load_inline(train_columns, train_rows)
-    test_df = tables.load_inline(test_columns, test_rows)
-    try:
-        result = tabicl_runtime.predict(
-            train_df, test_df, target=target, task=task,
-            max_train_rows=max_train_rows, max_predictions=max_predictions,
-        )
-    except RuntimeError:
-        log.warning("tabicl_unavailable")
-        raise
-    _timed(
-        "tabicl_predict", t0, task=task,
-        n_train=int(train_df.shape[0]), n_test=int(test_df.shape[0]),
-    )
-    return result
-
-
-@mcp.tool()
-def tabicl_status() -> dict:
-    """Quick check: is the [tabicl] extra installed and loaded?
-    Cheap — does NOT trigger torch import."""
-    return tabicl_runtime.status()
 
 
 # ------------------------------ Entrypoint ---------------------------------

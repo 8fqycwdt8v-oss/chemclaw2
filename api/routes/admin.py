@@ -134,21 +134,3 @@ async def admin_health(
     }
 
 
-@router.post("/api/admin/drive-sync/run", dependencies=_ADMIN_WRITE)
-async def trigger_drive_sync(admin_id: str = Depends(get_admin_user)) -> dict:
-    """Force a SharePoint/OneDrive delta sync now (e.g. the first backfill).
-
-    Runs synchronously and returns the run summary. Returns 503 when Microsoft
-    Graph isn't configured. Admin-only: anything that drives ingestion is
-    admin-write per CLAUDE.md security rule 3.
-    """
-    from api.db.connection import async_session_factory
-    from api.workers.sync_worker import run_sync_once
-
-    if async_session_factory is None:
-        raise HTTPException(status_code=503, detail="Database not initialised")
-    logger.info("admin_drive_sync_triggered admin=%s", admin_id)
-    result = await run_sync_once(async_session_factory)
-    if result.get("status") == "skipped":
-        raise HTTPException(status_code=503, detail="Drive sync not configured")
-    return result
