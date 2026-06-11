@@ -102,6 +102,7 @@ async def pg_rate_limit(
         row = result.one_or_none()
         if row is None:
             logger.error("rate_limit_no_row_returned", extra={"key": key})
+            await db.rollback()
             return {"limited": True, "count": max_requests + 1, "window_start": window_start, "window_ms": window_ms}
         await db.commit()
         return {
