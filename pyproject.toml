@@ -46,7 +46,7 @@ dev = [
   "pip-audit>=2.7",
 ]
 chem = [
-  "rdkit>=2024.3",
+  "rdkit>=2024.3,!=2026.3.3",
   "drfp>=0.3",
 ]
 # Bayesian-optimisation extras for `propose_next_conditions` stage 2.

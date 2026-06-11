@@ -128,3 +128,4 @@ Ranked by readiness-to-implement. P1 = actionable now, trigger met, low risk. P2
 - **deploy** — pin the Docker base image to a patch version (`python:3.11.x-slim`) and add a post-deploy health smoke step to `deploy.yml` (poll `/api/health` after Fly deploy).
 - **integrations/graph** — `acquire_token` rebuilds `ConfidentialClientApplication` per call, discarding MSAL's in-process token cache. Fine at one call per sync cycle; cache the app instance if a hot path ever appears.
 - **integrations/ingest** — entity-extraction PubChem lookups run up to 20 concurrent; add an `asyncio.Semaphore` if PubChem throttling is observed.
+- **deps/rdkit** — `rdkit==2026.3.3` ships broken bundled type stubs (`rdkit-stubs/Chem/rdchem.pyi:347` non-default arg after default) that hard-fail mypy as a syntax blocker; excluded via `!=2026.3.3` in all four pyprojects. Drop the exclusion once an rdkit release with fixed stubs lands.

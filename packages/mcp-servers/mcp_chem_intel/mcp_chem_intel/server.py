@@ -17,7 +17,7 @@ import os
 import time
 
 from mcp.server.fastmcp import FastMCP
-from mcp_chemclaw_shared import MAX_SMILES_LEN, configure_logging
+from mcp_chemclaw_shared import MAX_REACTION_SMILES_LEN, MAX_SMILES_LEN, configure_logging
 
 from mcp_chem_intel.abbreviations import expand_abbreviation as _expand_abbreviation
 from mcp_chem_intel.classify import classify_reaction as _classify_reaction
@@ -64,8 +64,10 @@ def classify_reaction(reaction_smiles: str) -> dict:
     reactants are given. Complements mcp-rxnfp's opaque DRFP fingerprint with a
     human-readable name.
     """
-    if len(reaction_smiles) > MAX_SMILES_LEN:
-        raise ValueError(f"reaction_smiles exceeds {MAX_SMILES_LEN} chars")
+    # Reaction SMILES (reactants>>products) get the wider reaction bound,
+    # matching mcp_rxnfp / mcp_rxn_conditions for the same input kind.
+    if len(reaction_smiles) > MAX_REACTION_SMILES_LEN:
+        raise ValueError(f"reaction_smiles exceeds {MAX_REACTION_SMILES_LEN} chars")
     t0 = time.monotonic()
     result = _classify_reaction(reaction_smiles)
     log.info(
