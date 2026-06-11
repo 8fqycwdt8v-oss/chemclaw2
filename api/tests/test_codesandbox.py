@@ -376,9 +376,5 @@ async def test_tier_picker_picks_a_real_tier() -> None:
     assert len(argv) >= 3, f"argv too short: {argv}"
     head = argv[0]
     assert (
-        "python" in head
-        or head.endswith("/unshare")
-        or head == "unshare"
-        or head.endswith("/bwrap")
-        or head == "bwrap"
+        "python" in head or head.endswith(("/unshare", "/bwrap")) or head == "unshare" or head == "bwrap"
     ), f"unexpected leader in tier argv: {head!r}"

@@ -130,9 +130,8 @@ async def isolate_reactions(session_factory) -> AsyncIterator[None]:
     """
     from sqlalchemy import text
 
-    async with session_factory() as db:
-        async with db.begin():
-            await db.execute(text("TRUNCATE reactions CASCADE"))
+    async with session_factory() as db, db.begin():
+        await db.execute(text("TRUNCATE reactions CASCADE"))
     yield
 
 

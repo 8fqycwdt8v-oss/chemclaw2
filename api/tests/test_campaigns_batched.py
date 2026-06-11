@@ -13,21 +13,20 @@ from api.db.queries.campaigns import (
 
 
 async def _make_campaign(session_factory, user_id: str, target: str = "CCO") -> str:
-    async with session_factory() as db:
-        async with db.begin():
-            result = await db.execute(
-                text("""
+    async with session_factory() as db, db.begin():
+        result = await db.execute(
+            text("""
                     INSERT INTO synthesis_campaigns (created_by, session_id, target_smiles, status)
                     VALUES (:uid, :sid, :target, 'running')
                     RETURNING id::text
                 """),
-                {
-                    "uid": user_id,
-                    "sid": f"sess-{uuid.uuid4().hex[:12]}",
-                    "target": target,
-                },
-            )
-            return result.scalar_one()
+            {
+                "uid": user_id,
+                "sid": f"sess-{uuid.uuid4().hex[:12]}",
+                "target": target,
+            },
+        )
+        return result.scalar_one()
 
 
 async def _add_steps(
@@ -37,23 +36,22 @@ async def _add_steps(
     """Insert `n` campaign steps starting at `start_idx`. Use start_idx to
     extend a campaign that already has steps without colliding on the
     UNIQUE(campaign_id, step_idx) constraint from migration 0031."""
-    async with session_factory() as db:
-        async with db.begin():
-            for i in range(n):
-                idx = start_idx + i
-                await db.execute(
-                    text("""
+    async with session_factory() as db, db.begin():
+        for i in range(n):
+            idx = start_idx + i
+            await db.execute(
+                text("""
                         INSERT INTO campaign_steps
                             (campaign_id, step_idx, reaction_smiles, conditions, status)
                         VALUES (CAST(:cid AS uuid), :idx, :smi, :cond, :st)
                     """),
-                    {
-                        "cid": campaign_id, "idx": idx,
-                        "smi": f"reactant.{idx}>>product.{idx}",
-                        "cond": f"step-{idx}",
-                        "st": status,
-                    },
-                )
+                {
+                    "cid": campaign_id, "idx": idx,
+                    "smi": f"reactant.{idx}>>product.{idx}",
+                    "cond": f"step-{idx}",
+                    "st": status,
+                },
+            )
 
 
 @pytest.mark.asyncio

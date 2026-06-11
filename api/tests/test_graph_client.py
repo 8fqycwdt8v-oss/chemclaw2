@@ -168,13 +168,13 @@ async def test_delta_page_cap_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_download_item_returns_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_download_by_url_returns_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_fetch(url: str, **_: Any) -> httpx.Response:
-        assert url == f"{gc.GRAPH_BASE}/drives/d/items/item-9/content"
+        assert url == "https://tenant.sharepoint.com/preauth/item-9"
         return _resp(status_code=200, content=b"%PDF-1.7 bytes")
 
     monkeypatch.setattr(gc, "_fetch_validated", fake_fetch)
-    data = await gc.download_item("tok", "d", "item-9")
+    data = await gc.download_by_url("https://tenant.sharepoint.com/preauth/item-9")
     assert data == b"%PDF-1.7 bytes"
 
 

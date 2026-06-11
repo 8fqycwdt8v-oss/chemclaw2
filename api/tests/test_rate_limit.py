@@ -77,22 +77,21 @@ async def test_sweep_rate_limit_rows_deletes_old(session_factory):
     old_window = now_ms - 10_000_000  # well past the 2-hour cap
     fresh_window = now_ms - 60_000  # 1 min old — keep
 
-    async with session_factory() as db:
-        async with db.begin():
-            await db.execute(
-                text(
-                    "INSERT INTO rate_limits (key, window_start, count) "
-                    "VALUES (:k, :w, 1)"
-                ),
-                {"k": old_key, "w": old_window},
-            )
-            await db.execute(
-                text(
-                    "INSERT INTO rate_limits (key, window_start, count) "
-                    "VALUES (:k, :w, 1)"
-                ),
-                {"k": fresh_key, "w": fresh_window},
-            )
+    async with session_factory() as db, db.begin():
+        await db.execute(
+            text(
+                "INSERT INTO rate_limits (key, window_start, count) "
+                "VALUES (:k, :w, 1)"
+            ),
+            {"k": old_key, "w": old_window},
+        )
+        await db.execute(
+            text(
+                "INSERT INTO rate_limits (key, window_start, count) "
+                "VALUES (:k, :w, 1)"
+            ),
+            {"k": fresh_key, "w": fresh_window},
+        )
 
     async with session_factory() as db:
         deleted = await sweep_rate_limit_rows(db, max_age_ms=7_200_000)

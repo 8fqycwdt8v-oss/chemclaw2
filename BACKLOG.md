@@ -119,7 +119,7 @@ Ranked by readiness-to-implement. P1 = actionable now, trigger met, low risk. P2
 ## CI quality — partial adoption (May 2026)
 
 - **mypy strict adoption** — CI runs mypy non-strict (`check_untyped_defs = true`, `no_implicit_optional = true`). `api.agent.tools` / `.runner` / `.hooks` are excluded via per-module overrides because the `claude_agent_sdk` TypedDicts don't match the SDK's own example usage (~30 errors not ours to fix). Re-enable strict per module as each is cleaned. Goal: full strict in 4–6 PRs.
-- **Ruff rule expansion** — CI runs `ruff check api/ packages/` with `select = ["E", "F", "W", "I", "UP", "B"]` at `line-length=120` (the earlier "E,F,W only" note is stale; `I`/`UP`/`B` have since landed). Next rule families in order of value: `SIM` (simplification), `RUF` (Ruff-specific lints).
+- **Ruff rule expansion** — `SIM`/`PIE`/`PERF` landed June 2026 (simplification pass); select is now `["E","F","W","I","UP","B","SIM","PIE","PERF"]`. Next family: `RUF` — but note `RUF100` (unused-noqa) must be evaluated against the full select set, and the ambiguous-unicode rules (`RUF001-003`) will fight the em-dashes in docstrings; configure `allowed-confusables` first.
 
 ## Code-review follow-ups (June 2026)
 

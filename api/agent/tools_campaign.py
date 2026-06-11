@@ -51,9 +51,8 @@ def build_campaign_tools(
         from api.db.queries.campaigns import create_campaign
         if not session_id:
             return {"error": "No session_id — cannot create campaign"}
-        async with session_factory() as db:
-            async with db.begin():
-                campaign_id = await create_campaign(db, session_id, user_id, target_smiles)
+        async with session_factory() as db, db.begin():
+            campaign_id = await create_campaign(db, session_id, user_id, target_smiles)
         return {"campaign_id": campaign_id, "status": "planning"}
 
     async def confirm_synthesis_plan(
@@ -73,36 +72,35 @@ def build_campaign_tools(
         from api.db.queries.campaigns import add_campaign_step, update_campaign_status
         # Single transaction: status flip + step inserts are atomic.
         # If any step insert fails the whole operation rolls back.
-        async with session_factory() as db:
-            async with db.begin():
-                # update_campaign_status is owner-scoped. add_campaign_step is
-                # NOT (it trusts the caller-supplied campaign_id), so we MUST
-                # fail closed here when the owner/state check finds no row —
-                # otherwise a forged campaign_id would let one user inject steps
-                # into another user's campaign (FK ≠ access control).
-                advanced = await update_campaign_status(
-                    db, campaign_id, user_id, "running", plan=plan
-                )
-                if not advanced:
-                    return {
-                        "error": (
-                            "Campaign not found, not owned by you, or not in a "
-                            "state that accepts a plan."
-                        )
-                    }
-                pending_approval = 0
-                for step in steps:
-                    requires_approval = bool(step.get("requires_approval", False))
-                    if requires_approval:
-                        pending_approval += 1
-                    await add_campaign_step(
-                        db,
-                        campaign_id,
-                        int(step.get("step_idx", 0)),
-                        step.get("reaction_smiles"),
-                        step.get("conditions"),
-                        status="pending_approval" if requires_approval else "pending",
+        async with session_factory() as db, db.begin():
+            # update_campaign_status is owner-scoped. add_campaign_step is
+            # NOT (it trusts the caller-supplied campaign_id), so we MUST
+            # fail closed here when the owner/state check finds no row —
+            # otherwise a forged campaign_id would let one user inject steps
+            # into another user's campaign (FK ≠ access control).
+            advanced = await update_campaign_status(
+                db, campaign_id, user_id, "running", plan=plan
+            )
+            if not advanced:
+                return {
+                    "error": (
+                        "Campaign not found, not owned by you, or not in a "
+                        "state that accepts a plan."
                     )
+                }
+            pending_approval = 0
+            for step in steps:
+                requires_approval = bool(step.get("requires_approval", False))
+                if requires_approval:
+                    pending_approval += 1
+                await add_campaign_step(
+                    db,
+                    campaign_id,
+                    int(step.get("step_idx", 0)),
+                    step.get("reaction_smiles"),
+                    step.get("conditions"),
+                    status="pending_approval" if requires_approval else "pending",
+                )
         return {
             "campaign_id": campaign_id,
             "status": "running",
@@ -186,19 +184,18 @@ def build_campaign_tools(
             return {"error": "drfp_bits must be exactly 2048 binary digits if provided"}
 
         from api.db.queries.reaction_conditions import insert_prediction
-        async with session_factory() as db:
-            async with db.begin():
-                prediction_id = await insert_prediction(
-                    db,
-                    rxn_smiles=rxn_smiles,
-                    conditions=payload.model_dump(),
-                    model=model,
-                    source=source,
-                    created_by=user_id,
-                    confidence=confidence,
-                    reaction_id=reaction_id,
-                    drfp_bits=drfp_bits,
-                )
+        async with session_factory() as db, db.begin():
+            prediction_id = await insert_prediction(
+                db,
+                rxn_smiles=rxn_smiles,
+                conditions=payload.model_dump(),
+                model=model,
+                source=source,
+                created_by=user_id,
+                confidence=confidence,
+                reaction_id=reaction_id,
+                drfp_bits=drfp_bits,
+            )
         return {"id": prediction_id}
 
     async def declare_campaign_parameter_space(

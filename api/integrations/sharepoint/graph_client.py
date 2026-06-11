@@ -10,9 +10,9 @@ SSRF guard (`_assert_not_private`) would correctly refuse. Design notes:
   trusted, non-user-controlled host. It's imported inside the function so the
   package imports cleanly even where `msal` isn't installed (same graceful
   pattern as `pypdf` in the document-upload route).
-* **Data calls** — `delta()` and `download_item()` go through the shared
+* **Data calls** — `delta()` and `download_by_url()` go through the shared
   SSRF-pinned `_fetch_validated` helper. `graph.microsoft.com` and
-  `sharepoint.com` (the host the `/content` endpoint 302-redirects to) are on
+  `sharepoint.com` (the pre-authenticated download host) are on
   `ALLOWED_DOMAINS`; `_fetch_validated` re-validates every redirect hop.
 
 Env (read at construction via `GraphConfig.from_env`, never at import —
@@ -156,34 +156,12 @@ async def delta(
     return items, new_delta_link
 
 
-async def download_item(
-    token: str,
-    drive_id: str,
-    item_id: str,
-    *,
-    timeout: float = 60.0,
-) -> bytes:
-    """Download a drive item's content via the Graph `/content` endpoint.
-
-    `/content` 302-redirects to a short-lived pre-authenticated download URL on
-    `*.sharepoint.com`; `_fetch_validated` follows and re-validates that hop
-    against `ALLOWED_DOMAINS`.
-    """
-    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/content"
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = await _fetch_validated(
-        url, enforce_domain_allowlist=True, headers=headers, timeout=timeout
-    )
-    resp.raise_for_status()
-    return resp.content
-
-
 async def download_by_url(url: str, *, timeout: float = 60.0) -> bytes:
     """Download a file from a Graph delta item's `@microsoft.graph.downloadUrl`.
 
     That URL is short-lived and pre-authenticated, so we send NO Authorization
     header — which avoids forwarding the Graph bearer cross-host to the
-    `*.sharepoint.com` download origin (the concern logged for `download_item`).
+    `*.sharepoint.com` download origin.
     The host is on ALLOWED_DOMAINS and `_fetch_validated` pins/validates it.
     """
     resp = await _fetch_validated(url, enforce_domain_allowlist=True, timeout=timeout)

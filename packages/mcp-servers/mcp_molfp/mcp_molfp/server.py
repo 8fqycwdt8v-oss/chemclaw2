@@ -1,8 +1,7 @@
-import os
 import time
 
 from mcp.server.fastmcp import FastMCP
-from mcp_chemclaw_shared import MAX_SMILES_LEN, configure_logging
+from mcp_chemclaw_shared import MAX_SMILES_LEN, configure_logging, run_server
 from rdkit import Chem
 from rdkit.Chem import AllChem, Crippen, Descriptors, Lipinski, rdMolDescriptors
 
@@ -124,13 +123,8 @@ def substructure_match(smiles: str, smarts: str) -> dict:
     return {"match": mol.HasSubstructMatch(pattern)}
 
 
-def main():
-    log.info("mcp_server_starting", extra={"name": mcp.name, "pid": os.getpid()})
-    try:
-        mcp.run(transport="stdio")
-    except Exception:
-        log.exception("mcp_server_crashed")
-        raise
+def main() -> None:
+    run_server(mcp, "mcp-molfp")
 
 
 if __name__ == "__main__":

@@ -48,10 +48,7 @@ async def list_campaigns(
     if len(campaigns) == 50:
         last = campaigns[-1]
         ts = last["updated_at"]
-        if hasattr(ts, 'isoformat'):
-            ts = ts.isoformat()
-        else:
-            ts = str(ts)
+        ts = ts.isoformat() if hasattr(ts, 'isoformat') else str(ts)
         next_cursor = f"{ts}_{last['id']}"
 
     return {"campaigns": campaigns, "nextCursor": next_cursor}

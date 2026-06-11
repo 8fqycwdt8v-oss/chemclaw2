@@ -73,11 +73,10 @@ async def _judge_anthropic(
     client: Any, model: str, prompt: str, images: list[str], max_tokens: int,
 ) -> tuple[str | None, str | None]:
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-    for b64 in images:
-        content.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/png", "data": b64},
-        })
+    content.extend(
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}}
+        for b64 in images
+    )
     try:
         resp = await client.messages.create(
             model=model,
@@ -98,11 +97,10 @@ async def _judge_openai(
     client: Any, model: str, prompt: str, images: list[str], max_tokens: int,
 ) -> tuple[str | None, str | None]:
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-    for b64 in images:
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{b64}"},
-        })
+    content.extend(
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+        for b64 in images
+    )
     try:
         resp = await client.chat.completions.create(
             model=model,

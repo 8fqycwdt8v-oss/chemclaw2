@@ -305,8 +305,7 @@ async def _build_wiki_draft(
             body_lines.extend(["", "## Abstract", "", abstract])
         if resolved_smiles:
             body_lines.extend(["", "## Compounds (auto-extracted)", ""])
-            for cs in resolved_smiles:
-                body_lines.append(f"- **{cs['name']}** — `{cs['smiles']}`")
+            body_lines.extend(f"- **{cs['name']}** — `{cs['smiles']}`" for cs in resolved_smiles)
         unresolved = [
             c for c in (entities.get("compounds") or [])
             if isinstance(c, dict)
@@ -315,8 +314,7 @@ async def _build_wiki_draft(
         ]
         if unresolved:
             body_lines.extend(["", "## Compound mentions (unresolved)", ""])
-            for c in unresolved[:10]:
-                body_lines.append(f"- {c['name']} — _{c.get('context', '')[:120]}_")
+            body_lines.extend(f"- {c['name']} — _{c.get('context', '')[:120]}_" for c in unresolved[:10])
         extracted_citations = entities.get("citations") or []
         if extracted_citations:
             body_lines.extend(["", "## Citations (auto-extracted)", ""])

@@ -29,9 +29,8 @@ async def test_mark_read_owner_scoped(session_factory):
     owner = f"o-{uuid.uuid4().hex[:8]}"
     attacker = f"a-{uuid.uuid4().hex[:8]}"
 
-    async with session_factory() as db:
-        async with db.begin():
-            n_id = await create_notification(db, owner, "test", {"x": 1})
+    async with session_factory() as db, db.begin():
+        n_id = await create_notification(db, owner, "test", {"x": 1})
 
     # Attacker tries to mark the owner's notification as read.
     async with session_factory() as db:

@@ -47,9 +47,8 @@ async def test_update_campaign_status_denies_other_user(session_factory):
     attacker = f"attacker-{uuid.uuid4().hex[:8]}"
     cid = await _new_campaign(session_factory, owner, status="planning")
 
-    async with session_factory() as db:
-        async with db.begin():
-            advanced = await update_campaign_status(db, cid, attacker, "running")
+    async with session_factory() as db, db.begin():
+        advanced = await update_campaign_status(db, cid, attacker, "running")
 
     # A non-owner update must touch no rows AND report failure, so the caller
     # (confirm_synthesis_plan) can fail closed instead of inserting steps.
@@ -63,9 +62,8 @@ async def test_update_campaign_status_owner_succeeds(session_factory):
     owner = f"owner-{uuid.uuid4().hex[:8]}"
     cid = await _new_campaign(session_factory, owner, status="planning")
 
-    async with session_factory() as db:
-        async with db.begin():
-            advanced = await update_campaign_status(db, cid, owner, "running")
+    async with session_factory() as db, db.begin():
+        advanced = await update_campaign_status(db, cid, owner, "running")
 
     assert advanced is True
     assert await _status(session_factory, cid) == "running"
@@ -109,9 +107,8 @@ async def test_update_campaign_status_rejects_terminal_source(session_factory):
     owner = f"owner-{uuid.uuid4().hex[:8]}"
     cid = await _new_campaign(session_factory, owner, status="complete")
 
-    async with session_factory() as db:
-        async with db.begin():
-            advanced = await update_campaign_status(db, cid, owner, "running")
+    async with session_factory() as db, db.begin():
+        advanced = await update_campaign_status(db, cid, owner, "running")
 
     assert advanced is False
     assert await _status(session_factory, cid) == "complete"
@@ -123,9 +120,8 @@ async def test_system_advance_rejects_terminal_source(session_factory):
     owner = f"owner-{uuid.uuid4().hex[:8]}"
     cid = await _new_campaign(session_factory, owner, status="failed")
 
-    async with session_factory() as db:
-        async with db.begin():
-            advanced = await system_advance_campaign(db, cid, "running")
+    async with session_factory() as db, db.begin():
+        advanced = await system_advance_campaign(db, cid, "running")
 
     assert advanced is False
     assert await _status(session_factory, cid) == "failed"
@@ -162,16 +158,15 @@ async def _step_status(session_factory, campaign_id: str, step_idx: int) -> str:
 async def _add_step_awaiting_approval(
     session_factory, campaign_id: str, step_idx: int
 ) -> None:
-    async with session_factory() as db:
-        async with db.begin():
-            await add_campaign_step(
-                db,
-                campaign_id,
-                step_idx,
-                "C>>C",
-                "test conditions",
-                status="pending_approval",
-            )
+    async with session_factory() as db, db.begin():
+        await add_campaign_step(
+            db,
+            campaign_id,
+            step_idx,
+            "C>>C",
+            "test conditions",
+            status="pending_approval",
+        )
 
 
 @pytest.mark.asyncio
@@ -209,9 +204,8 @@ async def test_approve_step_rejects_wrong_source_state(session_factory):
     owner = f"owner-{uuid.uuid4().hex[:8]}"
     cid = await _new_campaign(session_factory, owner, status="running")
     # Insert as 'pending' directly.
-    async with session_factory() as db:
-        async with db.begin():
-            await add_campaign_step(db, cid, 0, "C>>C", "x", status="pending")
+    async with session_factory() as db, db.begin():
+        await add_campaign_step(db, cid, 0, "C>>C", "x", status="pending")
 
     async with session_factory() as db:
         ok = await approve_step(db, cid, 0, owner)

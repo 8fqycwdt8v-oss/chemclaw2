@@ -40,23 +40,22 @@ async def _insert_reaction_row(
     refuses to bind a Python str to a bit(2048) column even when wrapped
     in CAST() — pass the packed bytes representation instead."""
     drfp_bytes = bit_string_to_pg_bytes(drfp)
-    async with session_factory() as db:
-        async with db.begin():
-            result = await db.execute(
-                text("""
+    async with session_factory() as db, db.begin():
+        result = await db.execute(
+            text("""
                     INSERT INTO reactions (rxn_smiles, name, conditions, drfp, created_by)
                     VALUES (:smiles, :name, :cond, :bits, :uid)
                     RETURNING id::text
                 """),
-                {
-                    "smiles": rxn_smiles,
-                    "name": f"test-{uuid.uuid4().hex[:6]}",
-                    "cond": conditions,
-                    "bits": drfp_bytes,
-                    "uid": user_id,
-                },
-            )
-            return result.scalar_one()
+            {
+                "smiles": rxn_smiles,
+                "name": f"test-{uuid.uuid4().hex[:6]}",
+                "cond": conditions,
+                "bits": drfp_bytes,
+                "uid": user_id,
+            },
+        )
+        return result.scalar_one()
 
 
 # ── Phase A: neighbor conditions ──────────────────────────────────────────────
@@ -96,18 +95,17 @@ async def test_insert_and_fetch_cached_prediction_with_reaction_id(session_facto
     rxn_id = await _insert_reaction_row(
         session_factory, "CC>>CCC", None, _drfp_bits(seed=1), user_id
     )
-    async with session_factory() as db:
-        async with db.begin():
-            pid = await insert_prediction(
-                db,
-                rxn_smiles="CC>>CCC",
-                conditions=_CONDITIONS_PAYLOAD,
-                model="rxn4chemistry:v1",
-                source="rxn4chemistry",
-                created_by=user_id,
-                confidence=0.87,
-                reaction_id=rxn_id,
-            )
+    async with session_factory() as db, db.begin():
+        pid = await insert_prediction(
+            db,
+            rxn_smiles="CC>>CCC",
+            conditions=_CONDITIONS_PAYLOAD,
+            model="rxn4chemistry:v1",
+            source="rxn4chemistry",
+            created_by=user_id,
+            confidence=0.87,
+            reaction_id=rxn_id,
+        )
     assert pid
 
     async with session_factory() as db:
@@ -128,19 +126,17 @@ async def test_insert_prediction_upserts_on_reaction_id_model(session_factory, u
     rxn_id = await _insert_reaction_row(
         session_factory, "CCO>>CCOC", None, _drfp_bits(seed=1), user_id
     )
-    async with session_factory() as db:
-        async with db.begin():
-            await insert_prediction(
-                db, rxn_smiles="CCO>>CCOC", conditions=_CONDITIONS_PAYLOAD,
-                model="m1", source="rxn4chemistry", created_by=user_id, reaction_id=rxn_id,
-            )
-    async with session_factory() as db:
-        async with db.begin():
-            await insert_prediction(
-                db, rxn_smiles="CCO>>CCOC",
-                conditions={**_CONDITIONS_PAYLOAD, "temperature_c": 25.0},
-                model="m1", source="rxn4chemistry", created_by=user_id, reaction_id=rxn_id,
-            )
+    async with session_factory() as db, db.begin():
+        await insert_prediction(
+            db, rxn_smiles="CCO>>CCOC", conditions=_CONDITIONS_PAYLOAD,
+            model="m1", source="rxn4chemistry", created_by=user_id, reaction_id=rxn_id,
+        )
+    async with session_factory() as db, db.begin():
+        await insert_prediction(
+            db, rxn_smiles="CCO>>CCOC",
+            conditions={**_CONDITIONS_PAYLOAD, "temperature_c": 25.0},
+            model="m1", source="rxn4chemistry", created_by=user_id, reaction_id=rxn_id,
+        )
     async with session_factory() as db:
         rows = await list_predictions_for_reaction(db, rxn_id)
     assert len(rows) == 1
@@ -151,13 +147,12 @@ async def test_insert_prediction_upserts_on_reaction_id_model(session_factory, u
 async def test_cache_lookup_by_rxn_smiles_no_reaction_id(session_factory, user_id):
     """Predictions without a reaction_id (e.g. retrosynthesis intermediates)
     are found by the rxn_smiles fallback path."""
-    async with session_factory() as db:
-        async with db.begin():
-            await insert_prediction(
-                db, rxn_smiles="N#C>>N=C", conditions=_CONDITIONS_PAYLOAD,
-                model="m2", source="rxn4chemistry", created_by=user_id,
-                reaction_id=None,
-            )
+    async with session_factory() as db, db.begin():
+        await insert_prediction(
+            db, rxn_smiles="N#C>>N=C", conditions=_CONDITIONS_PAYLOAD,
+            model="m2", source="rxn4chemistry", created_by=user_id,
+            reaction_id=None,
+        )
     async with session_factory() as db:
         cached = await get_cached_prediction(db, rxn_smiles="N#C>>N=C", model="m2")
     assert cached is not None
@@ -172,44 +167,41 @@ async def test_record_used_prediction_source_state_predicate(session_factory, us
         session_factory, "CC=O>>CC=N", None, _drfp_bits(seed=1), user_id
     )
     # Need a campaign + step to satisfy the FK.
-    async with session_factory() as db:
-        async with db.begin():
-            campaign_id = (await db.execute(
-                text("""
+    async with session_factory() as db, db.begin():
+        campaign_id = (await db.execute(
+            text("""
                     INSERT INTO synthesis_campaigns (created_by, session_id, target_smiles, status)
                     VALUES (:uid, :sid, :target, 'planning')
                     RETURNING id::text
                 """),
-                {"uid": user_id, "sid": f"sess-{uuid.uuid4().hex[:8]}", "target": "CCO"},
-            )).scalar_one()
-            step1_id = (await db.execute(
-                text("""
+            {"uid": user_id, "sid": f"sess-{uuid.uuid4().hex[:8]}", "target": "CCO"},
+        )).scalar_one()
+        step1_id = (await db.execute(
+            text("""
                     INSERT INTO campaign_steps (campaign_id, step_idx, reaction_smiles, status)
                     VALUES (CAST(:cid AS uuid), 0, 'CC=O>>CC=N', 'pending')
                     RETURNING id::text
                 """),
-                {"cid": campaign_id},
-            )).scalar_one()
-            step2_id = (await db.execute(
-                text("""
+            {"cid": campaign_id},
+        )).scalar_one()
+        step2_id = (await db.execute(
+            text("""
                     INSERT INTO campaign_steps (campaign_id, step_idx, reaction_smiles, status)
                     VALUES (CAST(:cid AS uuid), 1, 'CC=O>>CC=N', 'pending')
                     RETURNING id::text
                 """),
-                {"cid": campaign_id},
-            )).scalar_one()
-            pid = await insert_prediction(
-                db, rxn_smiles="CC=O>>CC=N", conditions=_CONDITIONS_PAYLOAD,
-                model="m3", source="rxn4chemistry", created_by=user_id,
-                reaction_id=rxn_id,
-            )
+            {"cid": campaign_id},
+        )).scalar_one()
+        pid = await insert_prediction(
+            db, rxn_smiles="CC=O>>CC=N", conditions=_CONDITIONS_PAYLOAD,
+            model="m3", source="rxn4chemistry", created_by=user_id,
+            reaction_id=rxn_id,
+        )
 
-    async with session_factory() as db:
-        async with db.begin():
-            first = await record_used_prediction(db, pid, step1_id)
+    async with session_factory() as db, db.begin():
+        first = await record_used_prediction(db, pid, step1_id)
     assert first is True
 
-    async with session_factory() as db:
-        async with db.begin():
-            second = await record_used_prediction(db, pid, step2_id)
+    async with session_factory() as db, db.begin():
+        second = await record_used_prediction(db, pid, step2_id)
     assert second is False  # source-state predicate prevents the clobber

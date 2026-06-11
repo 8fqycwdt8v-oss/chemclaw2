@@ -13,6 +13,7 @@ import logging
 import os
 import sys
 from datetime import UTC, datetime
+from typing import Any
 
 # Record attributes that are logging internals, not structured fields the
 # server attached via `extra=`. Everything else on the record is emitted.
@@ -72,4 +73,26 @@ def configure_logging(component: str) -> logging.Logger:
     return logging.getLogger(component.replace("-", "_"))
 
 
-__all__ = ["MAX_REACTION_SMILES_LEN", "MAX_SMILES_LEN", "JsonFormatter", "configure_logging"]
+def run_server(mcp: Any, component: str, init_fn: Any = None) -> None:
+    """Standard MCP stdio server entrypoint: logging setup, start log, run.
+
+    Replaces the near-identical ``main()`` scaffolding each server carried.
+    The start log uses the ``server`` key — NOT ``name`` — because ``extra``
+    keys that collide with built-in LogRecord attributes (``name`` is one)
+    make ``logging`` raise ``KeyError`` and killed every server at startup.
+
+    ``init_fn``, when given, runs after logging is configured and before the
+    stdio loop starts (e.g. mcp_rxn_conditions' env-var/SDK wrapper setup).
+    """
+    log = configure_logging(component)
+    log.info("mcp_server_starting", extra={"server": mcp.name, "pid": os.getpid()})
+    if init_fn is not None:
+        init_fn()
+    try:
+        mcp.run(transport="stdio")
+    except Exception:
+        log.exception("mcp_server_crashed")
+        raise
+
+
+__all__ = ["MAX_REACTION_SMILES_LEN", "MAX_SMILES_LEN", "JsonFormatter", "configure_logging", "run_server"]

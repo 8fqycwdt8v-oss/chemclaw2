@@ -46,36 +46,10 @@ substance_gate_blocked_total = Counter(
     "indicates the gate is working.",
 )
 
-auth_failures_total = Counter(
-    "auth_failures_total",
-    "Auth failures by reason (expired token, JWKS error, mock auth rejected, …)",
-    labelnames=("reason",),
-)
-
 # ── Worker queue depth (gauges, polled) ──────────────────────────────────────
 
 fp_worker_backlog = Gauge(
     "fp_worker_backlog",
     "Pending fingerprint compute rows. >5000 triggers readiness=degraded.",
     labelnames=("kind",),  # compound | reaction
-)
-
-campaign_worker_backlog = Gauge(
-    "campaign_worker_backlog",
-    "Pending campaign-step rows. Spikes here mean propose_next_conditions "
-    "is wedged or BO is failing.",
-)
-
-# ── Agent tool counters ──────────────────────────────────────────────────────
-
-agent_tool_calls_total = Counter(
-    "agent_tool_calls_total",
-    "Agent tool invocations by tool + outcome (ok|error|timeout)",
-    labelnames=("tool", "outcome"),
-)
-
-mcp_subprocess_failures_total = Counter(
-    "mcp_subprocess_failures_total",
-    "MCP stdio subprocess failures (timeout, crash, malformed response)",
-    labelnames=("server", "kind"),  # server like mcp_molfp; kind like timeout|crash|parse
 )

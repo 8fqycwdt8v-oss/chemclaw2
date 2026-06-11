@@ -14,6 +14,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.queries._helpers import row_to_dict
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,8 +59,7 @@ async def get_sync_state(db: AsyncSession, drive_id: str) -> dict[str, Any] | No
         ),
         {"drive_id": drive_id},
     )
-    row = result.mappings().one_or_none()
-    return dict(row) if row else None
+    return row_to_dict(result.one_or_none())
 
 
 async def save_sync_state(

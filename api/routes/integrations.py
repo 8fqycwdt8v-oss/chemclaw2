@@ -95,9 +95,8 @@ async def eln_webhook(
         if smiles and isinstance(smiles, str) and smiles.strip():
             try:
                 if async_session_factory is not None:
-                    async with async_session_factory() as cdb:
-                        async with cdb.begin():
-                            await insert_compound(cdb, smiles.strip(), created_by="eln-webhook")
+                    async with async_session_factory() as cdb, cdb.begin():
+                        await insert_compound(cdb, smiles.strip(), created_by="eln-webhook")
             except Exception:
                 logger.exception(
                     "eln_webhook_insert_compound_failed",

@@ -36,27 +36,26 @@ async def _insert_compound(session_factory, user_id: str, smiles: str,
     asyncpg rejects a str bind for bit(2048) even under CAST(), so the bits
     are packed to bytes with bit_string_to_pg_bytes.
     """
-    async with session_factory() as db:
-        async with db.begin():
-            result = await db.execute(
-                text("""
+    async with session_factory() as db, db.begin():
+        result = await db.execute(
+            text("""
                     INSERT INTO compounds (smiles, name, created_by)
                     VALUES (:smi, :name, :uid)
                     RETURNING id::text
                 """),
-                {"smi": smiles, "name": name, "uid": user_id},
-            )
-            cid = result.scalar_one()
-            await db.execute(
-                text("""
+            {"smi": smiles, "name": name, "uid": user_id},
+        )
+        cid = result.scalar_one()
+        await db.execute(
+            text("""
                     UPDATE compounds
                     SET morgan_fp = CAST(:bits AS bit(2048)),
                         fp_computed_at = now()
                     WHERE id = CAST(:cid AS uuid)
                 """),
-                {"bits": bit_string_to_pg_bytes(fp_bits), "cid": cid},
-            )
-            return cid
+            {"bits": bit_string_to_pg_bytes(fp_bits), "cid": cid},
+        )
+        return cid
 
 
 @pytest.mark.asyncio
@@ -88,10 +87,10 @@ async def test_similarity_search_ranks_and_thresholds_by_tanimoto(
     """End-to-end: the `<%>` candidate query + Tanimoto rerank returns
     neighbours ordered by Tanimoto, with the min_tanimoto cutoff applied."""
     tag = uuid.uuid4().hex[:8]
-    query = _fp(range(0, 10))                 # bits 0..9
+    query = _fp(range(10))                 # bits 0..9
     cid_exact = await _insert_compound(
         session_factory, user_id, smiles=f"C-{tag}-exact",
-        name=f"exact-{tag}", fp_bits=_fp(range(0, 10)),     # Tanimoto 1.0
+        name=f"exact-{tag}", fp_bits=_fp(range(10)),     # Tanimoto 1.0
     )
     cid_partial = await _insert_compound(
         session_factory, user_id, smiles=f"C-{tag}-partial",
@@ -116,10 +115,10 @@ async def test_similarity_search_orders_neighbours(
 ) -> None:
     """A closer (higher-Tanimoto) neighbour ranks ahead of a farther one."""
     tag = uuid.uuid4().hex[:8]
-    query = _fp(range(0, 20))
+    query = _fp(range(20))
     cid_near = await _insert_compound(
         session_factory, user_id, smiles=f"C-{tag}-near",
-        name=f"near-{tag}", fp_bits=_fp(range(0, 18)),   # high overlap
+        name=f"near-{tag}", fp_bits=_fp(range(18)),   # high overlap
     )
     cid_far = await _insert_compound(
         session_factory, user_id, smiles=f"C-{tag}-far",

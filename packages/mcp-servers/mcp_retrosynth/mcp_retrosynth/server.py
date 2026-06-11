@@ -9,11 +9,10 @@ deeper analysis.
 """
 from __future__ import annotations
 
-import os
 import time
 
 from mcp.server.fastmcp import FastMCP
-from mcp_chemclaw_shared import MAX_SMILES_LEN, configure_logging
+from mcp_chemclaw_shared import MAX_SMILES_LEN, configure_logging, run_server
 
 from mcp_retrosynth.disconnect import list_transforms, propose_disconnections
 
@@ -56,13 +55,8 @@ def list_supported_transforms() -> dict:
     return {"transforms": list_transforms()}
 
 
-def main():
-    log.info("mcp_server_starting", extra={"name": mcp.name, "pid": os.getpid()})
-    try:
-        mcp.run(transport="stdio")
-    except Exception:
-        log.exception("mcp_server_crashed")
-        raise
+def main() -> None:
+    run_server(mcp, "mcp-retrosynth")
 
 
 if __name__ == "__main__":
