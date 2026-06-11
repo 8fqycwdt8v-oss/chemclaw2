@@ -86,9 +86,9 @@ def run_server(mcp: Any, component: str, init_fn: Any = None) -> None:
     """
     log = configure_logging(component)
     log.info("mcp_server_starting", extra={"server": mcp.name, "pid": os.getpid()})
-    if init_fn is not None:
-        init_fn()
     try:
+        if init_fn is not None:
+            init_fn()
         mcp.run(transport="stdio")
     except Exception:
         log.exception("mcp_server_crashed")
