@@ -1,7 +1,7 @@
 """Tests for `mcp_tabular` stats tools.
 
 CI installs the server via `pip install packages/mcp-servers/mcp_tabular`
-(no [tabicl] extra). Locally run the same install to make these tests
+Locally run the same install to make these tests
 runnable. Tests are skipped automatically when the package is missing.
 """
 from __future__ import annotations

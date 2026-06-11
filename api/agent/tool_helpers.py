@@ -279,8 +279,8 @@ def _parse_cached_payload(payload: Any, *, cache_key: str) -> dict[str, Any]:
 def _canonical_smiles(smiles: str) -> str:
     """Return RDKit's canonical SMILES, or the stripped input on any failure.
 
-    Used to build stable `external_facts` cache keys: `aizynth:CCO` and
-    `aizynth:OCC` denote the same molecule and must hit the same entry.
+    Used to build stable `external_facts` cache keys so two spellings of
+    the same molecule hit the same entry.
     Falls back to the raw stripped string when RDKit isn't installed (it
     rides in via the `[retrosynth]`/`chem` extras, not the base install) or
     when the SMILES doesn't parse — the downstream tool surfaces the real
@@ -381,7 +381,7 @@ async def _heuristic_propose(
     n_proposals: int,
 ) -> dict[str, Any]:
     """V1 condition-proposer logic. Called when no parameter_spec exists
-    or when BOFIRE isn't installed. Same shape as before this PR: rank
+    Same shape as before: rank
     completed steps by yield, return best + temperature tweak + solvent
     swap."""
     from api.db.queries.campaign_steps import list_campaign_steps

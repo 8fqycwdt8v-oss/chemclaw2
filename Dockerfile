@@ -25,7 +25,6 @@ RUN /opt/venv/bin/pip install --no-cache-dir \
         packages/mcp-servers/mcp_molfp \
         packages/mcp-servers/mcp_rxnfp \
         packages/mcp-servers/mcp_retrosynth \
-        packages/mcp-servers/mcp_rxn_conditions \
         packages/mcp-servers/mcp_codesandbox \
         packages/mcp-servers/mcp_tabular \
         "packages/mcp-servers/mcp_chem_intel[ord]"

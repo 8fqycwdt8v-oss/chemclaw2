@@ -49,34 +49,6 @@ chem = [
   "rdkit>=2024.3,!=2026.3.3",
   "drfp>=0.3",
 ]
-# Bayesian-optimisation extras for `propose_next_conditions` stage 2.
-# Base install does NOT depend on bofire or torch — only deployments that
-# need real surrogate-driven BO (≥10 completed campaign outcomes) pay
-# the ~2 GB cost. Stage 1 (LHS/random) also requires this extras set
-# because bofire's data_models + RandomStrategy live in the same wheel.
-opt = [
-  # Pinned to the 0.3.x line: bofire >=0.3 renamed the q-Log Expected
-  # Improvement acquisition function to `qLogEI` (optimization.py tracks the
-  # new name). The GP-path test is verified green against 0.3.1 + its
-  # resolved torch/botorch/gpytorch; the <0.4 cap guards against the next
-  # API rename landing in CI unverified.
-  "bofire[optimization]>=0.3.1,<0.4",
-  # bofire's molfeatures data-model imports `mordred` eagerly at module
-  # load. The classic `mordred` package is broken on Python ≥3.10, so the
-  # heavy CI lane (and any [opt] deploy) failed with ModuleNotFoundError on
-  # the three propose_via_bofire tests. `mordredcommunity` is the maintained
-  # 3.11-compatible fork that installs under the same `mordred` import name.
-  "mordredcommunity",
-]
-# Deep retrosynthesis via AiZynthFinder (Tier 3 §H). Opt-in like [opt]
-# above — only workers that need full multi-step route search install
-# this. AiZynthFinder downloads ~500 MB of demo policy + filter models
-# on first call; the cache landing point depends on
-# AIZYNTH_CONFIG_PATH (set by the operator if a custom bundle is in
-# use, otherwise AiZynthFinder picks a sensible default).
-retrosynth = [
-  "aizynthfinder>=4.0",
-]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -89,13 +61,6 @@ include = ["api*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["api"]
-markers = [
-  # Tests gated behind `[opt]` or `[retrosynth]` extras (bofire, torch,
-  # aizynthfinder). Cheap CI lane skips these via `-m "not heavy"`; heavy
-  # lane runs them. Use sparingly — prefer `pytest.importorskip` inside the
-  # test when the gate is a single import.
-  "heavy: requires the heavy install extras (bofire/torch/aizynthfinder)",
-]
 
 [tool.coverage.run]
 source = ["api"]

@@ -15,12 +15,6 @@ dependencies = [
   "pydantic>=2.6",
 ]
 
-[project.optional-dependencies]
-tabicl = [
-  "tabicl>=0.1",
-  "torch>=2.2",
-]
-
 [project.scripts]
 mcp-tabular = "mcp_tabular.server:main"
 

@@ -19,12 +19,13 @@ from api.db.queries.fp_utils import bit_string_to_pg_bytes
 async def get_cached_prediction(
     db: AsyncSession,
     rxn_smiles: str,
-    model: str,
+    model: str | None = None,
     reaction_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Return the most recent prediction for (reaction_id, model) — or the
-    most recent for `rxn_smiles` if no reaction_id is supplied. Both lookup
-    paths are indexed.
+    """Return the most recent prediction for the reaction — by reaction_id
+    when supplied, else by rxn_smiles equality. `model` narrows to one
+    predictor; None matches any (the worker links whatever provenance the
+    agent recorded — neighbor aggregation, external predictor, manual).
     """
     if reaction_id is not None:
         result = await db.execute(
@@ -33,24 +34,22 @@ async def get_cached_prediction(
                        source, used_in_step_id::text AS used_in_step_id,
                        created_at
                 FROM reaction_condition_predictions
-                WHERE reaction_id = CAST(:rid AS uuid) AND model = :model
+                WHERE reaction_id = CAST(:rid AS uuid)
+                  AND (CAST(:model AS text) IS NULL OR model = :model)
                 ORDER BY created_at DESC
                 LIMIT 1
             """),
             {"rid": reaction_id, "model": model},
         )
     else:
-        # Match the latest cached prediction for this (rxn_smiles, model),
-        # regardless of whether the cached row is tied to a reaction_id.
-        # SMILES equality is the cache key here — two callers asking
-        # about the same reaction get the same prediction.
         result = await db.execute(
             text("""
                 SELECT id::text, rxn_smiles, conditions, model, confidence,
                        source, used_in_step_id::text AS used_in_step_id,
                        created_at
                 FROM reaction_condition_predictions
-                WHERE rxn_smiles = :smiles AND model = :model
+                WHERE rxn_smiles = :smiles
+                  AND (CAST(:model AS text) IS NULL OR model = :model)
                 ORDER BY created_at DESC
                 LIMIT 1
             """),

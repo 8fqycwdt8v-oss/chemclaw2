@@ -3,7 +3,7 @@
 Single tool `run_python`. The api-layer wrapper (api/agent/tools.py) calls
 the sandbox library directly for in-process latency wins, but this stdio
 server is still useful for standalone testing and gives the agent runtime
-a uniform MCP surface alongside molfp / rxnfp / retrosynth / rxn_conditions.
+a uniform MCP surface alongside molfp / rxnfp / retrosynth.
 """
 from __future__ import annotations
 

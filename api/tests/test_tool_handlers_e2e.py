@@ -27,8 +27,6 @@ import json
 import uuid
 from typing import Any
 
-import pytest
-
 
 def _decode(response: dict[str, Any]) -> dict[str, Any]:
     """Pull the JSON payload out of an SDK content envelope."""
@@ -276,26 +274,6 @@ async def test_external_propose_retrosynthesis_validates_smiles(
     assert "error" in payload
 
 
-async def test_external_propose_retrosynthesis_deep_reports_when_extras_missing(
-    session_factory, user_id: str, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Without the [retrosynth] extra, the deep tool should report a
-    structured {error} rather than crash. We force the ImportError path
-    via a sys.modules stub."""
-    import sys
-    monkeypatch.setitem(sys.modules, "aizynthfinder", None)  # type: ignore[arg-type]
-    monkeypatch.setitem(sys.modules, "aizynthfinder.aizynthfinder", None)  # type: ignore[arg-type]
-    from api.agent.tools_external import build_external_tools
-    tools = {t.name: t for t in build_external_tools(user_id, session_factory)}
-    response = await tools["propose_retrosynthesis_deep"].handler({
-        "target_smiles": "CCO",
-    })
-    payload = _decode(response)
-    # Either error envelope or the wrapper-level retrosynth degraded
-    # message — both are acceptable; what we verify is non-crash.
-    assert isinstance(payload, dict)
-
-
 async def test_external_name_to_structure_validates_input(
     session_factory, user_id: str,
 ) -> None:
@@ -359,27 +337,6 @@ async def test_campaign_record_feedback_validates_score(
     assert payload["ok"] is False
     assert "score" in payload["error"]
 
-
-async def test_campaign_declare_parameter_space_validates_output_key(
-    session_factory, user_id: str,
-) -> None:
-    """V1 only supports yield_pct as output key — other keys rejected."""
-    from api.agent.tools_campaign import build_campaign_tools
-    tools = {
-        t.name: t for t in build_campaign_tools(user_id, "s-test", session_factory)
-    }
-    response = await tools["declare_campaign_parameter_space"].handler({
-        "campaign_id": str(uuid.uuid4()),
-        "parameter_spec": {
-            "inputs": [
-                {"key": "temp", "type": "continuous", "min": 20.0, "max": 100.0}
-            ],
-            "outputs": [{"key": "purity_pct", "direction": "maximize"}],
-        },
-    })
-    payload = _decode(response)
-    assert payload["ok"] is False
-    assert "yield_pct" in payload["error"]
 
 
 async def test_campaign_register_compound_property_requires_value(

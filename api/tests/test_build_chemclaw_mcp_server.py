@@ -77,22 +77,21 @@ def test_all_expected_tools_register():
         "propose_hypothesis", "check_hypothesis_novelty", "list_hypotheses",
         "rank_hypotheses", "retire_hypothesis", "run_code", "get_code_execution",
         "critique_figure", "list_code_executions",
-        # external (9)
+        # external (8)
         "web_search", "fetch_document", "eln_fetch_experiment",
         "ingest_eln_experiment", "record_manual_outcome", "name_to_structure",
         "patent_coverage", "propose_retrosynthesis",
-        "propose_retrosynthesis_deep",
-        # campaign (7)
+        # campaign (6)
         "start_synthesis_campaign", "confirm_synthesis_plan",
         "record_feedback", "register_compound_property",
-        "record_predicted_conditions", "declare_campaign_parameter_space",
+        "record_predicted_conditions",
         "propose_next_conditions",
     }
     missing = expected - all_names
     extra = all_names - expected
     assert not missing, f"expected tools missing: {missing}"
     assert not extra, f"unexpected tools present: {extra}"
-    assert len(all_names) == 46
+    assert len(all_names) == 44
 
 
 # ── wrap_tool adapter behaviour ──────────────────────────────────────────────

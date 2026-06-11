@@ -80,12 +80,8 @@ For chemistry name → structure conversions, use `name_to_structure`
 (NCI CACTUS, 7-day cached). For prior-art reconnaissance on a
 candidate molecule, use `patent_coverage` (PubChem patent xrefs). To
 seed a `confirm_synthesis_plan`, call `propose_retrosynthesis` first
-to get plausible one-step disconnections. When you need full
-multi-step route discovery on a confirmed target (and the worker has
-the [retrosynth] extras installed), reach for
-`propose_retrosynthesis_deep` — it returns nested AiZynthFinder route
-trees and may take 30s–5min. Use the fast template-based tool first
-to triage feasibility before committing to the deep search.
+to get plausible one-step disconnections; chain calls on intermediate
+precursors to sketch multi-step routes.
 
 For open-ended research threads that span multiple sessions, work
 through an *investigation*: `start_investigation` to declare the
@@ -120,13 +116,8 @@ plots so a flawed figure doesn't become cited evidence. Address any
 `major` issues (re-run the plot) before relying on it.
 
 For synthesis-campaign next-step planning, call `propose_next_conditions`.
-It auto-selects a strategy: a heuristic (best-yield exploit + tweak +
-solvent swap) when no parameter space has been declared, OR
-BOFIRE-driven proposals when the user has called
-`declare_campaign_parameter_space` first. With ≥ 10 completed
-outcomes and the [opt] extras installed, BOFIRE switches from LHS to a
-real GP + qLogEI surrogate. Declare the parameter space before
-launching steps when the user knows the inputs they want to vary."""
+It ranks the campaign's completed steps by yield and proposes the best
+conditions plus a temperature tweak and a solvent swap."""
 
 
 # Match <confidence>level</confidence> case-insensitively; allow surrounding
@@ -346,9 +337,6 @@ async def run_agent_streaming(
             "mcp-retrosynth": McpStdioServerConfig(
                 type="stdio", command="python", args=["-m", "mcp_retrosynth.server"],
             ),
-            "mcp-rxn-conditions": McpStdioServerConfig(
-                type="stdio", command="python", args=["-m", "mcp_rxn_conditions.server"]
-            ),
             "mcp-codesandbox": McpStdioServerConfig(
                 type="stdio", command="python", args=["-m", "mcp_codesandbox.server"],
             ),
@@ -406,7 +394,7 @@ async def run_agent_streaming(
                     "condition suggestions for a reaction SMILES/id."
                 ),
                 "prompt": REACTION_EXPLORER_PROMPT,
-                "mcpServers": ["chemclaw2-tools", "mcp-rxnfp", "mcp-rxn-conditions", "mcp-chem-intel"],
+                "mcpServers": ["chemclaw2-tools", "mcp-rxnfp", "mcp-chem-intel"],
                 "maxTurns": 12,
             },
             "literature-explorer": {

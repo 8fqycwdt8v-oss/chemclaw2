@@ -14,7 +14,6 @@ def test_all_model_classes_resolve_off_api_db_models() -> None:
         AgentFeedback,
         AgentOverride,
         AgentSession,
-        AgentTodo,
         AuditLog,
         Base,
         CampaignStep,
@@ -50,7 +49,7 @@ def test_all_model_classes_resolve_off_api_db_models() -> None:
     # Every class must be registered against the same Base.metadata — otherwise
     # cross-table FKs and relationship strings won't resolve at query time.
     expected = {
-        AgentFeedback, AgentOverride, AgentSession, AgentTodo, AuditLog,
+        AgentFeedback, AgentOverride, AgentSession, AuditLog,
         CampaignStep, CodeExecution, Compound, EvalRun, ExternalFact,
         Hypothesis, HypothesisRanking, Investigation, Paper, PaperChunk,
         ProjectBudget, ProjectBudgetSpend, Property, RateLimit, Reaction,

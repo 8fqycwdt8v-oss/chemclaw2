@@ -2,7 +2,7 @@
 
 SynthesisCampaign is the top-level row a `start_campaign` call creates;
 CampaignStep rows are the individual reactions queued for execution
-(approval, retry, etc). AgentTodo is the lightweight session-scoped
+(approval, retry, etc).
 checklist surface; it shares the same workflow pattern (status +
 position) so it lives alongside.
 """
@@ -56,15 +56,3 @@ class CampaignStep(Base):
 
     campaign: Mapped[SynthesisCampaign] = relationship(back_populates="steps")
 
-
-class AgentTodo(Base):
-    __tablename__ = "agent_todos"
-
-    id: Mapped[uuid.UUID] = _uuid_pk()
-    session_id: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    user_id: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    text: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    status: Mapped[str] = mapped_column(sa.Text, nullable=False, server_default=sa.text("'pending'"))
-    position: Mapped[int] = mapped_column(sa.Integer, nullable=False)
-    created_at: Mapped[datetime] = _now()
-    updated_at: Mapped[datetime] = _now()

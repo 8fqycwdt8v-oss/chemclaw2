@@ -11,7 +11,6 @@ import pytest
 
 # ord-schema rides in the [ord] extra, installed only on the heavy CI lane.
 # Mark heavy so the cheap lane deselects (importorskip is the local backstop).
-pytestmark = pytest.mark.heavy
 
 pytest.importorskip("mcp_chem_intel")
 pytest.importorskip("ord_schema")

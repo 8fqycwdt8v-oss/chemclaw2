@@ -18,7 +18,6 @@ from sqlalchemy import text
 
 from api.db.queries.notifications import create_notification, mark_read
 from api.db.queries.subscriptions import subscribe, unsubscribe
-from api.db.queries.todos import mark_todo_done, upsert_todos
 from api.db.queries.wiki_write import patch_wiki_page
 
 # ── notifications ────────────────────────────────────────────────────────────
@@ -50,38 +49,6 @@ async def test_mark_read_owner_scoped(session_factory):
         updated = await mark_read(db, owner, [n_id])
     assert updated == 1
 
-
-# ── todos ────────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_mark_todo_done_owner_scoped(session_factory):
-    owner = f"o-{uuid.uuid4().hex[:8]}"
-    attacker = f"a-{uuid.uuid4().hex[:8]}"
-    sid = f"s-{uuid.uuid4().hex[:8]}"
-
-    async with session_factory() as db:
-        await upsert_todos(
-            db, sid, owner,
-            [{"text": "do thing", "status": "pending", "position": 0}],
-        )
-    async with session_factory() as db:
-        row = await db.execute(
-            text("SELECT id::text FROM agent_todos WHERE session_id = :sid AND user_id = :uid"),
-            {"sid": sid, "uid": owner},
-        )
-        todo_id = row.scalar_one()
-
-    async with session_factory() as db:
-        ok = await mark_todo_done(db, todo_id, attacker)
-    assert ok is False
-
-    async with session_factory() as db:
-        row = await db.execute(
-            text("SELECT status FROM agent_todos WHERE id = CAST(:id AS uuid)"),
-            {"id": todo_id},
-        )
-        assert row.scalar_one() == "pending"
 
 
 # ── subscriptions ───────────────────────────────────────────────────────────

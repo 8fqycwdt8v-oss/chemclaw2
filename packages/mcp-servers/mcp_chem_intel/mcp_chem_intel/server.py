@@ -64,7 +64,7 @@ def classify_reaction(reaction_smiles: str) -> dict:
     human-readable name.
     """
     # Reaction SMILES (reactants>>products) get the wider reaction bound,
-    # matching mcp_rxnfp / mcp_rxn_conditions for the same input kind.
+    # matching mcp_rxnfp for the same input kind.
     if len(reaction_smiles) > MAX_REACTION_SMILES_LEN:
         raise ValueError(f"reaction_smiles exceeds {MAX_REACTION_SMILES_LEN} chars")
     t0 = time.monotonic()

@@ -162,9 +162,7 @@ async def process_running_campaigns(
                 rxn_smiles = step.get("reaction_smiles")
                 if rxn_smiles:
                     try:
-                        cached = await get_cached_prediction(
-                            db, rxn_smiles, model="rxn4chemistry:latest"
-                        )
+                        cached = await get_cached_prediction(db, rxn_smiles)
                         if cached:
                             prediction_id = cached["id"]
                             result = {**result, "prediction_id": prediction_id}
