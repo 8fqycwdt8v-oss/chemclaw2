@@ -1,5 +1,10 @@
 # Tier 3 implementation plan
 
+> **Status (June 2026):** historical. §A (BOFIRE BO) and §H (external
+> retrosynthesis) shipped and were later **removed** in the lean pass
+> (PR #189) — never enabled in a deployment, no measured use. §B
+> (sandbox isolation) and §M (figure capture) remain live.
+
 Four items: **§A** real BO via BOFIRE · **§B** container-isolated sandbox · **§H** external retrosynthesis · **§M** figure capture from sandbox. Each is sized for one PR. Per the standing instruction, the BO design is reworked to be *as light as possible while still performant and powerful* — see §A.
 
 ## Sequencing

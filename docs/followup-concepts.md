@@ -1,5 +1,10 @@
 # Phase A / B / C follow-up concepts
 
+> **Status (June 2026):** historical concept doc. The BO (§A) and deep
+> retrosynthesis concepts shipped and were later **removed** in the
+> lean pass (PR #189). Treat sections here as design history, not a
+> description of the current system.
+
 Concept-level designs for every open BACKLOG item produced during the Kosmos-style scaffolding work (PRs #114, #116, #117). One section per item: **Goal → Approach → Key decisions → Trade-offs → Effort.** This is *concept*, not implementation — each section is sized for a single follow-up PR.
 
 The Bayesian-optimisation item (§A) uses **BOFIRE** as the backing library per the operating-principles directive ("off-the-shelf over self-built"). BOFIRE is BASF's open framework for chemical-process BO, MIT-licensed, BoTorch under the hood, with first-class support for the mixed-categorical-continuous-mixture parameter spaces real campaigns actually need.

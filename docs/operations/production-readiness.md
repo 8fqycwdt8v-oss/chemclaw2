@@ -79,14 +79,12 @@ push (new deployment region, traffic order-of-magnitude jump).
 
 ## Open follow-ups for next initiative
 
-- Lockfile (uv) for reproducible installs — `uv lock` currently surfaces
-  a real dep conflict between `[chem]` (rdkit>=2024.3) and
-  `[retrosynth]` (aizynthfinder pins rdkit<2024). Resolve by bumping
-  aizynthfinder to a rdkit-2024-compatible version, splitting the
-  extras so they don't co-resolve, or pinning rdkit in the project's
-  base deps.
+- Lockfile (uv) for reproducible installs. (The rdkit dep conflict
+  that previously blocked `uv lock` went away with the `[retrosynth]`
+  extra's removal in PR #189.)
 - Ratchet `--cov-fail-under` from 50 → 75 in 5%-step PRs as coverage
   grows. Current floor catches accidental "all tests deleted".
 - mypy strict mode (currently non-strict but `check_untyped_defs=True`).
-- Flip the heavy CI lane + pip-audit from `continue-on-error: true`
-  to gating once each has 5 consecutive clean runs on main.
+- Flip pip-audit from `continue-on-error: true` to gating once it has
+  5 consecutive clean runs on main. (The heavy CI lane was removed
+  with its only consumers in PR #189.)
