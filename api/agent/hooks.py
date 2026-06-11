@@ -180,8 +180,11 @@ async def check_tool_output(tool_name: str, tool_output: str, db: Any) -> dict[s
     try:
         known = await known_cas_numbers(db, cas_numbers)
     except Exception:
-        logger.warning(
-            "fact_id_check_db_error",
+        # Fail-open paths must log at ERROR (CLAUDE.md observability rule 5)
+        # so a persistent DB outage silently disabling the fact-check is
+        # visible in alerting, not buried at warning.
+        logger.error(
+            "cas_fact_check_db_error_fail_open",
             extra={"tool": tool_name, "cas_count": len(cas_numbers)},
             exc_info=True,
         )

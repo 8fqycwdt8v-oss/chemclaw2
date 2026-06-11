@@ -44,6 +44,20 @@ def _normalise_inbound(value: str | None) -> str | None:
     return value
 
 
+def _metric_route(request: Request) -> str:
+    """Route label for Prometheus: the matched route *template*, not the raw path.
+
+    Raw paths embed UUIDs/slugs (`/api/campaigns/<uuid>`), so labelling by
+    them grows metric cardinality without bound — and any unauthenticated
+    scanner probing random paths would mint a new label per probe. The router
+    sets `scope["route"]` once a route matches; unmatched requests (404s,
+    probes) collapse into a single "unmatched" label.
+    """
+    route = request.scope.get("route")
+    path = getattr(route, "path", None)
+    return str(path) if path else "unmatched"
+
+
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Bind X-Request-ID (or a fresh uuid4) into contextvars; emit access log."""
 
@@ -72,18 +86,22 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
                 )
                 # 500 is a fair label for an uncaught exception — the
                 # actual response Starlette returns will also be 500.
-                http_requests_total.labels(route=route, method=method, status=500).inc()
-                http_request_duration_seconds.labels(route=route, method=method).observe(
+                # Routing has already run by the time an endpoint raises,
+                # so the route template is available here too.
+                metric_route = _metric_route(request)
+                http_requests_total.labels(route=metric_route, method=method, status=500).inc()
+                http_request_duration_seconds.labels(route=metric_route, method=method).observe(
                     time.monotonic() - start
                 )
                 raise
             elapsed = time.monotonic() - start
             elapsed_ms = int(elapsed * 1000)
             response.headers[_REQUEST_ID_HEADER] = request_id
+            metric_route = _metric_route(request)
             http_requests_total.labels(
-                route=route, method=method, status=response.status_code
+                route=metric_route, method=method, status=response.status_code
             ).inc()
-            http_request_duration_seconds.labels(route=route, method=method).observe(elapsed)
+            http_request_duration_seconds.labels(route=metric_route, method=method).observe(elapsed)
             # Don't log /metrics or the health probes at INFO — they're polled
             # constantly by the platform and would flood the log. The access
             # log MUST land before the `finally` resets the contextvar, or

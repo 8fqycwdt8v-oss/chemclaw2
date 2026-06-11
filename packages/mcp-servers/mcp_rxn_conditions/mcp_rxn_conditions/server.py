@@ -4,14 +4,10 @@ import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
-from mcp_chemclaw_shared import configure_logging
+from mcp_chemclaw_shared import MAX_REACTION_SMILES_LEN, configure_logging
 
 log: logging.Logger = logging.getLogger("mcp_rxn_conditions")
 mcp = FastMCP("mcp-rxn-conditions")
-
-# Reaction SMILES ceiling matches mcp_rxnfp — reactants>>products can be long
-# but 20k chars is a generous bound for realistic chemistry.
-MAX_REACTION_SMILES_LEN = 20_000
 
 # IBM's hosted predictor can queue under load; we rely on the SDK's underlying
 # httpx timeout to bound a single call. If that proves insufficient, wrap the

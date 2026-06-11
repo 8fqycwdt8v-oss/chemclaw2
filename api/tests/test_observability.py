@@ -202,6 +202,19 @@ def test_http_request_metric_increments(client):
     assert child._value.get() >= 1
 
 
+def test_http_request_metric_unmatched_routes_collapse(client):
+    """Requests that match no route (404 probes) collapse into a single
+    "unmatched" label instead of minting one label per raw path — raw paths
+    embed UUIDs/scanner noise and would grow metric cardinality unbounded."""
+    from api.observability.metrics import http_requests_total
+    r1 = client.get("/no-such-route-abc123")
+    r2 = client.get("/another/bogus/eb8d11d2-1111-2222-3333-444455556666")
+    assert r1.status_code == 404
+    assert r2.status_code == 404
+    child = http_requests_total.labels(route="unmatched", method="GET", status=404)
+    assert child._value.get() >= 2
+
+
 def test_json_formatter_handles_unserialisable_extras(capsys):
     """An object that can't be JSON-serialised falls back to str() rather
     than dropping the whole log line."""

@@ -15,11 +15,13 @@ from __future__ import annotations
 import io
 import logging
 import os
+import zipfile
 from collections.abc import Callable
 
 from api.agent.tool_helpers import _html_to_text
 
 logger = logging.getLogger(__name__)
+
 
 PDF = "application/pdf"
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -38,6 +40,28 @@ class ExtractionError(ValueError):
     """Raised when a document cannot be parsed (corrupt file or missing parser)."""
 
 
+# DOCX/PPTX/XLSX are ZIP archives; the 10 MB upload cap still admits a
+# ~100:1-compressible XML payload that would expand to ~1 GB inside the
+# parser. Check the declared uncompressed sizes from the central directory
+# before parsing — Python's zipfile caps each member read at its declared
+# size, so the declared total is a sound bound for these parsers.
+_MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024  # 200 MB
+
+
+def _check_zip_expansion(content: bytes) -> None:
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            total = sum(info.file_size for info in zf.infolist())
+    except zipfile.BadZipFile as e:
+        raise ExtractionError("Corrupt or non-ZIP Office document") from e
+    if total > _MAX_UNCOMPRESSED_BYTES:
+        logger.warning(
+            "zip_expansion_blocked",
+            extra={"declared_bytes": total, "max_bytes": _MAX_UNCOMPRESSED_BYTES},
+        )
+        raise ExtractionError("Document expands beyond the allowed size")
+
+
 def _extract_pdf(content: bytes) -> str:
     try:
         import pypdf
@@ -52,6 +76,7 @@ def _extract_docx(content: bytes) -> str:
         from docx import Document
     except ImportError as e:
         raise ExtractionError("DOCX support not available") from e
+    _check_zip_expansion(content)
     doc = Document(io.BytesIO(content))
     parts = [p.text for p in doc.paragraphs if p.text]
     # Table cells live outside the paragraph stream.
@@ -68,6 +93,7 @@ def _extract_pptx(content: bytes) -> str:
         from pptx import Presentation
     except ImportError as e:
         raise ExtractionError("PPTX support not available") from e
+    _check_zip_expansion(content)
     prs = Presentation(io.BytesIO(content))
     parts: list[str] = []
     for slide in prs.slides:
@@ -82,6 +108,7 @@ def _extract_xlsx(content: bytes) -> str:
         from openpyxl import load_workbook
     except ImportError as e:
         raise ExtractionError("XLSX support not available") from e
+    _check_zip_expansion(content)
     # read_only + data_only: stream cells and read cached values, not formulae.
     wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     try:

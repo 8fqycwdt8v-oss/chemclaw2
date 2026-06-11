@@ -152,6 +152,22 @@ async def test_delta_resumes_from_stored_link(
 
 
 @pytest.mark.asyncio
+async def test_delta_page_cap_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A nextLink chain that never terminates trips the page cap instead of
+    looping (and accumulating items) forever."""
+    loop_url = "https://graph.microsoft.com/v1.0/drives/d/root/delta?$skiptoken=again"
+
+    async def fake_fetch(url: str, **_: Any) -> httpx.Response:
+        return _resp(status_code=200, json={"value": [], "@odata.nextLink": loop_url})
+
+    monkeypatch.setattr(gc, "_fetch_validated", fake_fetch)
+    monkeypatch.setattr(gc, "_MAX_DELTA_PAGES", 3)
+
+    with pytest.raises(gc.GraphError, match="pagination exceeded"):
+        await gc.delta("tok", "d")
+
+
+@pytest.mark.asyncio
 async def test_download_item_returns_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_fetch(url: str, **_: Any) -> httpx.Response:
         assert url == f"{gc.GRAPH_BASE}/drives/d/items/item-9/content"

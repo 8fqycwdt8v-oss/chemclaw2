@@ -46,6 +46,26 @@ def test_docx_paragraphs_and_tables() -> None:
     assert "Solvent | DMF" in out
 
 
+def test_docx_zip_bomb_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An Office file whose central directory declares more uncompressed bytes
+    than the cap is rejected before the XML parser ever sees it."""
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph("Tiny but over the (patched-down) cap.")
+    buf = io.BytesIO()
+    doc.save(buf)
+
+    monkeypatch.setattr(ex, "_MAX_UNCOMPRESSED_BYTES", 16)
+    with pytest.raises(ex.ExtractionError, match="expands beyond"):
+        ex.extract_text(buf.getvalue(), ex.DOCX)
+
+
+def test_zip_expansion_check_rejects_non_zip() -> None:
+    with pytest.raises(ex.ExtractionError, match="Corrupt or non-ZIP"):
+        ex._check_zip_expansion(b"not a zip archive at all")
+
+
 def test_pptx_slide_text() -> None:
     from pptx import Presentation
     from pptx.util import Inches

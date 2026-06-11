@@ -13,14 +13,12 @@ import os
 import time
 
 from mcp.server.fastmcp import FastMCP
-from mcp_chemclaw_shared import configure_logging
+from mcp_chemclaw_shared import MAX_SMILES_LEN, configure_logging
 
 from mcp_retrosynth.disconnect import list_transforms, propose_disconnections
 
 log = configure_logging("mcp-retrosynth")
 mcp = FastMCP("mcp-retrosynth")
-
-MAX_SMILES_LEN = 10_000
 
 
 @mcp.tool()
